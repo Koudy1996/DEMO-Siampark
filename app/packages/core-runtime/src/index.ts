@@ -186,6 +186,10 @@ export {
   TENANT_PERMISSION_KEYS,
   makeContextAccess,
   makeContextAccessLive,
+  assortmentPermissionTargetRequiresLegalEntity,
+  toAssortmentPermissionAccessKey,
+  toAssortmentPermissionAccessObjectId,
+  toAssortmentPermissionAccessObjectIdForTargets,
   toBusinessPermissionAccessKey,
   toBusinessPermissionAccessObjectId,
   toContextPermissionAccessKey,
@@ -195,6 +199,13 @@ export {
   toResourceAccessObjectId,
 } from './permissions/context-access.ts';
 export type {
+  AssortmentPermissionAccessTarget,
+  AssortmentPermissionAccessTargetWithTrustedStorefront,
+  AssortmentPermissionAdmissionSet,
+  AssortmentPermissionCode,
+  AssortmentPermissionCommercialScope,
+  AssortmentPermissionSelector,
+  AssortmentPermissionSubject,
   BusinessAccessTarget,
   BusinessPermissionAccessTarget,
   ContextAccessClientFactory,
@@ -335,11 +346,16 @@ export type {
 } from './permissions/context-permission-mutation.ts';
 export {
   defineAction,
+  defineActionAssortmentPermission,
+  defineActionAssortmentPermissions,
   defineActionBusinessPermission,
   defineActionResourcePermission,
   isActionRegistration,
 } from './actions/definition.ts';
 export type {
+  ActionAssortmentPermissionDeclaration,
+  ActionAssortmentPermissionTarget,
+  ActionAssortmentPermissionTargetResolver,
   ActionBusinessPermissionDeclaration,
   ActionBusinessPermissionTarget,
   ActionBusinessPermissionTargetResolver,

@@ -48,6 +48,7 @@ import {
   raiseScaffoldFailure,
   readGeneratedSlotEntries,
   requireCanonicalSlug,
+  replaceGeneratedSlotEntry,
   resolveContainedPath,
   scaffoldFailure,
   stabilizeGovernedHttpApiAdditionSlot,
@@ -1153,6 +1154,9 @@ const patchSlots = (
       (structurallyMatchesGeneratedEntry(identityMatch.entry, line) ||
         acceptsAdaptedProviderDescriptor(start, identityMatch.entry, line))
     ) {
+      if (start === MODULE_MANIFEST_API_SLOT_START) {
+        return replaceGeneratedSlotEntry(current, start, end, identityMatch.entry, line);
+      }
       return current;
     }
     if (identityMatch !== undefined) {

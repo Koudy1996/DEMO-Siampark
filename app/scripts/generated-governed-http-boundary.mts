@@ -989,7 +989,7 @@ const hasReadDescriptorPolicy = (read: string, allowedAccessKinds: ReadonlySet<s
     matches(objectProperty(read, 'legalEntityScope'), /^['"](?:required|optional|forbidden)['"]$/u) &&
     matches(
       objectProperty(read, 'permissionTarget'),
-      /^['"](?:business_permission|conditional|legal_entity|module|resource|tenant)['"]$/u,
+      /^['"](?:assortment_permission|business_permission|conditional|legal_entity|module|resource|tenant)['"]$/u,
     ) &&
     policies !== undefined &&
     policies.startsWith('[') &&
@@ -1558,19 +1558,16 @@ const hasManifestContract = (manifest: string, contribution: GovernedReadContrib
   ]);
   if (contribution.kind === MODULE_API_KIND) {
     const apiEntries = generatedSlotEntries(manifest, MANIFEST_API_SLOT_START, MANIFEST_API_SLOT_END);
+    const apiValue = contributionApiValue(contribution.kind, contribution.name);
+    const manifestEntriesMatch = (entries: readonly string[] | undefined): boolean =>
+      entries?.filter(
+        (entry) =>
+          entry === `'${contribution.contractStem}': ${apiValue}` ||
+          entry === `${contribution.contractStem}: ${apiValue}`,
+      ).length === 1;
     return (
-      hasExactValueImport(
-        manifest,
-        contributionApiValue(contribution.kind, contribution.name),
-        `./shared/apis/${contribution.contractStem}.ts`,
-      ) &&
-      [apiEntries, allOwnerManifestEntries].every(
-        (entries) =>
-          entries?.filter(
-            (entry) =>
-              entry === `'${contribution.contractStem}': ${contributionApiValue(contribution.kind, contribution.name)}`,
-          ).length === 1,
-      )
+      hasExactValueImport(manifest, apiValue, `./shared/apis/${contribution.contractStem}.ts`) &&
+      [apiEntries, allOwnerManifestEntries].every(manifestEntriesMatch)
     );
   }
   const role = contributionRole(contribution.kind);

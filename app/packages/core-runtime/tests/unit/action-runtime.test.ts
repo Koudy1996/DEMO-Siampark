@@ -3,6 +3,7 @@ import { expect, it } from 'effect-rstest';
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
 import {
   defineAction,
+  defineActionAssortmentPermissions,
   defineActionBusinessPermission,
   defineActionResourcePermission,
   getActionHandler,
@@ -51,7 +52,10 @@ import { checkModuleEntrypoint, makeModuleStateSnapshot } from '../../src/module
 import type { TenantModuleState } from '../../src/modules/tenant-module-state-service.ts';
 import type { ActionPermissionDecision, CheckActionPermissionInput } from '../../src/permissions/service.ts';
 import { BusinessPermissionCodeSchema } from '../../src/permissions/business-permission.ts';
-import { toBusinessPermissionAccessKey } from '../../src/permissions/context-access.ts';
+import {
+  toAssortmentPermissionAccessKey,
+  toBusinessPermissionAccessKey,
+} from '../../src/permissions/context-access.ts';
 import { testOperationalScopeResolver } from '../fixtures/operational-scope.ts';
 import { makeTestDatabase } from '../support/database.ts';
 
@@ -114,6 +118,8 @@ const PermissionDecisionSchema = Schema.Literals(['allowed', 'denied', 'unavaila
 type PermissionDecision = typeof PermissionDecisionSchema.Type;
 
 interface HarnessOptions {
+  readonly assortmentPermissionDecision?: PermissionDecision;
+  readonly assortmentPermissionDecisions?: readonly PermissionDecision[];
   readonly businessPermissionDecision?: PermissionDecision;
   readonly commit?: Effect.Effect<readonly object[], SqlError>;
   readonly commitFailureCode?: string;
@@ -122,6 +128,7 @@ interface HarnessOptions {
   readonly lockedModuleState?: 'active' | 'denied' | 'unavailable';
   readonly moduleState?: TenantModuleState | 'missing' | 'unavailable';
   readonly omitOwnerAuthorizationOverlay?: boolean;
+  readonly onAssortmentPermissionCheck?: (targets: readonly unknown[]) => void;
   readonly onBusinessPermissionCheck?: () => void;
   readonly onResourcePermissionCheck?: () => void;
   readonly ownerAuthorizationOverlay?: OwnerAuthorizationOverlayService;
@@ -139,6 +146,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
   const finalized: FinalizeActionPolicyDenialInput[] = [];
   const flushed: FlushActionSuccessInput[] = [];
   const businessPermissionChecks: unknown[] = [];
+  const assortmentPermissionChecks: unknown[] = [];
   const legalEntityChecks: unknown[] = [];
   const permissionChecks: CheckActionPermissionInput[] = [];
   const rejections: RejectPermissionDeniedInput[] = [];
@@ -390,6 +398,19 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
         };
   const runtime = makeActionRuntime(database, repository, permission, testOperationalScopeResolver, {
     contextAccess: {
+      assortmentPermissions: (input) => {
+        assortmentPermissionChecks.push(...input.targets);
+        options.onAssortmentPermissionCheck?.(input.targets);
+        return Effect.succeed(
+          input.targets.map((target, index) => ({
+            decision:
+              options.assortmentPermissionDecisions?.[index] ??
+              options.assortmentPermissionDecision ??
+              ('allowed' as const),
+            key: toAssortmentPermissionAccessKey(principal.tenantId, principal.legalEntityId, target.target) ?? '',
+          })),
+        );
+      },
       businessPermissions: (input) => {
         options.onBusinessPermissionCheck?.();
         businessPermissionChecks.push(input);
@@ -443,6 +464,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
   });
 
   return {
+    assortmentPermissionChecks,
     businessPermissionChecks,
     counts: () => ({
       createCount,
@@ -2098,6 +2120,176 @@ it.effect(
       },
     ]);
     expect(handlerCalls).toBe(1);
+  }),
+);
+
+it.effect('checks every plural Assortment target conjunctively before the handler', () =>
+  Effect.gen(function* checksPluralAssortmentTargets() {
+    let handlerCalls = 0;
+    let serviceFactoryCalls = 0;
+    const action = defineAction(
+      {
+        accessEvidencePolicy: { captureMode: 'metadata_only', policyKey: 'assortment.replace.v1' },
+        actionKey: 'commerce.assortment.replace-binding',
+        assortmentPermissions: defineActionAssortmentPermissions(() => [
+          {
+            binding: {
+              moduleId: 'commerce.assortment',
+              resourceId: 'binding-1',
+              resourceType: 'commerce.assortment.applicability-binding',
+            },
+            kind: 'assortment_binding',
+            mode: 'end',
+            permission: 'assortment.binding.end',
+          },
+          {
+            audience: { kind: 'SHARED' },
+            commercialScope: {
+              channel: {
+                moduleId: 'commerce.channel',
+                resourceId: 'web',
+                resourceType: 'commerce.channel',
+              },
+            },
+            effectiveFrom: '2026-09-22T00:00:00.000Z',
+            kind: 'assortment_binding',
+            mode: 'create',
+            permission: 'assortment.binding.create',
+            ruleRevision: {
+              moduleId: 'commerce.assortment',
+              resourceId: 'rule-revision-2',
+              resourceType: 'commerce.assortment.rule-revision',
+            },
+          },
+        ]),
+        auditProfile: 'standard',
+        domainErrorSchema: Schema.Never,
+        domainEvents: {},
+        entrypoint: defineTenantModuleEntrypoint({
+          access: 'write',
+          authorization: { kind: 'action_execution', provisioning: 'tenant_membership_default' },
+          entrypointKey: 'commerce.assortment.replace-binding',
+          moduleKey: 'commerce.assortment',
+          role: 'action',
+        }),
+        idempotency: 'required',
+        legalEntityScope: 'required',
+        owningModuleKey: 'commerce.assortment',
+        payloadSchema: Schema.Struct({ value: Schema.String }),
+        policies: [],
+        resultSchema: Schema.Void,
+        schemaVersion: '1',
+      },
+      () => {
+        handlerCalls += 1;
+        return Effect.void;
+      },
+      () => {
+        serviceFactoryCalls += 1;
+        return Effect.succeed({});
+      },
+    );
+    const allowed = yield* makeHarness();
+    yield* allowed.runtime.runAction({
+      payload: { value: 'replace' },
+      principal,
+      registration: action,
+      transport: transport('assortment-plural-allowed'),
+    });
+    expect(allowed.assortmentPermissionChecks).toHaveLength(2);
+    expect(handlerCalls).toBe(1);
+    expect(serviceFactoryCalls).toBe(1);
+
+    const denied = yield* makeHarness({ assortmentPermissionDecisions: ['allowed', 'denied'] });
+    const failure = yield* Effect.flip(
+      denied.runtime.runAction({
+        payload: { value: 'replace' },
+        principal,
+        registration: action,
+        transport: transport('assortment-plural-denied'),
+      }),
+    );
+    expect(Predicate.isTagged(failure, 'ActionPermissionDenied')).toBe(true);
+    expect(denied.assortmentPermissionChecks).toHaveLength(2);
+    expect(denied.gateCounts().handlerResolutionCount).toBe(0);
+    expect(serviceFactoryCalls).toBe(1);
+
+    const unavailable = yield* makeHarness({ assortmentPermissionDecisions: ['allowed', 'unavailable'] });
+    const unavailableFailure = yield* Effect.flip(
+      unavailable.runtime.runAction({
+        payload: { value: 'replace' },
+        principal,
+        registration: action,
+        transport: transport('assortment-plural-unavailable'),
+      }),
+    );
+    expect(Predicate.isTagged(unavailableFailure, 'ActionPermissionCheckError')).toBe(true);
+    expect(unavailable.assortmentPermissionChecks).toHaveLength(2);
+    expect(unavailable.gateCounts().handlerResolutionCount).toBe(0);
+    expect(serviceFactoryCalls).toBe(1);
+    expect(handlerCalls).toBe(1);
+  }),
+);
+
+it.effect('fails closed for an unknown Assortment configuration resource type', () =>
+  Effect.gen(function* rejectsUnknownConfigurationType() {
+    let handlerCalls = 0;
+    let serviceFactoryCalls = 0;
+    const action = defineAction(
+      {
+        accessEvidencePolicy: { captureMode: 'metadata_only', policyKey: 'assortment.configuration.v1' },
+        actionKey: 'commerce.assortment.configuration-check',
+        assortmentPermissions: defineActionAssortmentPermissions(() => [
+          {
+            kind: 'assortment_configuration',
+            permission: 'assortment.configuration.read',
+            resource: {
+              moduleId: 'commerce.assortment',
+              resourceId: 'configuration-1',
+              resourceType: 'commerce.assortment.configuration',
+            },
+          },
+        ]),
+        auditProfile: 'standard',
+        domainErrorSchema: Schema.Never,
+        domainEvents: {},
+        entrypoint: defineTenantModuleEntrypoint({
+          access: 'write',
+          authorization: { kind: 'action_execution', provisioning: 'tenant_membership_default' },
+          entrypointKey: 'commerce.assortment.configuration-check',
+          moduleKey: 'commerce.assortment',
+          role: 'action',
+        }),
+        idempotency: 'required',
+        legalEntityScope: 'optional',
+        owningModuleKey: 'commerce.assortment',
+        payloadSchema: Schema.Void,
+        policies: [],
+        resultSchema: Schema.Void,
+        schemaVersion: '1',
+      },
+      () => {
+        handlerCalls += 1;
+        return Effect.void;
+      },
+      () => {
+        serviceFactoryCalls += 1;
+        return Effect.succeed({});
+      },
+    );
+    const harness = yield* makeHarness();
+    const failure = yield* Effect.flip(
+      harness.runtime.runAction({
+        payload: undefined,
+        principal,
+        registration: action,
+        transport: transport('assortment-unknown-configuration'),
+      }),
+    );
+    expect(Predicate.isTagged(failure, 'ActionPermissionCheckError')).toBe(true);
+    expect(harness.assortmentPermissionChecks).toHaveLength(0);
+    expect(handlerCalls).toBe(0);
+    expect(serviceFactoryCalls).toBe(0);
   }),
 );
 

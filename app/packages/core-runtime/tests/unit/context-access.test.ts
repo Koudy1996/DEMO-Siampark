@@ -8,6 +8,8 @@ import {
   LEGAL_ENTITY_PERMISSION_KEYS,
   TENANT_PERMISSION_KEYS,
   makeContextAccess,
+  toAssortmentPermissionAccessKey,
+  toAssortmentPermissionAccessObjectId,
   toBusinessPermissionAccessKey,
   toBusinessPermissionAccessObjectId,
   toContextPermissionAccessKey,
@@ -24,6 +26,17 @@ const principalId = '30000000-0000-4000-8000-000000000001';
 const pricingCatalogId = '50000000-0000-4000-8000-000000000001';
 const priceGroupId = '60000000-0000-4000-8000-000000000001';
 const otherPriceGroupId = '60000000-0000-4000-8000-000000000002';
+
+const assortmentEndTarget = {
+  binding: {
+    moduleId: 'commerce.assortment',
+    resourceId: 'binding-1',
+    resourceType: 'commerce.assortment.applicability-binding',
+  },
+  kind: 'assortment_binding' as const,
+  mode: 'end' as const,
+  permission: 'assortment.binding.end' as const,
+};
 
 const responseFor = (
   request: v1.CheckBulkPermissionsRequest,
@@ -69,6 +82,16 @@ const requireContextPermissions = (
   return check;
 };
 
+const requireAssortmentPermissions = (
+  access: ReturnType<typeof makeContextAccess>,
+): NonNullable<ReturnType<typeof makeContextAccess>['assortmentPermissions']> => {
+  const check = access.assortmentPermissions;
+  if (check === undefined) {
+    throw new Error('Expected Assortment permission access');
+  }
+  return check;
+};
+
 it.effect('uses one fully consistent batch and correlates allowed and denied module decisions', () =>
   Effect.gen(function* correlatesModuleDecisions() {
     const requests: v1.CheckBulkPermissionsRequest[] = [];
@@ -102,6 +125,203 @@ it.effect('uses one fully consistent batch and correlates allowed and denied mod
     expect(requests[0]?.items[0]?.resource?.objectType).toBe('module_access');
     expect(requests[0]?.items[0]?.permission).toBe('access');
     expect(requests[0]?.items[0]?.subject?.object?.objectId).toBe(principalId);
+  }),
+);
+
+it.effect('scopes Assortment keys and object IDs by trusted tenant and Legal Entity', () =>
+  Effect.gen(function* scopesAssortmentTargets() {
+    const requests: v1.CheckBulkPermissionsRequest[] = [];
+    const service = makeContextAccess(
+      makeClient((request) =>
+        Effect.sync(() => {
+          requests.push(request);
+          return responseFor(request, [v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION]);
+        }),
+      ),
+    );
+    const result = yield* requireAssortmentPermissions(service)({
+      legalEntityId,
+      principal: { principalId, tenantId },
+      targets: [{ target: assortmentEndTarget }],
+    });
+    const otherKey = toAssortmentPermissionAccessKey(
+      '10000000-0000-4000-8000-000000000009',
+      legalEntityId,
+      assortmentEndTarget,
+    );
+    const objectId = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, assortmentEndTarget);
+    expect(result).toEqual([
+      { decision: 'allowed', key: toAssortmentPermissionAccessKey(tenantId, legalEntityId, assortmentEndTarget) },
+    ]);
+    expect(result?.[0]?.key).not.toBe(otherKey);
+    expect(requests[0]?.items[0]?.permission).toBe('use');
+    expect(requests[0]?.items[0]?.resource?.objectType).toBe('business_permission');
+    expect(requests[0]?.items[0]?.resource?.objectId).toBe(objectId);
+    expect(requests[0]?.items[0]?.resource?.objectId).not.toContain('binding-1');
+  }),
+);
+
+it('uses tenant scope for Rule lineage and requires Legal Entity scope for binding lineage', () => {
+  const ruleTarget = {
+    effect: 'ALLOW' as const,
+    kind: 'assortment_rule' as const,
+    mode: 'create' as const,
+    permission: 'assortment.rule.create' as const,
+    purpose: 'PURCHASE' as const,
+    selector: { kind: 'ALL' as const },
+    stableCode: 'rule-1',
+  };
+  expect(toAssortmentPermissionAccessKey(tenantId, undefined, ruleTarget)).toBeDefined();
+  expect(toAssortmentPermissionAccessObjectId(tenantId, undefined, ruleTarget)).toBeDefined();
+  expect(toAssortmentPermissionAccessKey(tenantId, undefined, assortmentEndTarget)).toBeUndefined();
+  expect(toAssortmentPermissionAccessObjectId(tenantId, undefined, assortmentEndTarget)).toBeUndefined();
+});
+
+it.effect('derives configuration scope from the exact canonical resource type and rejects unknown types', () =>
+  Effect.gen(function* derivesConfigurationScope() {
+    const requests: v1.CheckBulkPermissionsRequest[] = [];
+    const service = makeContextAccess(
+      makeClient((request) =>
+        Effect.sync(() => {
+          requests.push(request);
+          return responseFor(
+            request,
+            request.items.map(() => v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION),
+          );
+        }),
+      ),
+    );
+    const stableRuleTarget = {
+      kind: 'assortment_configuration' as const,
+      permission: 'assortment.configuration.read' as const,
+      resource: {
+        moduleId: 'commerce.assortment',
+        resourceId: 'stable-rule-1',
+        resourceType: 'commerce.assortment.stable-rule',
+      },
+    };
+    const ruleRevisionTarget = {
+      ...stableRuleTarget,
+      resource: {
+        ...stableRuleTarget.resource,
+        resourceId: 'rule-revision-1',
+        resourceType: 'commerce.assortment.rule-revision',
+      },
+    };
+    const bindingTarget = {
+      ...stableRuleTarget,
+      resource: {
+        ...stableRuleTarget.resource,
+        resourceId: 'binding-1',
+        resourceType: 'commerce.assortment.applicability-binding',
+      },
+    };
+    const boundaryTarget = {
+      ...stableRuleTarget,
+      resource: {
+        ...stableRuleTarget.resource,
+        resourceId: 'boundary-1',
+        resourceType: 'commerce.assortment.closed-assortment-boundary',
+      },
+    };
+    const unknownTarget = {
+      ...stableRuleTarget,
+      resource: { ...stableRuleTarget.resource, resourceType: 'commerce.assortment.configuration' },
+    };
+
+    expect(toAssortmentPermissionAccessKey(tenantId, undefined, stableRuleTarget)).toBeDefined();
+    expect(toAssortmentPermissionAccessKey(tenantId, undefined, ruleRevisionTarget)).toBeDefined();
+    expect(toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, stableRuleTarget)).toBe(
+      toAssortmentPermissionAccessObjectId(tenantId, undefined, stableRuleTarget),
+    );
+    expect(toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, ruleRevisionTarget)).toBe(
+      toAssortmentPermissionAccessObjectId(tenantId, undefined, ruleRevisionTarget),
+    );
+    expect(toAssortmentPermissionAccessKey(tenantId, undefined, bindingTarget)).toBeUndefined();
+    expect(toAssortmentPermissionAccessObjectId(tenantId, undefined, bindingTarget)).toBeUndefined();
+    expect(toAssortmentPermissionAccessKey(tenantId, legalEntityId, bindingTarget)).toBeDefined();
+    expect(toAssortmentPermissionAccessKey(tenantId, undefined, boundaryTarget)).toBeUndefined();
+    expect(toAssortmentPermissionAccessObjectId(tenantId, undefined, boundaryTarget)).toBeUndefined();
+    expect(toAssortmentPermissionAccessKey(tenantId, legalEntityId, boundaryTarget)).toBeDefined();
+    expect(toAssortmentPermissionAccessKey(tenantId, legalEntityId, unknownTarget)).toBeUndefined();
+    expect(toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, unknownTarget)).toBeUndefined();
+
+    const tenantResults = yield* requireAssortmentPermissions(service)({
+      principal: { principalId, tenantId },
+      targets: [{ target: stableRuleTarget }, { target: ruleRevisionTarget }],
+    });
+    expect(tenantResults.map(({ decision }) => decision)).toEqual(['allowed', 'allowed']);
+    const legalEntityResults = yield* requireAssortmentPermissions(service)({
+      legalEntityId,
+      principal: { principalId, tenantId },
+      targets: [{ target: bindingTarget }, { target: boundaryTarget }],
+    });
+    expect(legalEntityResults.map(({ decision }) => decision)).toEqual(['allowed', 'allowed']);
+    const unavailableResults = yield* requireAssortmentPermissions(service)({
+      principal: { principalId, tenantId },
+      targets: [{ target: bindingTarget }, { target: boundaryTarget }, { target: unknownTarget }],
+    });
+    expect(unavailableResults).toEqual([
+      { decision: 'unavailable', key: 'assortment.configuration.read:assortment_configuration' },
+      { decision: 'unavailable', key: 'assortment.configuration.read:assortment_configuration' },
+      { decision: 'unavailable', key: 'assortment.configuration.read:assortment_configuration' },
+    ]);
+    expect(requests).toHaveLength(2);
+  }),
+);
+
+it.effect('keeps complete Admission Set digest semantics exact and distinguishes storefront trust', () =>
+  Effect.gen(function* checksAdmissionSetAndStorefront() {
+    const requests: v1.CheckBulkPermissionsRequest[] = [];
+    const service = makeContextAccess(
+      makeClient((request) =>
+        Effect.sync(() => {
+          requests.push(request);
+          return responseFor(
+            request,
+            request.items.map(() => v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION),
+          );
+        }),
+      ),
+    );
+    const target = {
+      admissionSet: {
+        collectionRevision: {
+          moduleId: 'catalog.core',
+          resourceId: 'collection-revision-1',
+          resourceType: 'catalog.collection-revision',
+        },
+        contentHash: 'a'.repeat(64),
+        memberCount: 0,
+        setKind: 'EMPTY' as const,
+      },
+      commercialScope: {
+        channel: { moduleId: 'commerce.channel', resourceId: 'web', resourceType: 'commerce.channel' },
+      },
+      effectiveFrom: '2026-09-22T00:00:00.000Z',
+      kind: 'assortment_boundary' as const,
+      mode: 'create' as const,
+      permission: 'assortment.boundary.create' as const,
+      purpose: 'PURCHASE' as const,
+      subject: {
+        kind: 'COUNTERPARTY' as const,
+        ref: { moduleId: 'party.registry', resourceId: 'counterparty-1', resourceType: 'party.registry.counterparty' },
+      },
+    } as const;
+    const result = yield* requireAssortmentPermissions(service)({
+      legalEntityId,
+      principal: { principalId, tenantId },
+      targets: [{ target }],
+    });
+    expect(result?.[0]?.decision).toBe('allowed');
+    const sameMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, target);
+    const changedMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
+      ...target,
+      admissionSet: { ...target.admissionSet, contentHash: 'b'.repeat(64), memberCount: 1, setKind: 'ENTRIES' },
+    });
+    expect(sameMeaning).toBeDefined();
+    expect(sameMeaning).not.toBe(changedMeaning);
+    expect(requests[0]?.items[0]?.resource?.objectId).not.toContain('a'.repeat(64));
   }),
 );
 

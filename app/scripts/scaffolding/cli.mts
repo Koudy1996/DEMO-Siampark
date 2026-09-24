@@ -672,15 +672,15 @@ Options:
   permission: defineCommand({
     flags: ['permission', 'scope', 'vertical'],
     generator: permissionGenerator,
-    help: `Usage: pnpm scaffold:permission -- --vertical <vertical> --permission <retail.*|counterparty.*|pricing.price_group.*> --scope <retail_profile|counterparty|counterparty_storefront|pricing_catalog|price_group>
+    help: `Usage: pnpm scaffold:permission -- --vertical <vertical> --permission <retail.*|counterparty.*|pricing.price_group.*|assortment.*> --scope <retail_profile|counterparty|counterparty_storefront|pricing_catalog|price_group|assortment_configuration|assortment_decision|assortment_rule|assortment_binding|assortment_boundary>
 
 Generate one versioned, fail-closed business Permission declaration and register it in the module manifest.
 Generated Permissions start non-delegable and with no authority-group or protected-entrypoint membership.
 
 Required flags:
   --vertical <vertical>  Existing generated vertical folder (lower-kebab-case)
-  --permission <code>    Stable lowercase retail.*, counterparty.*, or pricing.price_group.* Permission code
-  --scope <scope>        Exact compatible business target scope
+  --permission <code>    Stable lowercase retail.*, counterparty.*, pricing.price_group.*, or one of the approved assortment.* codes
+  --scope <scope>        Exact business target scope
 
 Options:
   --help                 Show this help without writing
@@ -694,10 +694,15 @@ Options:
           scope !== 'counterparty' &&
           scope !== 'counterparty_storefront' &&
           scope !== 'pricing_catalog' &&
-          scope !== 'price_group'
+          scope !== 'price_group' &&
+          scope !== 'assortment_configuration' &&
+          scope !== 'assortment_decision' &&
+          scope !== 'assortment_rule' &&
+          scope !== 'assortment_binding' &&
+          scope !== 'assortment_boundary'
         ) {
           return yield* failScaffolding(
-            '--scope must be retail_profile, counterparty, counterparty_storefront, pricing_catalog, or price_group',
+            '--scope must be retail_profile, counterparty, counterparty_storefront, pricing_catalog, price_group, assortment_configuration, assortment_decision, assortment_rule, assortment_binding, or assortment_boundary',
           );
         }
         return {

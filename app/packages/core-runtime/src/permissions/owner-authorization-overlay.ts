@@ -3,6 +3,7 @@ import type { ScopedTransactionExecutor } from '../db/scoped-transaction.ts';
 import type { OperationalScope } from '../operations/context.ts';
 import type {
   BusinessAccessTarget,
+  AssortmentPermissionAccessTarget,
   LegalEntityPermissionKey,
   ResourceAccessTarget,
   TenantPermissionKey,
@@ -23,6 +24,11 @@ export type OwnerAuthorizationTarget =
       readonly kind: 'business_permission';
       readonly permission: BusinessPermissionCode;
       readonly target: BusinessAccessTarget;
+      readonly trustedStorefrontId?: string;
+    }>
+  | Readonly<{
+      readonly kind: 'assortment_permission';
+      readonly target: AssortmentPermissionAccessTarget;
       readonly trustedStorefrontId?: string;
     }>
   | Readonly<{
@@ -88,7 +94,7 @@ export const allowOwnerAuthorizationOverlay: OwnerAuthorizationOverlayService = 
 export const failClosedOwnerAuthorizationOverlay: OwnerAuthorizationOverlayService = Object.freeze({
   authorize: (_transaction: ScopedTransactionExecutor, input: OwnerAuthorizationInput) =>
     Effect.succeed(
-      input.targets.some((target) => target.kind === 'business_permission')
+      input.targets.some((target) => target.kind === 'business_permission' || target.kind === 'assortment_permission')
         ? ('unavailable' as const)
         : ('allowed' as const),
     ),

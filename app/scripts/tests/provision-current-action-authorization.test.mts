@@ -159,6 +159,15 @@ const addedVerticalActionKeys = [
   'commerce.catalog.set-variant-attribute-override',
   'commerce.catalog.set-variant-localized-facts',
   'commerce.catalog.update-product',
+  'commerce.assortment.create-applicability-binding',
+  'commerce.assortment.create-closed-assortment-boundary',
+  'commerce.assortment.create-rule',
+  'commerce.assortment.create-rule-revision',
+  'commerce.assortment.end-applicability-binding',
+  'commerce.assortment.end-closed-assortment-boundary',
+  'commerce.assortment.replace-applicability-binding',
+  'commerce.assortment.replace-closed-assortment-boundary',
+  'commerce.assortment.retire-rule',
   'commerce.customer-context.add-saved-address',
   'commerce.customer-context.administer-commerce-quantity-rule',
   'commerce.customer-context.administer-market-bootstrap-policy',
@@ -393,6 +402,7 @@ it.effect(
     expect(new Set(completeCurrentActionKeys).size).toBe(completeCurrentActionKeys.length);
     expect(completeCurrentActionKeys).toContain('commerce.customer-context.claim-counterparty-access-invitation');
     expect(completeCurrentActionKeys).toContain('commerce.catalog.publish-product-configuration');
+    expect(completeCurrentActionKeys).toContain('commerce.assortment.replace-closed-assortment-boundary');
     expect(completeCurrentActionKeys).toContain('payment.term-catalog.retire-payment-term');
     expect(completeCurrentActionKeys).toContain('pricing.price-group-catalog.retire-price-group');
   }),

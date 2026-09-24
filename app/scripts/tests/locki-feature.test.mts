@@ -11,6 +11,14 @@ const workspaceRoot = path.resolve(import.meta.dirname, '../..');
 const workflowScript = path.join(workspaceRoot, 'scripts/locki-feature.sh');
 const featureSlug = 'customer-search';
 
+it.live('pins pnpm to the native mise backend for cross-platform sandbox installation', () =>
+  Effect.gen(function* testEffect1() {
+    const miseConfiguration = yield* Effect.tryPromise(() => readFile(path.join(workspaceRoot, '.mise.toml'), 'utf-8'));
+    expect(miseConfiguration).not.toMatch(/\[tool_alias\]/u);
+    expect(miseConfiguration).toMatch(/\[tools\][\s\S]*pnpm = \{ version = "12\.4\.2", allow_builds = \["pnpm"\] \}/u);
+  }),
+);
+
 interface Fixture {
   readonly binDirectory: string;
   readonly logPath: string;
