@@ -5,7 +5,6 @@ import {
   AssortmentDiscoveryDisclosureContextSchema,
   AssortmentDiscoveryDisclosureCoverageSchema,
   AssortmentDiscoveryDisclosureEquivalenceSchema,
-  AssortmentDiscoveryDisclosureInclusionDecisionSchema,
   AssortmentDiscoveryDisclosureInvalidationSchema,
   AssortmentDiscoveryInclusionDecisionSchema,
   AssortmentPartialDiscoveryResultSchema,
@@ -249,7 +248,7 @@ it('requires INCLUDE Product and coverage to match exactly, including Guest evid
   });
   expect(included.decision).toBe('INCLUDE');
 
-  const omitted = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureInclusionDecisionSchema)({
+  const omitted = Schema.decodeUnknownSync(AssortmentDiscoveryInclusionDecisionSchema)({
     context: encodedContext(exactContext),
     decision: 'OMIT',
     productRef: productRef(),

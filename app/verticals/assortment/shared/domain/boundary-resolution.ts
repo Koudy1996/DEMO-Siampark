@@ -1,7 +1,6 @@
 import { DateTime, Schema } from 'effect';
 
 import {
-  AssortmentBoundaryPathSchema,
   AssortmentCatalogSelectionSchema,
   AssortmentCommercialScopeSchema,
   AssortmentClosedBoundarySchema,
@@ -46,14 +45,12 @@ const AssortmentBoundaryCompletenessScopeSchema = Schema.Struct({
   subject: AssortmentPurchasingSubjectSchema,
   tenantId: AssortmentTenantIdSchema,
 });
-export type AssortmentBoundaryCompletenessScope = typeof AssortmentBoundaryCompletenessScopeSchema.Type;
 
 /** Completeness is typed to this exact Boundary predicate, not a generic query result. */
-export const AssortmentBoundaryCompletenessEvidenceSchema = Schema.Struct({
+const AssortmentBoundaryCompletenessEvidenceSchema = Schema.Struct({
   evidence: AssortmentSetCompletenessEvidenceSchema,
   scope: AssortmentBoundaryCompletenessScopeSchema,
 });
-export type AssortmentBoundaryCompletenessEvidence = typeof AssortmentBoundaryCompletenessEvidenceSchema.Type;
 
 /**
  * The Boundary owner supplies a complete aggregate collection for this exact
@@ -85,10 +82,6 @@ const AssortmentBoundaryResolutionIndeterminateSchema = Schema.Struct({
 });
 export type AssortmentBoundaryResolutionIndeterminate = typeof AssortmentBoundaryResolutionIndeterminateSchema.Type;
 
-export const AssortmentBoundaryResolutionSchema = Schema.Union([
-  AssortmentBoundaryPathSchema,
-  AssortmentBoundaryResolutionIndeterminateSchema,
-]);
 export type AssortmentBoundaryResolution = AssortmentBoundaryPath | AssortmentBoundaryResolutionIndeterminate;
 
 const refEquals = (left: AssortmentOwnerResourceRef, right: AssortmentOwnerResourceRef): boolean =>

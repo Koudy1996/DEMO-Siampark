@@ -57,7 +57,7 @@ export interface ContextPermissionAccessTarget {
  * BusinessAccessTarget family. Their meaning is an exact immutable policy
  * target, not a grant/revoke mutation target.
  */
-export const AssortmentPermissionCodeSchema = Schema.Literals([
+const AssortmentPermissionCodeSchema = Schema.Literals([
   'assortment.binding.create',
   'assortment.binding.end',
   'assortment.boundary.create',
@@ -211,10 +211,6 @@ const assortmentConfigurationResourceScope = (
  */
 export const isAssortmentPermissionTargetValid = (target: AssortmentPermissionAccessTarget): boolean =>
   target.kind !== 'assortment_configuration' || assortmentConfigurationResourceScope(target.resource) !== undefined;
-
-export const getAssortmentConfigurationResourceScope = (
-  resource: ResourceAccessTarget,
-): AssortmentConfigurationResourceScope | undefined => assortmentConfigurationResourceScope(resource);
 
 /** Rule lineage and Rule Revisions are tenant-owned; other config is Legal Entity-owned. */
 export const assortmentPermissionTargetRequiresLegalEntity = (target: AssortmentPermissionAccessTarget): boolean => {

@@ -6,7 +6,7 @@ import {
   AssortmentDiscoveryDisclosureCoverageSchema,
   AssortmentDiscoveryDisclosureEquivalenceSchema,
   AssortmentDiscoveryDisclosureInvalidationSchema,
-  AssortmentDiscoveryDisclosureInclusionDecisionSchema,
+  AssortmentDiscoveryInclusionDecisionSchema,
 } from '../../shared/domain/disclosure-contracts.ts';
 import { AssortmentOwnerResourceRefSchema, CatalogProductRefSchema } from '../../shared/domain/decision-contracts.ts';
 import {
@@ -167,8 +167,8 @@ it('includes only an established exact slice and omits unsafe states or scope mi
   );
   expect(included.decision).toBe('INCLUDE');
   expect(() =>
-    Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureInclusionDecisionSchema)(
-      Schema.encodeSync(AssortmentDiscoveryDisclosureInclusionDecisionSchema)(included),
+    Schema.decodeUnknownSync(AssortmentDiscoveryInclusionDecisionSchema)(
+      Schema.encodeSync(AssortmentDiscoveryInclusionDecisionSchema)(included),
     ),
   ).not.toThrow();
 

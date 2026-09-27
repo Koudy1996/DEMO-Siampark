@@ -162,9 +162,6 @@ export const defineActionAssortmentPermissions = <Payload>(
   });
 };
 
-/** Singular spelling retained as a convenience for one-target Actions. */
-export const defineActionAssortmentPermission = defineActionAssortmentPermissions;
-
 const ActionResourcePermissionDeclarationSchema = Schema.instanceOf(ActionPrivateStorage).check(
   Schema.makeFilter((declaration) =>
     declaration[actionResourcePermissionDeclaration] === true &&

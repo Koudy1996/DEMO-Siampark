@@ -20,7 +20,6 @@ import {
   ruleRevisions,
   stableRules,
 } from '../database/schema.ts';
-import { assortmentMeaningFingerprint } from './policy-administration.service.ts';
 import { AssortmentPolicyPersistenceUnavailable } from '../../shared/domain/policy-errors.ts';
 
 type Failure = InstanceType<typeof AssortmentPolicyPersistenceUnavailable>;
@@ -362,11 +361,6 @@ const configurationSourceForScope = (
 
 export const assortmentConfigurationReadSourceForScope = configurationSourceForScope;
 
-/** The generated API remains fail-closed until an owner read adapter is installed. */
-export const assortmentConfigurationReadSourceUnavailable: AssortmentConfigurationReadSource = {
-  resolve: () => Effect.fail(unavailable()),
-};
-
 const isOwnedResource = (resource: ConfigurationResource): boolean =>
   resource.moduleId === 'commerce.assortment' &&
   [
@@ -394,9 +388,6 @@ export const assortmentConfigurationReadService = (
   });
   return { read };
 };
-
-export const configurationRequestFingerprint = (request: AssortmentConfigurationRequest): string =>
-  assortmentMeaningFingerprint({ resource: request.resource });
 
 export const configurationPermissionTarget = (
   request: AssortmentConfigurationRequest,

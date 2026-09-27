@@ -1,6 +1,6 @@
 import { DateTime, Schema } from 'effect';
 import {
-  AssortmentBoundaryAdmissionEntrySchema,
+  AssortmentCatalogSelectorSchema,
   AssortmentCommercialScopeSchema,
   AssortmentDecisionPurposeSchema,
   AssortmentOwnerResourceRefSchema,
@@ -23,9 +23,8 @@ export const AssortmentCollectionRevisionRefSchema = AssortmentOwnerResourceRefS
 );
 
 export const AssortmentAdmissionSetInputSchema = Schema.Struct({
-  entries: Schema.Array(AssortmentBoundaryAdmissionEntrySchema),
+  entries: Schema.Array(AssortmentCatalogSelectorSchema),
 });
-export type AssortmentAdmissionSetInput = typeof AssortmentAdmissionSetInputSchema.Type;
 
 export const CreateClosedAssortmentBoundaryPayloadSchema = Schema.Struct({
   admissionSet: AssortmentAdmissionSetInputSchema,
@@ -50,7 +49,6 @@ export const CreateClosedAssortmentBoundaryResultSchema = Schema.Struct({
   boundaryRef: AssortmentClosedBoundaryRefSchema,
   created: Schema.Boolean,
 });
-export type CreateClosedAssortmentBoundaryResult = typeof CreateClosedAssortmentBoundaryResultSchema.Type;
 
 export const EndClosedAssortmentBoundaryPayloadSchema = Schema.Struct({
   boundaryRef: AssortmentClosedBoundaryRefSchema,
@@ -65,7 +63,6 @@ export const EndClosedAssortmentBoundaryResultSchema = Schema.Struct({
   boundaryRef: AssortmentClosedBoundaryRefSchema,
   ended: Schema.Boolean,
 });
-export type EndClosedAssortmentBoundaryResult = typeof EndClosedAssortmentBoundaryResultSchema.Type;
 
 export const ReplaceClosedAssortmentBoundaryPayloadSchema = Schema.Struct({
   effectiveAt: InstantSchema,
@@ -92,4 +89,3 @@ export const ReplaceClosedAssortmentBoundaryResultSchema = Schema.Struct({
   endedBoundaryRef: AssortmentClosedBoundaryRefSchema,
   replaced: Schema.Boolean,
 });
-export type ReplaceClosedAssortmentBoundaryResult = typeof ReplaceClosedAssortmentBoundaryResultSchema.Type;

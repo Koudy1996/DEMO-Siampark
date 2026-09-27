@@ -21,14 +21,16 @@ export * from './create-rule-action-client.ts';
 export * from './create-rule-revision-action-client.ts';
 export * from './end-applicability-binding-action-client.ts';
 export * from './end-closed-assortment-boundary-action-client.ts';
+export * from './issue-assortment-commitment-confirmation-action-client.ts';
 export * from './replace-applicability-binding-action-client.ts';
 export * from './replace-closed-assortment-boundary-action-client.ts';
 export * from './retire-rule-action-client.ts';
+// </generated-action-http-client-exports>
+
 export * from './configuration-client.ts';
 export * from './decision-explanation-client.ts';
 export * from './visibility-client.ts';
 export * from './purchase-client.ts';
-// </generated-action-http-client-exports>
 
 type AssortmentApiGroups = typeof assortmentApi extends HttpApi.HttpApi<infer _ApiId, infer Groups> ? Groups : never;
 

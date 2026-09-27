@@ -9,16 +9,9 @@ import {
   CreateClosedAssortmentBoundaryResultSchema,
 } from '../actions/create-closed-assortment-boundary.ts';
 
-export {
-  CreateClosedAssortmentBoundaryPayloadSchema,
-  CreateClosedAssortmentBoundaryResultSchema,
-} from '../actions/create-closed-assortment-boundary.ts';
-export type {
-  CreateClosedAssortmentBoundaryPayload,
-  CreateClosedAssortmentBoundaryResult,
-} from '../actions/create-closed-assortment-boundary.ts';
+export { CreateClosedAssortmentBoundaryPayloadSchema } from '../actions/create-closed-assortment-boundary.ts';
 
-export const CreateClosedAssortmentBoundaryActionHeadersSchema = Schema.Struct({
+const CreateClosedAssortmentBoundaryActionHeadersSchema = Schema.Struct({
   'idempotency-key': Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
 });
 

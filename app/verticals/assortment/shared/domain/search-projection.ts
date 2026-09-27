@@ -3,16 +3,8 @@ import { Schema } from 'effect';
 import {
   AssortmentDiscoveryDisclosureContextSchema,
   AssortmentDiscoveryDisclosureCoverageSchema,
-  AssortmentDiscoveryDisclosureEquivalenceSchema,
 } from './disclosure-contracts.ts';
 import { CatalogProductRefSchema } from './decision-contracts.ts';
-import type {
-  AssortmentDiscoveryDisclosureContext,
-  AssortmentDiscoveryDisclosureCoverage,
-  AssortmentDiscoveryDisclosureEquivalence,
-  AssortmentDiscoveryDisclosureInvalidation,
-} from './disclosure-contracts.ts';
-import type { CatalogProductRef } from './decision-contracts.ts';
 
 const contextEquivalence = Schema.toEquivalence(AssortmentDiscoveryDisclosureContextSchema);
 const productEquivalence = Schema.toEquivalence(CatalogProductRefSchema);
@@ -33,7 +25,6 @@ export const AssortmentSearchProjectionVerificationSchema = Schema.Literals([
   'UNVERIFIABLE',
   'INVALIDATED',
 ]);
-export type AssortmentSearchProjectionVerification = typeof AssortmentSearchProjectionVerificationSchema.Type;
 
 /** One Product's rebuildable disclosure allowance for one exact request context. */
 export const AssortmentSearchProjectionEntrySchema = Schema.Struct({
@@ -76,23 +67,3 @@ export type AssortmentSearchProjectionState = typeof AssortmentSearchProjectionS
 
 /** Shared exact-slice comparison for the projection service and its invalidation path. */
 export const isAssortmentSearchProjectionSlice = projectionSliceMatches;
-
-/** A decoded input shape used when a projection consumer asks for one Product. */
-export type AssortmentSearchProjectionLookup = Readonly<{
-  readonly context: AssortmentDiscoveryDisclosureContext;
-  readonly productRef: CatalogProductRef;
-}>;
-
-/** A validated exact invalidation can only stop the matching positive slice. */
-export type AssortmentSearchProjectionInvalidation = AssortmentDiscoveryDisclosureInvalidation;
-
-export const isAssortmentSearchProjectionLookup = (
-  entry: AssortmentSearchProjectionEntry,
-  lookup: AssortmentSearchProjectionLookup,
-): boolean => projectionSliceMatches(entry, lookup);
-
-export const isAssortmentDiscoveryDisclosureEquivalence = (value: AssortmentDiscoveryDisclosureEquivalence): boolean =>
-  Schema.is(AssortmentDiscoveryDisclosureEquivalenceSchema)(value);
-
-export const isAssortmentDiscoveryDisclosureCoverage = (value: AssortmentDiscoveryDisclosureCoverage): boolean =>
-  Schema.is(AssortmentDiscoveryDisclosureCoverageSchema)(value);

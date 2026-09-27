@@ -16,10 +16,8 @@ import type {
   AssortmentDecisionExplanationRequest,
   AssortmentDecisionExplanationResponse,
 } from '../../shared/domain/governed-read-contracts.ts';
-import {
-  AssortmentPolicyPersistenceUnavailable,
-  AssortmentPolicyTargetInvariant,
-} from '../../shared/domain/policy-errors.ts';
+import { AssortmentPolicyTargetInvariant } from '../../shared/domain/policy-errors.ts';
+import type { AssortmentPolicyPersistenceUnavailable } from '../../shared/domain/policy-errors.ts';
 import { assortmentMeaningFingerprint } from './policy-administration.service.ts';
 import { toCommercialScopeTarget, toResourceAccessTarget } from '../actions/policy-administration-support.ts';
 
@@ -38,17 +36,6 @@ export interface AssortmentDecisionEvidenceResolver {
     scope: OperationalScope,
   ) => Effect.Effect<AssortmentStoredDecisionEvidence, Failure>;
 }
-
-const evidenceUnavailable = () =>
-  new AssortmentPolicyPersistenceUnavailable({
-    code: 'assortment_policy_persistence_unavailable',
-    reason: 'Assortment decision evidence is temporarily unavailable',
-  });
-
-/** The generated API remains fail-closed until the owner evidence resolver is installed. */
-export const assortmentDecisionEvidenceResolverUnavailable: AssortmentDecisionEvidenceResolver = {
-  resolve: () => Effect.fail(evidenceUnavailable()),
-};
 
 const subjectEquivalent = Schema.toEquivalence(AssortmentDecisionSubjectSchema);
 const contextEquivalent = Schema.toEquivalence(AssortmentTrustedCommerceContextSchema);

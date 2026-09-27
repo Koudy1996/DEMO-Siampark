@@ -62,14 +62,12 @@ const OrdinaryCompletenessScopeSchema = Schema.Struct({
   target: OrdinaryTargetSchema,
   tenantId: AssortmentTenantIdSchema,
 });
-export type AssortmentOrdinaryCompletenessScope = typeof OrdinaryCompletenessScopeSchema.Type;
 
 /** A typed proof that the supplied Candidate-producing state is complete for this exact decision. */
 export const AssortmentOrdinaryCompletenessEvidenceSchema = Schema.Struct({
   evidence: AssortmentSetCompletenessEvidenceSchema,
   scope: OrdinaryCompletenessScopeSchema,
 });
-export type AssortmentOrdinaryCompletenessEvidence = typeof AssortmentOrdinaryCompletenessEvidenceSchema.Type;
 
 export const AssortmentOrdinaryResolutionInputSchema = Schema.Struct({
   candidates: Schema.Array(AssortmentCandidateSchema),

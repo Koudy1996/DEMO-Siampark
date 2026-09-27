@@ -6,10 +6,9 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, Schema } from '@modern-js/bff-e
 import { HttpApiMiddleware } from 'effect/unstable/httpapi';
 import { CreateRulePayloadSchema, CreateRuleResultSchema } from '../actions/create-rule.ts';
 
-export { CreateRulePayloadSchema, CreateRuleResultSchema } from '../actions/create-rule.ts';
-export type { CreateRulePayload, CreateRuleResult } from '../actions/create-rule.ts';
+export { CreateRulePayloadSchema } from '../actions/create-rule.ts';
 
-export const CreateRuleActionHeadersSchema = Schema.Struct({
+const CreateRuleActionHeadersSchema = Schema.Struct({
   'idempotency-key': Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
 });
 

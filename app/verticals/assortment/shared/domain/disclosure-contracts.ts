@@ -210,8 +210,3 @@ export const AssortmentDiscoveryInclusionDecisionSchema = Schema.Union([
   AssortmentDiscoveryOmitDecisionSchema,
 ]);
 export type AssortmentDiscoveryInclusionDecision = typeof AssortmentDiscoveryInclusionDecisionSchema.Type;
-
-// Descriptive alias for consumers that name the contract in the decision.
-export const AssortmentDiscoveryDisclosureInclusionDecisionSchema = AssortmentDiscoveryInclusionDecisionSchema;
-export type AssortmentDiscoveryDisclosureInclusionDecision =
-  typeof AssortmentDiscoveryDisclosureInclusionDecisionSchema.Type;

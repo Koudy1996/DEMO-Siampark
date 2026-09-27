@@ -45,6 +45,7 @@
     "db:test": "rstest run tests/unit/database-schema-contract.test.ts --config rstest.config.ts",
     "db:verify": "node scripts/verify-db-schema.mts",
     "serve": "modern serve",
+    "test:integration": "rstest --project integration",
     "test:unit": "rstest --project unit",
     "typecheck": "node ../../scripts/ultramodern-typecheck.mts --project tsconfig.json"
   },
@@ -65,7 +66,6 @@
     "@modern-js/runtime": "npm:@bleedingdev/modern-js-runtime@3.9.0-ultramodern.12",
     "@modern-js/runtime-extensions": "npm:@bleedingdev/modern-js-runtime-extensions@3.9.0-ultramodern.12",
     "@modern-js/runtime-renderer-extensions": "npm:@bleedingdev/modern-js-runtime-renderer-extensions@3.9.0-ultramodern.12",
-    "@module-federation/bridge-react": "2.9.0",
     "@module-federation/modern-js-v3": "2.9.0",
     "@module-federation/runtime": "2.9.0",
     "drizzle-orm": "1.0.0-rc.5-ab785fc",
@@ -73,7 +73,6 @@
     "effect": "4.0.0-rc.112",
     "i18next": "26.4.2",
     "pg": "8.22.0",
-    "node-fetch": "^3.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -95,8 +94,7 @@
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@f29b3f495d45a11037334620bf5f693414fb5578",
     "tailwindcss": "^4.3.3",
     "typescript": "7.0.2",
-    "wrangler": "4.116.0",
-    "zephyr-rspack-plugin": "1.2.4"
+    "wrangler": "4.116.0"
   },
   "modernjs": {
     "preset": "presetUltramodern",

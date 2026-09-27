@@ -346,7 +346,6 @@ export type {
 } from './permissions/context-permission-mutation.ts';
 export {
   defineAction,
-  defineActionAssortmentPermission,
   defineActionAssortmentPermissions,
   defineActionBusinessPermission,
   defineActionResourcePermission,

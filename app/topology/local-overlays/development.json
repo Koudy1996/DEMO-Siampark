@@ -1,5 +1,6 @@
 {
   "ontosModuleManifests": {
+    "assortment": "http://localhost:4104/.well-known/ontos-module-manifest.json",
     "commerce-market-catalog": "http://localhost:4109/.well-known/ontos-module-manifest.json",
     "commerce-customer-context": "http://localhost:4101/.well-known/ontos-module-manifest.json",
     "party-registry": "http://localhost:4102/.well-known/ontos-module-manifest.json",
@@ -25,6 +26,7 @@
     "price-group-catalog": 4108
   },
   "manifests": {
+    "assortment": "http://localhost:4104/mf-manifest.json",
     "party-registry": "http://localhost:4102/mf-manifest.json",
     "commerce-market-catalog": "http://localhost:4109/mf-manifest.json",
     "catalog": "http://localhost:4105/mf-manifest.json"

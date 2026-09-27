@@ -13,8 +13,6 @@ import type { AssortmentCommercialScope } from '../../shared/domain/decision-con
 import { AssortmentPolicyTargetInvariant } from '../../shared/domain/policy-errors.ts';
 import { assortmentMeaningFingerprint } from '../services/policy-administration.service.ts';
 
-export type { AssortmentPolicyPersistence } from '../services/policy-administration.service.ts';
-
 interface ResourceRefLike {
   readonly moduleId: string;
   readonly resourceId: string;

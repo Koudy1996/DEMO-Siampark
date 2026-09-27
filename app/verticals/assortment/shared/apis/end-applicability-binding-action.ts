@@ -9,16 +9,9 @@ import {
   EndApplicabilityBindingResultSchema,
 } from '../actions/end-applicability-binding.ts';
 
-export {
-  EndApplicabilityBindingPayloadSchema,
-  EndApplicabilityBindingResultSchema,
-} from '../actions/end-applicability-binding.ts';
-export type {
-  EndApplicabilityBindingPayload,
-  EndApplicabilityBindingResult,
-} from '../actions/end-applicability-binding.ts';
+export { EndApplicabilityBindingPayloadSchema } from '../actions/end-applicability-binding.ts';
 
-export const EndApplicabilityBindingActionHeadersSchema = Schema.Struct({
+const EndApplicabilityBindingActionHeadersSchema = Schema.Struct({
   'idempotency-key': Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
 });
 

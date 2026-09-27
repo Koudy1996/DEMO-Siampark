@@ -8,7 +8,6 @@ import {
   AssortmentCatalogSelectorSchema,
   AssortmentDecisionPurposeSchema,
   AssortmentPurchasingSubjectSchema,
-  AssortmentClosedBoundaryRefSchema,
   AssortmentOwnerResourceRefSchema,
 } from '../domain/decision-contracts.ts';
 
@@ -48,7 +47,6 @@ export const CreateRuleResultSchema = Schema.Struct({
   initialRuleRevisionRef: AssortmentRuleRevisionReferenceSchema,
   stableRuleRef: AssortmentStableRuleRefSchema,
 });
-export type CreateRuleResult = typeof CreateRuleResultSchema.Type;
 
 export const CreateRuleRevisionPayloadSchema = Schema.Struct({
   effect: AssortmentEffectSchema,
@@ -65,7 +63,6 @@ export const CreateRuleRevisionResultSchema = Schema.Struct({
   revisionNumber: RevisionNumberSchema,
   ruleRevisionRef: AssortmentRuleRevisionReferenceSchema,
 });
-export type CreateRuleRevisionResult = typeof CreateRuleRevisionResultSchema.Type;
 
 export const RetireRulePayloadSchema = Schema.Struct({
   effectiveAt: InstantSchema,
@@ -79,7 +76,6 @@ export const RetireRuleResultSchema = Schema.Struct({
   retired: Schema.Boolean,
   stableRuleRef: AssortmentStableRuleRefSchema,
 });
-export type RetireRuleResult = typeof RetireRuleResultSchema.Type;
 
 export const CreateApplicabilityBindingPayloadSchema = Schema.Struct({
   audience: AssortmentBindingAudienceSchema,
@@ -94,7 +90,6 @@ export const CreateApplicabilityBindingResultSchema = Schema.Struct({
   applicabilityBindingRef: AssortmentApplicabilityBindingRefSchema,
   created: Schema.Boolean,
 });
-export type CreateApplicabilityBindingResult = typeof CreateApplicabilityBindingResultSchema.Type;
 
 export const EndApplicabilityBindingPayloadSchema = Schema.Struct({
   applicabilityBindingRef: AssortmentApplicabilityBindingRefSchema,
@@ -108,7 +103,6 @@ export const EndApplicabilityBindingResultSchema = Schema.Struct({
   applicabilityBindingRef: AssortmentApplicabilityBindingRefSchema,
   ended: Schema.Boolean,
 });
-export type EndApplicabilityBindingResult = typeof EndApplicabilityBindingResultSchema.Type;
 
 export const ReplaceApplicabilityBindingPayloadSchema = Schema.Struct({
   effectiveAt: InstantSchema,
@@ -133,10 +127,3 @@ export const ReplaceApplicabilityBindingResultSchema = Schema.Struct({
   endedBindingRef: AssortmentApplicabilityBindingRefSchema,
   replaced: Schema.Boolean,
 });
-export type ReplaceApplicabilityBindingResult = typeof ReplaceApplicabilityBindingResultSchema.Type;
-
-export const AssortmentPolicyResourceRefSchema = Schema.Union([
-  AssortmentStableRuleRefSchema,
-  AssortmentApplicabilityBindingRefSchema,
-  AssortmentClosedBoundaryRefSchema,
-]);

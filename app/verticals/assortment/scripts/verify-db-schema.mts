@@ -29,7 +29,10 @@ interface InfrastructureRow extends Readonly<Record<string, boolean | number>> {
   readonly table_count: number;
 }
 
-const expectedTables = ASSORTMENT_TABLE_INVENTORY.map((name) => `${ASSORTMENT_SCHEMA_NAME}.${name}`);
+const expectedTables = EffectArray.sort(
+  ASSORTMENT_TABLE_INVENTORY.map((name) => `${ASSORTMENT_SCHEMA_NAME}.${name}`),
+  Order.String,
+);
 const expectedColumns = EffectArray.sort(
   ASSORTMENT_TABLES.flatMap((table) => {
     const config = getTableConfig(table);

@@ -9,16 +9,9 @@ import {
   ReplaceApplicabilityBindingResultSchema,
 } from '../actions/replace-applicability-binding.ts';
 
-export {
-  ReplaceApplicabilityBindingPayloadSchema,
-  ReplaceApplicabilityBindingResultSchema,
-} from '../actions/replace-applicability-binding.ts';
-export type {
-  ReplaceApplicabilityBindingPayload,
-  ReplaceApplicabilityBindingResult,
-} from '../actions/replace-applicability-binding.ts';
+export { ReplaceApplicabilityBindingPayloadSchema } from '../actions/replace-applicability-binding.ts';
 
-export const ReplaceApplicabilityBindingActionHeadersSchema = Schema.Struct({
+const ReplaceApplicabilityBindingActionHeadersSchema = Schema.Struct({
   'idempotency-key': Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
 });
 

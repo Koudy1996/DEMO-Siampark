@@ -1,4 +1,4 @@
-import { PrincipalRefSchema } from '@app/core-runtime';
+import { PrincipalRefSchema } from '@app/core-runtime/permissions/principal-ref';
 import { Schema } from 'effect';
 import { ApplicabilityBindingRefSchema } from '../resources/applicability-binding.ts';
 import { ClosedAssortmentBoundaryRefSchema } from '../resources/closed-assortment-boundary.ts';
@@ -69,7 +69,6 @@ export const AssortmentRuleRevisionReferenceSchema = Schema.Struct({
   revision: RevisionTokenSchema,
   sourceRef: RuleRevisionRefSchema,
 });
-export type AssortmentRuleRevisionReference = typeof AssortmentRuleRevisionReferenceSchema.Type;
 
 export const AssortmentEvidenceReferenceSchema = Schema.Struct({
   evidenceRef: AssortmentOwnerResourceRefSchema,
@@ -98,26 +97,16 @@ const catalogRefOf = (brand: string) => AssortmentOwnerResourceRefSchema.pipe(Sc
 export const CatalogProductRefSchema = catalogRefOf('AssortmentCatalogProductRef');
 export type CatalogProductRef = typeof CatalogProductRefSchema.Type;
 export const CatalogVariantRefSchema = catalogRefOf('AssortmentCatalogVariantRef');
-export type CatalogVariantRef = typeof CatalogVariantRefSchema.Type;
 export const CatalogCategoryRefSchema = catalogRefOf('AssortmentCatalogCategoryRef');
-export type CatalogCategoryRef = typeof CatalogCategoryRefSchema.Type;
 export const CatalogPackageOptionRefSchema = catalogRefOf('AssortmentCatalogPackageOptionRef');
-export type CatalogPackageOptionRef = typeof CatalogPackageOptionRefSchema.Type;
-export const CatalogPackageContentRevisionRefSchema = catalogRefOf('AssortmentCatalogPackageContentRevisionRef');
-export const CatalogSetCompositionRevisionRefSchema = catalogRefOf('AssortmentCatalogSetCompositionRevisionRef');
-export const CatalogProductConfigurationDefinitionRefSchema = catalogRefOf(
-  'AssortmentCatalogProductConfigurationDefinitionRef',
-);
 
 export const CatalogPackageContentRevisionReferenceSchema = AssortmentRevisionReferenceSchema.pipe(
   Schema.brand('AssortmentCatalogPackageContentRevisionReference'),
 );
-export type CatalogPackageContentRevisionReference = typeof CatalogPackageContentRevisionReferenceSchema.Type;
 
 export const CatalogSetCompositionRevisionReferenceSchema = AssortmentRevisionReferenceSchema.pipe(
   Schema.brand('AssortmentCatalogSetCompositionRevisionReference'),
 );
-export type CatalogSetCompositionRevisionReference = typeof CatalogSetCompositionRevisionReferenceSchema.Type;
 
 export const CatalogProductConfigurationDefinitionReferenceSchema = AssortmentRevisionReferenceSchema.pipe(
   Schema.brand('AssortmentCatalogProductConfigurationDefinitionReference'),
@@ -146,7 +135,6 @@ export const AssortmentProductConfigurationSchema = Schema.Union([
     ),
   ),
 ]);
-export type AssortmentProductConfiguration = typeof AssortmentProductConfigurationSchema.Type;
 
 const CatalogSelectionFields = {
   configuration: AssortmentProductConfigurationSchema,
@@ -220,7 +208,6 @@ export type AssortmentCatalogSelectorKind = typeof AssortmentCatalogSelectorKind
 export const AssortmentDecisionPurposeSchema = Schema.Literals(['VISIBILITY', 'PURCHASE']);
 export type AssortmentDecisionPurpose = typeof AssortmentDecisionPurposeSchema.Type;
 export const AssortmentEffectSchema = Schema.Literals(['ALLOW', 'DENY']);
-export type AssortmentEffect = typeof AssortmentEffectSchema.Type;
 
 const selectorKindOf = (selector: AssortmentCatalogSelector): AssortmentCatalogSelectorKind => selector.kind;
 
@@ -238,7 +225,6 @@ export const AssortmentRuleRevisionSchema = Schema.Struct({
       : undefined;
   }),
 );
-export type AssortmentRuleRevision = typeof AssortmentRuleRevisionSchema.Type;
 
 /** The shared commercial applicability value used by Bindings and Boundaries. */
 export const AssortmentCommercialScopeSchema = Schema.Struct({
@@ -442,8 +428,6 @@ export const AssortmentDecisionRequestSchema = Schema.Union([
 ]);
 export type AssortmentDecisionRequest = typeof AssortmentDecisionRequestSchema.Type;
 
-export const AssortmentBindingKindSchema = Schema.Literals(['SHARED', 'COMMERCE_CUSTOMER_GROUP', 'SUBJECT']);
-export type AssortmentBindingKind = typeof AssortmentBindingKindSchema.Type;
 const CustomerGroupRefSchema = AssortmentOwnerResourceRefSchema.check(
   Schema.makeFilter((reference) =>
     reference.moduleId === 'commerce.customer-context' &&
@@ -494,9 +478,8 @@ export const AssortmentSetCompletenessEvidenceSchema = Schema.Struct({
 });
 export type AssortmentSetCompletenessEvidence = typeof AssortmentSetCompletenessEvidenceSchema.Type;
 
-export const AssortmentBoundaryAdmissionEntrySchema = AssortmentCatalogSelectorSchema;
 export const AssortmentClosedBoundarySchema = Schema.Struct({
-  admissionSet: Schema.Array(AssortmentBoundaryAdmissionEntrySchema),
+  admissionSet: Schema.Array(AssortmentCatalogSelectorSchema),
   boundaryRef: ClosedAssortmentBoundaryRefSchema,
   commercialScope: AssortmentCommercialScopeSchema,
   decisionPurpose: AssortmentDecisionPurposeSchema,
@@ -537,13 +520,6 @@ export type AssortmentBoundaryPath = typeof AssortmentBoundaryPathSchema.Type;
 export const AssortmentDecisionOutcomeSchema = Schema.Literals(['ELIGIBLE', 'INELIGIBLE', 'INDETERMINATE']);
 export type AssortmentDecisionOutcome = typeof AssortmentDecisionOutcomeSchema.Type;
 
-export const AssortmentFailureCodeSchema = Schema.Literals([
-  'CONFIGURATION_CONFLICT',
-  'MISSING_CONFIGURATION',
-  'DEPENDENCY_FAILURE',
-  'RETRY_EXHAUSTED',
-]);
-export type AssortmentFailureCode = typeof AssortmentFailureCodeSchema.Type;
 export const AssortmentSafeReasonCodeSchema = Schema.Literals([
   'BOUNDARY_EXCLUDED',
   'RULE_DENIED',
@@ -620,7 +596,6 @@ export const AssortmentDecisionFailureSchema = Schema.Union([
   AssortmentDependencyFailureError,
   AssortmentRetryExhaustedErrorSchema,
 ]);
-export type AssortmentDecisionFailure = typeof AssortmentDecisionFailureSchema.Type;
 
 /** Public response: safe reason only, never Boundary/Candidate/evidence internals. */
 export const AssortmentPublicDecisionResponseSchema = Schema.Union([

@@ -42,7 +42,6 @@ export const AssortmentConfigurationRuleSchema = Schema.Struct({
   stableCode: NonEmptyTextSchema,
   stableRuleRef: StableRuleRefSchema,
 });
-export type AssortmentConfigurationRule = typeof AssortmentConfigurationRuleSchema.Type;
 
 export const AssortmentConfigurationRevisionSchema = Schema.Struct({
   createdAt: InstantSchema,
@@ -52,7 +51,6 @@ export const AssortmentConfigurationRevisionSchema = Schema.Struct({
   revision: AssortmentRuleRevisionReferenceSchema,
   selector: AssortmentCatalogSelectorSchema,
 });
-export type AssortmentConfigurationRevision = typeof AssortmentConfigurationRevisionSchema.Type;
 
 export const AssortmentConfigurationBindingSchema = Schema.Struct({
   audience: BindingAudienceSchema,
@@ -62,7 +60,6 @@ export const AssortmentConfigurationBindingSchema = Schema.Struct({
   effectiveTo: Schema.optionalKey(InstantSchema),
   ruleRevision: AssortmentRuleRevisionReferenceSchema,
 });
-export type AssortmentConfigurationBinding = typeof AssortmentConfigurationBindingSchema.Type;
 
 export const AssortmentConfigurationBoundarySchema = Schema.Struct({
   boundaryRef: ClosedAssortmentBoundaryRefSchema,
@@ -73,7 +70,6 @@ export const AssortmentConfigurationBoundarySchema = Schema.Struct({
   meaningFingerprint: MeaningFingerprintSchema,
   subject: AssortmentPurchasingSubjectSchema,
 });
-export type AssortmentConfigurationBoundary = typeof AssortmentConfigurationBoundarySchema.Type;
 
 export const AssortmentConfigurationResponseSchema = Schema.Struct({
   configuration: Schema.Union([

@@ -16,17 +16,13 @@ const DigestSchema = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u));
 const InstantSchema = Schema.DateTimeUtcFromString;
 const DatasetIdSchema = NonEmptyTextSchema.pipe(Schema.brand('AssortmentMigrationDatasetId'));
 const SourceSystemIdSchema = NonEmptyTextSchema.pipe(Schema.brand('AssortmentMigrationSourceSystemId'));
-const ArtifactIdSchema = DigestSchema.pipe(Schema.brand('AssortmentMigrationArtifactId'));
 const MigrationTargetKindSchema = Schema.Literals(['BOUNDARY', 'RULE_BINDING']);
 
 export const AssortmentMigrationJourneySchema = Schema.Literals(['VISIBILITY', 'PURCHASE']);
-export type AssortmentMigrationJourney = typeof AssortmentMigrationJourneySchema.Type;
 
 export const AssortmentMigrationDispositionSchema = Schema.Literals(['RETAIN', 'TRANSFORM', 'RETIRE', 'UNRESOLVED']);
-export type AssortmentMigrationDisposition = typeof AssortmentMigrationDispositionSchema.Type;
 
 export const AssortmentMigrationCorrelationStatusSchema = Schema.Literals(['MATCHED', 'AMBIGUOUS', 'UNRESOLVED']);
-export type AssortmentMigrationCorrelationStatus = typeof AssortmentMigrationCorrelationStatusSchema.Type;
 
 export const AssortmentMigrationCorrelationTargetSchema = Schema.Literals([
   'CATALOG',
@@ -125,7 +121,6 @@ export const AssortmentMigrationSourceProvenanceSchema = Schema.Struct({
   sourceRevision: NonEmptyTextSchema,
   sourceSystemId: SourceSystemIdSchema,
 });
-export type AssortmentMigrationSourceProvenance = typeof AssortmentMigrationSourceProvenanceSchema.Type;
 
 export const AssortmentMigrationCorrelationSchema = Schema.Struct({
   canonicalRef: Schema.optionalKey(AssortmentOwnerResourceRefSchema),
@@ -148,7 +143,6 @@ export const AssortmentMigrationCorrelationSchema = Schema.Struct({
     return true;
   }),
 );
-export type AssortmentMigrationCorrelation = typeof AssortmentMigrationCorrelationSchema.Type;
 
 export const AssortmentMigrationClassificationSchema = Schema.Struct({
   disposition: AssortmentMigrationDispositionSchema,
@@ -156,7 +150,6 @@ export const AssortmentMigrationClassificationSchema = Schema.Struct({
   proposedDisposition: Schema.optionalKey(AssortmentMigrationDispositionSchema),
   reason: NonEmptyTextSchema,
 });
-export type AssortmentMigrationClassification = typeof AssortmentMigrationClassificationSchema.Type;
 
 export const AssortmentMigrationEvidenceRecordSchema = Schema.Struct({
   affectedJourneys: Schema.Array(AssortmentMigrationJourneySchema).check(Schema.isMinLength(1)),
@@ -175,14 +168,6 @@ export const AssortmentMigrationEvidenceRecordSchema = Schema.Struct({
   ),
 );
 export type AssortmentMigrationEvidenceRecord = typeof AssortmentMigrationEvidenceRecordSchema.Type;
-
-export const AssortmentMigrationEvidenceArtifactSchema = Schema.Struct({
-  artifactId: ArtifactIdSchema,
-  generatedAt: InstantSchema,
-  records: Schema.Array(AssortmentMigrationEvidenceRecordSchema).check(Schema.isMinLength(1)),
-  schemaVersion: Schema.Literal(1),
-});
-export type AssortmentMigrationEvidenceArtifact = typeof AssortmentMigrationEvidenceArtifactSchema.Type;
 
 const hasCompleteCanonicalMeaning = (record: AssortmentMigrationEvidenceRecord): boolean => {
   const meaning = record.canonicalMeaning;
@@ -255,10 +240,3 @@ export const normalizeAssortmentMigrationEvidenceRecord = (
     gaps,
   };
 };
-
-export const normalizeAssortmentMigrationEvidenceArtifact = (
-  artifact: AssortmentMigrationEvidenceArtifact,
-): AssortmentMigrationEvidenceArtifact => ({
-  ...artifact,
-  records: artifact.records.map(normalizeAssortmentMigrationEvidenceRecord),
-});

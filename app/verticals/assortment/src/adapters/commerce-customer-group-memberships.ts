@@ -4,7 +4,6 @@ import type { HttpClientError } from '@modern-js/bff-effect/effect-client';
 import { AssortmentDependencyFailureError } from '../../shared/domain/decision-contracts.ts';
 import type {
   AssortmentCustomerGroupMembershipRequest,
-  AssortmentCustomerGroupMembershipSet,
   AssortmentOwnerEvidencePort,
 } from '../../shared/domain/ports/owner-evidence.ts';
 import type { AssortmentOwnerModuleId as OwnerModuleId } from '../../shared/domain/decision-contracts.ts';
@@ -72,6 +71,3 @@ export const adaptCommerceCustomerGroupMemberships = (
     );
   },
 });
-
-export type AdaptedCommerceCustomerGroupMemberships = ReturnType<typeof adaptCommerceCustomerGroupMemberships>;
-export type AdaptedCommerceCustomerGroupMembershipSet = AssortmentCustomerGroupMembershipSet;

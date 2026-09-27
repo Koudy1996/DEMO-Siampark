@@ -20,13 +20,6 @@ import type {
 import { AssortmentSetCompositionResolutionSchema } from './ports/owner-evidence.ts';
 import type { AssortmentSetCompositionResolution } from './ports/owner-evidence.ts';
 
-/** The exact one-constituent request shared by the set composer and its resolver. */
-export const AssortmentConstituentResolutionRequestContractSchema = Schema.Struct({
-  constituent: AssortmentPurchaseConstituentSchema,
-  decisionPurpose: Schema.Literal('PURCHASE'),
-  subject: AssortmentDecisionSubjectSchema,
-  trustedContext: AssortmentTrustedCommerceContextSchema,
-});
 export interface AssortmentConstituentResolutionRequest {
   readonly constituent: AssortmentPurchaseConstituent;
   readonly decisionPurpose: 'PURCHASE';

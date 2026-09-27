@@ -9,16 +9,9 @@ import {
   ReplaceClosedAssortmentBoundaryResultSchema,
 } from '../actions/replace-closed-assortment-boundary.ts';
 
-export {
-  ReplaceClosedAssortmentBoundaryPayloadSchema,
-  ReplaceClosedAssortmentBoundaryResultSchema,
-} from '../actions/replace-closed-assortment-boundary.ts';
-export type {
-  ReplaceClosedAssortmentBoundaryPayload,
-  ReplaceClosedAssortmentBoundaryResult,
-} from '../actions/replace-closed-assortment-boundary.ts';
+export { ReplaceClosedAssortmentBoundaryPayloadSchema } from '../actions/replace-closed-assortment-boundary.ts';
 
-export const ReplaceClosedAssortmentBoundaryActionHeadersSchema = Schema.Struct({
+const ReplaceClosedAssortmentBoundaryActionHeadersSchema = Schema.Struct({
   'idempotency-key': Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200))),
 });
 

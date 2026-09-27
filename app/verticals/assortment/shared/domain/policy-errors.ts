@@ -73,15 +73,6 @@ export const AssortmentPolicyLifecycleConflict = Schema.TaggedError<typeof Lifec
   LifecycleConflictFields,
 );
 
-export const AssortmentPolicyActionErrorSchema = Schema.Union([
-  AssortmentPolicyConflict,
-  AssortmentPolicyLifecycleConflict,
-  AssortmentPolicyNotFound,
-  AssortmentPolicyPersistenceUnavailable,
-  AssortmentPolicyStaleBasis,
-]);
-export type AssortmentPolicyActionError = typeof AssortmentPolicyActionErrorSchema.Type;
-
 export const AssortmentPolicyAuditEvidenceSchema = Schema.Struct({
   action: Schema.String.check(Schema.isMinLength(1)),
   changed: Schema.Boolean,

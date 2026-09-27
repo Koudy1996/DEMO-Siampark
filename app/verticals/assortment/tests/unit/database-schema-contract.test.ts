@@ -11,6 +11,7 @@ import {
   admissionSets,
   closedBoundaries,
   collectionRevisions,
+  commitmentConfirmations,
   decisionEvidence,
   ruleRevisions,
   stableRules,
@@ -83,6 +84,26 @@ it('models immutable lifecycle facts and collection provenance', () => {
   expect(evidence.policies.map((policy) => policy.for)).toEqual(['select', 'insert', 'update', 'delete']);
   expect(sql).toContain('assortment_decision_evidence_append_only');
   expect(sql).toContain('assortment_decision_evidence_lookup_idx');
+  const confirmations = getTableConfig(commitmentConfirmations);
+  expect(confirmations.columns.map(({ name }) => name)).toEqual(
+    expect.arrayContaining([
+      'attempt_module_id',
+      'attempt_resource_id',
+      'attempt_resource_type',
+      'prospective_meaning_json',
+      'constituent_json',
+      'candidate_json',
+      'decision_evidence_json',
+      'issued_at',
+      'expires_at',
+      'action_invocation_id',
+      'actor_principal_id',
+    ]),
+  );
+  expect(confirmations.policies.map((policy) => policy.for)).toEqual(['select', 'insert', 'update', 'delete']);
+  expect(sql).toContain('assortment_commitment_confirmations_append_only');
+  expect(sql).toContain('assortment_commitment_confirmations_active_idx');
+  expect(sql).toContain('assortment_commitment_confirmations_validity_ck');
   const initialMigration = readFileSync(
     new URL(`${EffectArray.sort(readdirSync(migrationRoot), Order.String)[0]}/migration.sql`, migrationRoot),
     'utf-8',

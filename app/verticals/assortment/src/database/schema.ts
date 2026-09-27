@@ -19,12 +19,10 @@ export const ASSORTMENT_TABLE_INVENTORY = [
   'assortment_admission_set_entries',
   'assortment_collection_revisions',
   'assortment_decision_evidence',
+  'assortment_commitment_confirmations',
 ] as const;
 
 export const assortmentSchema = pgSchema(ASSORTMENT_SCHEMA_NAME);
-
-type JsonValue = boolean | null | number | readonly JsonValue[] | string | { readonly [key: string]: JsonValue };
-export type DatabaseJsonObject = Readonly<Record<string, JsonValue>>;
 
 const scopeColumns = () => ({
   tenantId: uuid('tenant_id').notNull(),
@@ -436,6 +434,66 @@ export const decisionEvidence = assortmentSchema.table.withRLS(
   ],
 );
 
+/** Immutable Attempt-bound Assortment proof; expiry is terminal and rows are never updated. */
+export const commitmentConfirmations = assortmentSchema.table.withRLS(
+  'assortment_commitment_confirmations',
+  {
+    commitmentConfirmationId: uuid('commitment_confirmation_id').defaultRandom().primaryKey(),
+    ...scopeColumns(),
+    attemptModuleId: text('attempt_module_id').notNull(),
+    attemptResourceId: text('attempt_resource_id').notNull(),
+    attemptResourceType: text('attempt_resource_type').notNull(),
+    prospectiveMeaningJson: jsonb('prospective_meaning_json').notNull(),
+    constituentFingerprint: text('constituent_fingerprint').notNull(),
+    constituentJson: jsonb('constituent_json').notNull(),
+    candidateJson: jsonb('candidate_json').notNull(),
+    decisionEvidenceJson: jsonb('decision_evidence_json').notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    actionInvocationId: uuid('action_invocation_id').notNull(),
+    actorPrincipalId: uuid('actor_principal_id').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    scopeIdentity('assortment_commitment_confirmations_scope_id_uk', table, table.commitmentConfirmationId),
+    unique('assortment_commitment_confirmations_invocation_uk').on(
+      table.tenantId,
+      table.legalEntityId,
+      table.actionInvocationId,
+    ),
+    index('assortment_commitment_confirmations_active_idx').on(
+      table.tenantId,
+      table.legalEntityId,
+      table.attemptModuleId,
+      table.attemptResourceId,
+      table.attemptResourceType,
+      table.constituentFingerprint,
+      table.expiresAt,
+    ),
+    check(
+      'assortment_commitment_confirmations_attempt_module_ck',
+      sql`${table.attemptModuleId} = btrim(${table.attemptModuleId}) and length(${table.attemptModuleId}) between 1 and 200`,
+    ),
+    check(
+      'assortment_commitment_confirmations_attempt_id_ck',
+      sql`${table.attemptResourceId} = btrim(${table.attemptResourceId}) and length(${table.attemptResourceId}) between 1 and 200`,
+    ),
+    check(
+      'assortment_commitment_confirmations_attempt_type_ck',
+      sql`${table.attemptResourceType} = btrim(${table.attemptResourceType}) and length(${table.attemptResourceType}) between 1 and 200`,
+    ),
+    check(
+      'assortment_commitment_confirmations_fingerprint_ck',
+      sql`${table.constituentFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'assortment_commitment_confirmations_validity_ck',
+      sql`${table.expiresAt} > ${table.issuedAt} and ${table.expiresAt} <= ${table.issuedAt} + interval '30 seconds'`,
+    ),
+    ...scopedPolicies('assortment_commitment_confirmations_scope', table),
+  ],
+);
+
 const databaseSchema = {
   admissionSetEntries,
   admissionSets,
@@ -444,6 +502,7 @@ const databaseSchema = {
   closedBoundaries,
   closedBoundaryEndFacts,
   collectionRevisions,
+  commitmentConfirmations,
   decisionEvidence,
   ruleRetirementFacts,
   ruleRevisions,
@@ -462,6 +521,7 @@ export const ASSORTMENT_TABLES = [
   admissionSetEntries,
   collectionRevisions,
   decisionEvidence,
+  commitmentConfirmations,
 ] as const;
 
 export const assortmentRelations = defineRelations(databaseSchema);

@@ -37,6 +37,7 @@ import { createRuleRevisionActionApiLive } from './create-rule-revision-action-s
 import { decisionExplanationReadApiLive } from './decision-explanation-read-server.ts';
 import { endApplicabilityBindingActionApiLive } from './end-applicability-binding-action-server.ts';
 import { endClosedAssortmentBoundaryActionApiLive } from './end-closed-assortment-boundary-action-server.ts';
+import { issueAssortmentCommitmentConfirmationActionApiLive } from './issue-assortment-commitment-confirmation-action-server.ts';
 import { purchaseReadApiLive } from './purchase-read-server.ts';
 import { replaceApplicabilityBindingActionApiLive } from './replace-applicability-binding-action-server.ts';
 import { replaceClosedAssortmentBoundaryActionApiLive } from './replace-closed-assortment-boundary-action-server.ts';
@@ -139,6 +140,7 @@ export const makeAssortmentApiRuntime = (...args: AssortmentApiRuntimeArguments)
     decisionExplanationReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     endApplicabilityBindingActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     endClosedAssortmentBoundaryActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
+    issueAssortmentCommitmentConfirmationActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     purchaseReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     replaceApplicabilityBindingActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     replaceClosedAssortmentBoundaryActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),

@@ -197,8 +197,6 @@ export const checkAssortmentSearchProjectionInclusion = Effect.fn('AssortmentSea
   },
 );
 
-export const decideAssortmentDiscoveryInclusion = checkAssortmentSearchProjectionInclusion;
-
 /**
  * Search inclusion is never detail authority. Protected Product detail gets a
  * fresh authoritative VISIBILITY evaluation through the owner port; every
