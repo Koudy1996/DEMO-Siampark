@@ -86,12 +86,11 @@ Record. It is distinct from the Selling Legal Entity identity and from Official 
 _Avoid_: DIČ as registration proof, Legal Entity existence as VAT-registration state.
 
 **Tax-Relevant Time** — Tax-owned business time used to select the legally/business-relevant Tax Rule
-meaning for an exact Tax Decision. For the supported Launch Order use, Accepted Tax Terms are bound to
-the actual Order acceptance instant, but that product boundary is not automatically the statutory
-DUZP or another VAT tax point. Trusted operation/evaluation time remains a separate Currentness
-meaning.
-_Avoid_: client clock as Tax-Relevant Time, Pricing Quotation time as VAT tax point, treating Order
-acceptance as statutory DUZP by definition.
+meaning for an exact Tax Decision. For the supported Launch Order use, it is the Commerce-owned
+Order Commitment Time captured once for the exact frozen purchase; if commitment succeeds, Accepted
+Tax Terms preserve that same instant. It is not automatically statutory DUZP or another VAT tax point.
+_Avoid_: client/browser click time as authority, database commit time substituted after the fact,
+Pricing Quotation time as VAT tax point, treating Order commitment as statutory DUZP by definition.
 
 **Tax Evaluation Time** — Trusted operation time at which one Tax evaluation resolves Current material
 facts and evidence. It is provenance/currentness time, not the business instant that selects the
@@ -117,16 +116,6 @@ multi-supply Set monetary decomposition remain unsupported.
 _Avoid_: Pricing Line as statutory supply identity, rate bucket as canonical Tax identity, merging
 equal occurrences, invented component prices.
 
-**Tax Commitment Confirmation** — Tax-owned immutable attempt-bound guarantee that the material Tax
-business meaning of one exact prospective Tax Decision/Tax Result remains equivalent for one exact
-Order Commitment Attempt and unchanged Order Acceptance Decision Bundle throughout a declared bounded
-validity interval. It belongs to the Order Commitment Proof Set rather than the Bundle; the prospective
-Decision's Tax-Relevant Time does not become the later Order acceptance instant merely because the
-Confirmation remains valid.
-_Avoid_: retained Tax Result as commitment proof, Confirmation inside Bundle hash, Pricing 30-second
-TTL as implicit Tax law or Tax policy, treating confirmation validity as identity of two different
-Tax-Relevant Times.
-
 ## Monetary boundaries
 
 **Tax Rounding** — Tax-owned rounding meaning for tax amounts, separate from Pricing's final line
@@ -151,14 +140,12 @@ Price mode.
 
 ## Accepted history
 
-**Accepted Tax Terms** — Immutable accepted-time Tax meaning for one exact historical handoff,
-including exact Taxable Supply Unit mapping, the actual handoff Tax-Relevant Time, Tax Rounding
-policy/revision, amounts, and safe source/rule evidence. For an Accepted Order they preserve lineage
-to the prospective Tax Decision/Tax Result and exact Tax Commitment Confirmation that proved equivalent
-Tax business meaning through the actual Order acceptance instant; they do not pretend that an earlier
-prospective Decision used the later acceptance instant. They are historical lineage for later Billing
-or correction work, not a universal substitute for a later event's own legally relevant Tax
-determination; each owner retains its own immutable Snapshot and Current rules never rewrite history.
+**Accepted Tax Terms** — Immutable Tax meaning actually used by one successful historical handoff,
+including exact Taxable Supply Unit mapping, the Order Commitment Time used as Tax-Relevant Time, Tax
+Rounding policy/revision, amounts, and safe source/rule evidence. For an Accepted Order they preserve
+lineage to the exact commitment-time Tax Decision/Tax Result already contained in its final purchase
+meaning; later Current changes never recompute that Order, while a later Billing/correction event may
+require its own purpose-specific Tax determination.
 _Legal_: for later supply timing see [ZDPH § 20a](https://www.zakonyprolidi.cz/cs/2004-235#p20a),
 [§ 21](https://www.zakonyprolidi.cz/cs/2004-235#p21), and rate timing in
 [§ 47 odst. 2](https://www.zakonyprolidi.cz/cs/2004-235#p47); for supported corrections see
@@ -203,6 +190,6 @@ domains.
   Supported correction lineage is anchored by
   [§ 42](https://www.zakonyprolidi.cz/cs/2004-235#p42) and corrective-document data by
   [§ 45](https://www.zakonyprolidi.cz/cs/2004-235#p45).
-- **Tax Decision**, **Tax Evidence** and **Tax Commitment Confirmation** are OntOS domain terms without
-  a one-to-one statutory synonym. Their statutory substance is explained by the referenced
-  applicability, supply, basis, calculation, rate and timing provisions above.
+- **Tax Decision** and **Tax Evidence** are OntOS domain terms without a one-to-one statutory synonym.
+  Their statutory substance is explained by the referenced applicability, supply, basis, calculation,
+  rate and timing provisions above.
