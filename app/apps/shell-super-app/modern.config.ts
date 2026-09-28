@@ -184,6 +184,11 @@ export default defineConfig(
           security: createCloudflareWorkerSecurity(),
           services: [
             {
+              binding: getOptionalBuildConfig('VERTICAL_ASSORTMENT_WORKER_BINDING') ?? 'VERTICAL_ASSORTMENT_WORKER',
+              prefix: '/assortment-api',
+              service: getOptionalBuildConfig('VERTICAL_ASSORTMENT_WORKER_NAME') ?? 'app-assortment',
+            },
+            {
               binding: getOptionalBuildConfig('VERTICAL_CATALOG_WORKER_BINDING') ?? 'VERTICAL_CATALOG_WORKER',
               prefix: '/catalog-api',
               service: getOptionalBuildConfig('VERTICAL_CATALOG_WORKER_NAME') ?? 'app-catalog',
