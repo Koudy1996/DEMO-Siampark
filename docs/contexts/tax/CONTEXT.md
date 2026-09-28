@@ -12,17 +12,24 @@ Order and Billing Documents Snapshots without owning Pricing, shared Party ident
 Order, or Billing Document lifecycle.
 _Avoid_: Pricing-owned tax calculation, Core tax policy, Tax as invoice owner.
 
-**Tax Decision** — Tax-owned Current determination of tax applicability, jurisdiction, rate or
-exemption, and taxable-basis interpretation for exact inputs in a trusted Commerce Purchasing
-Context at the trusted operation time. It is distinct from an Official Identifier, a retained
-previous evaluation, or a Pricing Decision.
-_Avoid_: VAT identifier as tax decision, B2B Channel as tax treatment, Pricing Quotation as tax guarantee.
+**Tax Decision** — Tax-owned Current purchase-scoped determination of tax applicability,
+jurisdiction, treatment, rate or exemption, and taxable-basis interpretation for exact inputs in a
+trusted Commerce Purchasing Context at the trusted operation time. One successful purchase Tax
+Decision preserves the exact set of Taxable Supply Units and their unit-specific Tax meanings; equal
+values or rates never merge their identities. It is distinct from an Official Identifier, a retained
+previous evaluation, a Pricing Decision, or a commitment-validity proof.
+_Avoid_: VAT identifier as tax decision, B2B Channel as tax treatment, Pricing Quotation as tax guarantee,
+rate-only decision without exact subject/context, one independent Tax Decision per UI/Pricing line by default.
 
-**Tax Result** — Tax-owned tax amounts and their decomposition for the exact inputs and
-interpretation used by a Tax Decision. Its Pricing inputs are the authoritative published rounded
-Line Commercial Values and required breakdown/evidence, not an alternative reconstruction of the
-Pricing total.
-_Avoid_: Pricing Result including tax, tax revision alone as monetary result, frontend-computed tax.
+**Tax Result** — Tax-owned purchase-scoped tax amounts and decomposition for the exact inputs and
+interpretation used by one successful Tax Decision. It preserves one authoritative published Tax
+amount per exact Taxable Supply Unit under Tax Rounding and one purchase Tax total equal to the exact
+sum of those published unit amounts; it does not perform a second purchase-level rounding. Its
+Pricing inputs are the authoritative published rounded Line Commercial Values and required
+breakdown/evidence, not an alternative reconstruction of the Pricing total. A non-success Tax outcome
+does not fabricate a Tax Result.
+_Avoid_: Pricing Result including tax, rate-bucket identity replacing Taxable Supply Units,
+purchase-level re-rounding, tax revision alone as monetary result, frontend-computed tax.
 
 **Taxable Basis** — Monetary basis to which an applicable tax calculation relates, determined by
 Tax from authoritative owner-issued commercial amounts and the relevant breakdown. It is not a
