@@ -26,6 +26,8 @@ import { VisibilityApi } from './apis/visibility.ts';
 
 export const assortmentMarkerSchema = Schema.Struct({
   ...MicroVerticalBuildMarkerSchema.fields,
+  kind: Schema.Literal('microvertical-delivery-unit'),
+  schemaVersion: Schema.Literal(1),
 });
 
 export type AssortmentMarker = typeof assortmentMarkerSchema.Type;

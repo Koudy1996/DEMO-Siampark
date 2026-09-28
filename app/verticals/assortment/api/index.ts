@@ -19,9 +19,9 @@ import {
 import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import { Effect, HttpApiBuilder, Layer } from '@modern-js/bff-effect/effect-edge';
 import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
-import { Layer as GovernedReadLayer, Logger, References, Tracer } from 'effect';
+import { Layer as GovernedReadLayer, Logger, References, Result, Schema, Tracer } from 'effect';
 
-import { assortmentApi, assortmentOperationContexts } from '../shared/api.ts';
+import { assortmentApi, assortmentMarkerSchema, assortmentOperationContexts } from '../shared/api.ts';
 import type { OperationContext } from '../shared/api.ts';
 import { ultramodernApiMarker } from '../shared/ultramodern-build.ts';
 // <generated-governed-http-handler-support-imports>
@@ -58,6 +58,8 @@ const operationAttributes = (operationContext: OperationContext) => {
     : { ...attributes, 'modernjs.trace.id': operationContext.traceId };
 };
 
+const assortmentApiMarker = Result.getOrThrow(Schema.decodeUnknownResult(assortmentMarkerSchema)(ultramodernApiMarker));
+
 const assortmentReadinessLayer = HttpApiBuilder.group(assortmentApi, 'foundation', (handlers) =>
   handlers.handle('readiness', () =>
     Effect.succeed({
@@ -67,7 +69,7 @@ const assortmentReadinessLayer = HttpApiBuilder.group(assortmentApi, 'foundation
         ssr: 'ready' as const,
         translations: 'ready' as const,
       },
-      marker: ultramodernApiMarker,
+      marker: assortmentApiMarker,
       status: 'ready' as const,
       versionSkew: 'none' as const,
     }).pipe(
