@@ -148,6 +148,7 @@
       ],
       "entry": [
         "src/index.{ts,tsx,js}",
+        "src/entry.tsx",
         "api/index.ts",
         "vertical.registration.ts",
         "src/federation-entry.tsx",

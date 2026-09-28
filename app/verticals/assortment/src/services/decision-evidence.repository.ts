@@ -1,5 +1,5 @@
 import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
-import { DateTime, Effect, Option, Result, Schema } from 'effect';
+import { Context, DateTime, Effect, Option, Result, Schema } from 'effect';
 import { and, eq } from 'drizzle-orm';
 import {
   AssortmentDecisionEvidenceSchema,
@@ -67,6 +67,11 @@ export interface AssortmentDecisionEvidencePersistencePort {
     record: AssortmentDecisionEvidenceInsert,
   ) => Effect.Effect<Option.Option<string>, AssortmentOwnerFailure>;
 }
+
+export class AssortmentDecisionEvidencePersistence extends Context.Service<
+  AssortmentDecisionEvidencePersistence,
+  AssortmentDecisionEvidencePersistencePort
+>()('@app/assortment/services/decision-evidence.repository/AssortmentDecisionEvidencePersistence') {}
 
 const ownerModuleId = Result.getOrThrow(Schema.decodeResult(AssortmentOwnerModuleIdSchema)(MODULE_ID));
 
@@ -248,7 +253,11 @@ export const assortmentDecisionEvidenceRepositoryFromPort = (
 export const assortmentDecisionEvidenceRepositoryForScope = (
   transaction: ScopedTransactionExecutor,
   scope: OperationalScope,
-) => assortmentDecisionEvidenceRepositoryFromPort(persistencePortForTransaction(transaction), scope);
+) =>
+  assortmentDecisionEvidenceRepositoryFromPort(
+    AssortmentDecisionEvidencePersistence.of(persistencePortForTransaction(transaction)),
+    scope,
+  );
 
 export const assortmentDecisionEvaluationForScope = (transaction: ScopedTransactionExecutor, scope: OperationalScope) =>
   makeAssortmentDecisionEvaluation({

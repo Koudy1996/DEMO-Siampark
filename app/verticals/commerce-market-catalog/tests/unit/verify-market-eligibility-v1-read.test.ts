@@ -1,7 +1,7 @@
 import type { OperationalScope } from '@app/core-runtime';
 import { TrustedPrincipalContextSchema } from '@app/core-runtime';
 import { OwnerVerifiableSetCompletenessEvidenceSchema } from '@app/shared-contracts';
-import { Effect, Schema } from 'effect';
+import { Effect, Option, Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 
 import { EligibleMarketTuplesRequestSchema } from '../../shared/apis/eligible-market-tuples.ts';
@@ -155,11 +155,13 @@ const run = (
 describe('verify market eligibility owner read', () => {
   it('accepts only the eligible-tuples predicate being verified', () => {
     expect(
-      Schema.is(VerifyMarketEligibilityV1RequestSchema)({
-        observedProof: proof(at),
-        originalRequest: { ...request(), explicitSelection: { marketRef: eligibleTuple.marketRef } },
-      }),
-    ).toBe(false);
+      Option.isNone(
+        Schema.decodeUnknownOption(VerifyMarketEligibilityV1RequestSchema, { onExcessProperty: 'error' })({
+          observedProof: proof(at),
+          originalRequest: { ...request(), explicitSelection: { marketRef: eligibleTuple.marketRef } },
+        }),
+      ),
+    ).toBe(true);
   });
 
   it.effect('verifies a complete empty set as CURRENT', () =>

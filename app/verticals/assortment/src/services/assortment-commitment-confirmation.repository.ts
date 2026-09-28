@@ -1,6 +1,6 @@
 import type { OperationalScope, ReadServiceFactory } from '@app/core-runtime';
 import { and, eq } from 'drizzle-orm';
-import { DateTime, Effect, Schema } from 'effect';
+import { Context, DateTime, Effect, Schema } from 'effect';
 import { assortmentMeaningFingerprint } from './policy-administration.service.ts';
 import {
   AssortmentCandidateSchema,
@@ -113,6 +113,13 @@ export interface AssortmentCommitmentConfirmationPersistencePort {
     record: CommitmentConfirmationInsert,
   ) => Effect.Effect<boolean, InstanceType<typeof AssortmentCommitmentConfirmationUnavailable>>;
 }
+
+export class AssortmentCommitmentConfirmationPersistence extends Context.Service<
+  AssortmentCommitmentConfirmationPersistence,
+  AssortmentCommitmentConfirmationPersistencePort
+>()(
+  '@app/assortment/services/assortment-commitment-confirmation.repository/AssortmentCommitmentConfirmationPersistence',
+) {}
 
 const decodeConfirmationRow = Effect.fn('AssortmentCommitmentConfirmationRepository.decodeConfirmationRow')(
   function* decodeStoredConfirmation(row: ConfirmationRow) {
@@ -289,4 +296,7 @@ export const assortmentCommitmentConfirmationRepositoryForScope = (
   transaction: ScopedTransaction,
   scope: OperationalScope,
 ): AssortmentCommitmentConfirmationRepository =>
-  assortmentCommitmentConfirmationRepositoryFromPort(persistencePortForTransaction(transaction), scope);
+  assortmentCommitmentConfirmationRepositoryFromPort(
+    AssortmentCommitmentConfirmationPersistence.of(persistencePortForTransaction(transaction)),
+    scope,
+  );

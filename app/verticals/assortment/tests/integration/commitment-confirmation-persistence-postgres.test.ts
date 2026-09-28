@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
 import { and, eq, sql } from 'drizzle-orm';
-import { Effect, Exit, Schema } from 'effect';
+import { Effect, Exit, Result, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
@@ -259,7 +259,7 @@ it.live('persists immutable confirmations with replay, RLS isolation, and append
           assortmentDecisionEvidenceRepositoryForScope(transaction, wrongScope).resolve(evidenceReference.evidenceRef),
         ),
       );
-      expect(wrongScopeEvidence._tag).toBe('Failure');
+      expect(Result.isFailure(wrongScopeEvidence)).toBe(true);
 
       const replayed = yield* runRepositoryScoped(runtime, scope, (transaction) =>
         assortmentCommitmentConfirmationRepositoryForScope(transaction, scope).persist(
