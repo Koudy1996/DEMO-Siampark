@@ -34,6 +34,32 @@ and an explicit use. Evidence about an Invoice Recipient is not by itself the Ta
 purchase, and retaining evidence does not by itself prove Current validity.
 _Avoid_: recipient validation as complete purchase tax, a timestamp or revision label as owner proof.
 
+
+
+**Tax-Relevant Time** — Tax-owned business time used to select the legally/business-relevant Tax Rule
+meaning for an exact Tax Decision. For the supported Launch Order use, Accepted Tax Terms are bound to
+the actual Order acceptance instant, but that product boundary is not automatically the statutory
+DUZP or another VAT tax point. Trusted operation/evaluation time remains a separate Currentness
+meaning.
+_Avoid_: client clock as Tax-Relevant Time, Pricing Quotation time as VAT tax point, treating Order
+acceptance as statutory DUZP by definition.
+
+**Taxable Supply Unit** — Tax-owned legal/business interpretation of one exact taxable-supply meaning
+inside a supported purchase. It is traceable to the relevant Purchase Demand Occurrence(s), Catalog
+evidence and owner-issued monetary inputs, but it is not identical by definition to a Pricing Line,
+Cart line, Order line or Catalog component. For Launch, an ordinary non-Set occurrence maps to one
+Taxable Supply Unit; a supported whole-treatment Set maps to one unit; cases requiring generic
+multi-supply Set monetary decomposition remain unsupported.
+_Avoid_: Pricing Line as statutory supply identity, rate bucket as canonical Tax identity, merging
+equal occurrences, invented component prices.
+
+**Tax Commitment Confirmation** — Tax-owned immutable attempt-bound guarantee that one exact Tax
+Decision/Tax Result meaning remains usable for one exact Order Commitment Attempt and unchanged Order
+Acceptance Decision Bundle through its declared bounded validity. It belongs to the Order Commitment
+Proof Set rather than the Bundle and has no universal fixed TTL copied from Pricing.
+_Avoid_: retained Tax Result as commitment proof, Confirmation inside Bundle hash, Pricing 30-second
+TTL as implicit Tax law or Tax policy.
+
 ## Monetary boundaries
 
 **Tax Rounding** — Tax-owned rounding meaning for tax amounts, separate from Pricing's final line
@@ -54,3 +80,34 @@ Price mode.
 or Billing Document and retained in its Snapshot. These historical values are not a fresh Tax
 Decision and are not silently rewritten by changes to Current rules or source facts.
 _Avoid_: recomputing historical tax from today's rules, treating a prospective Tax Result as Accepted.
+
+
+## Czech legal reference index — Launch
+
+These references map OntOS Tax terms to the current Czech VAT-law concepts they rely on. They do not
+turn OntOS product terms into statutory terminology, and they do not transfer ownership between
+domains.
+
+- **Taxable Supply Unit** — OntOS term mapped to the statutory concept of a `zdanitelné plnění`:
+  [ZDPH § 2 odst. 2](https://www.zakonyprolidi.cz/cs/2004-235#p2), with supply meanings further
+  defined for goods/services in [§ 13](https://www.zakonyprolidi.cz/cs/2004-235#p13) and
+  [§ 14](https://www.zakonyprolidi.cz/cs/2004-235#p14). Basis/calculation/rate consequences are
+  governed by [§ 36](https://www.zakonyprolidi.cz/cs/2004-235#p36),
+  [§ 37](https://www.zakonyprolidi.cz/cs/2004-235#p37) and
+  [§ 47](https://www.zakonyprolidi.cz/cs/2004-235#p47).
+- **Taxable Basis** — statutory anchor:
+  [ZDPH § 36](https://www.zakonyprolidi.cz/cs/2004-235#p36).
+- **Tax Result** — monetary calculation anchor:
+  [ZDPH § 37](https://www.zakonyprolidi.cz/cs/2004-235#p37); applicable rate meaning:
+  [§ 47](https://www.zakonyprolidi.cz/cs/2004-235#p47).
+- **Tax-Relevant Time** — OntOS product term. Statutory VAT timing remains a separate legal meaning;
+  see [ZDPH § 21](https://www.zakonyprolidi.cz/cs/2004-235#p21) and rate timing in
+  [§ 47 odst. 2](https://www.zakonyprolidi.cz/cs/2004-235#p47). Order acceptance is not declared by
+  OntOS to be statutory DUZP merely because it is the Launch order-side Tax-Relevant Time.
+- **Tax Rounding** — statutory calculation/basis anchors:
+  [ZDPH § 36](https://www.zakonyprolidi.cz/cs/2004-235#p36) and
+  [§ 37](https://www.zakonyprolidi.cz/cs/2004-235#p37). Supporting administrative guidance:
+  [Finanční správa — Výpočet DPH a zaokrouhlování od 1. 10. 2019](https://financnisprava.gov.cz/cs/financni-sprava/novinky/novinky-2019/vypocet-dph-a-zaokrouhlovani-od-1-10-2019).
+- **Tax Decision**, **Tax Evidence**, **Tax Commitment Confirmation** and **Accepted Tax Terms** are
+  OntOS domain terms without a one-to-one statutory synonym. Their statutory substance is explained
+  by the referenced applicability, supply, basis, calculation, rate and timing provisions above.
