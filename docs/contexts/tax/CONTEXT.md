@@ -63,9 +63,17 @@ TTL as implicit Tax law or Tax policy.
 ## Monetary boundaries
 
 **Tax Rounding** — Tax-owned rounding meaning for tax amounts, separate from Pricing's final line
-rounding and Pricing Line Rounding Adjustment. It does not replace published Pricing line amounts
-or reconstruct an alternative Pricing total from high-precision intermediates.
-_Avoid_: reusing Pricing rounding as an implicit Tax policy, frontend balancing pennies.
+rounding and Pricing Line Rounding Adjustment. For Launch CZ, TAX calculates the exact tax contribution
+for each Taxable Supply Unit, then publishes that unit's Tax amount at `0.01 CZK` using
+`ROUND_HALF_UP`; the purchase Tax total is the exact sum of those published unit Tax amounts and is
+not rounded again. The exact pre-round contribution and resulting rounding difference remain
+explainable as Tax Evidence. This Launch policy is an OntOS product decision, not a claim that Czech
+VAT law universally mandates `ROUND_HALF_UP per line`.
+_Legal_: [ZDPH § 36](https://www.zakonyprolidi.cz/cs/2004-235#p36),
+[§ 37](https://www.zakonyprolidi.cz/cs/2004-235#p37), and
+[Finanční správa — Výpočet DPH a zaokrouhlování od 1. 10. 2019](https://financnisprava.gov.cz/cs/financni-sprava/novinky/novinky-2019/vypocet-dph-a-zaokrouhlovani-od-1-10-2019).
+_Avoid_: reusing Pricing rounding as an implicit Tax policy, rate-group or purchase-level re-rounding,
+frontend balancing pennies, assigning an arbitrary balancing haler to another Taxable Supply Unit.
 
 **Pre-Tax Source Normalization** — Authoritative normalization of a tax-inclusive source assertion
 into canonical pre-Tax commercial input, preserving its original tax meaning and normalization
