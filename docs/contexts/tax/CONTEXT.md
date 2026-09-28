@@ -41,7 +41,26 @@ and an explicit use. Evidence about an Invoice Recipient is not by itself the Ta
 purchase, and retaining evidence does not by itself prove Current validity.
 _Avoid_: recipient validation as complete purchase tax, a timestamp or revision label as owner proof.
 
+**Tax Classification** — Tax-owned interpretation of one exact Catalog Selection for a declared Tax
+use, derived from the minimum complete set of authoritative Catalog evidence that can change that Tax
+meaning. It is not a manually maintained Product/SKU tax flag and does not transfer Catalog ownership
+into Tax.
+_Avoid_: Product-level VAT field as universal classification, SKU/display name as Tax authority,
+generic staff CRUD over Tax Classification.
 
+**Tax Rule** — Tax-owned stable business rule identity whose immutable revisions carry the explicit
+Tax treatment/rate or other governing meaning for an Effective Period. Applicable revision is chosen
+from complete authoritative rule state and Tax-Relevant Time; historical revisions remain
+addressable and are never overwritten by later Current meaning.
+_Avoid_: mutable currentRate, newest/first row as rule selection, in-place correction of a historical
+revision.
+
+**Tax Fact Authority Contract** — Tax-owned governance fact declaring, for one exact Tax fact family
+and explicit scope/use, which System of Record may decide the fact and which sources may provide
+supporting evidence. It governs authority/evidence roles; it does not itself set the source fact's
+business value and is distinct from an Integration Route or provider credential.
+_Avoid_: ERP/VIES/ARES as global Tax authority, authority inferred from transport route, manual
+override of a source-owned fact through the authority contract.
 
 **Tax-Relevant Time** — Tax-owned business time used to select the legally/business-relevant Tax Rule
 meaning for an exact Tax Decision. For the supported Launch Order use, Accepted Tax Terms are bound to
