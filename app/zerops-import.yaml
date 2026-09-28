@@ -23,6 +23,9 @@ services:
   - hostname: catalog
     type: nodejs@24
     enableSubdomainAccess: true
+  - hostname: assortment
+    type: nodejs@24
+    enableSubdomainAccess: true
   - hostname: pricing
     type: nodejs@24
     enableSubdomainAccess: true

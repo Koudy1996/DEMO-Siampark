@@ -73,9 +73,15 @@ export const decisionSetProofResourceId = Effect.fn('DecisionSetProof.decisionSe
   },
 );
 
-/** Read and lock the owner fence under the Core-installed tenant scope. */
-export const readDecisionSetFenceToken = (transaction: ScopedTransactionExecutor) =>
-  transaction.invoke(lockDecisionSetFence, []).pipe(
+type DecisionSetFenceQueryFailure = InstanceType<typeof AssortmentPolicyPersistenceUnavailable>;
+type DecisionSetFenceQuery = () => Effect.Effect<
+  readonly Readonly<{ readonly generation: string }>[],
+  DecisionSetFenceQueryFailure
+>;
+
+/** Validate the result of the owner-scoped fence query. */
+export const readDecisionSetFenceTokenFromQuery = (readFence: DecisionSetFenceQuery) =>
+  readFence().pipe(
     Effect.flatMap((rows) => {
       const generation = rows[0]?.generation;
       return generation === undefined
@@ -87,12 +93,19 @@ export const readDecisionSetFenceToken = (transaction: ScopedTransactionExecutor
           )
         : Effect.succeed(generation);
     }),
-    Effect.mapError((cause) => {
-      const failure = new AssortmentPolicyPersistenceUnavailable({
-        code: 'assortment_policy_persistence_unavailable',
-        reason: 'Assortment decision-set proof is temporarily unavailable',
-      });
-      Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
-      return failure;
-    }),
+  );
+
+/** Read and lock the owner fence under the Core-installed tenant scope. */
+export const readDecisionSetFenceToken = (transaction: ScopedTransactionExecutor) =>
+  readDecisionSetFenceTokenFromQuery(() =>
+    transaction.invoke(lockDecisionSetFence, []).pipe(
+      Effect.mapError((cause) => {
+        const failure = new AssortmentPolicyPersistenceUnavailable({
+          code: 'assortment_policy_persistence_unavailable',
+          reason: 'Assortment decision-set proof is temporarily unavailable',
+        });
+        Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
+        return failure;
+      }),
+    ),
   );

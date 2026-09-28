@@ -93,104 +93,123 @@ const omit = (
   return Schema.decodeUnknownSync(AssortmentDiscoveryInclusionDecisionSchema)(input);
 };
 
-const run = (value: ReturnType<typeof context>, decisions: readonly AssortmentDiscoveryInclusionDecision[]) =>
-  // oxlint-disable-next-line effect-native/no-effect-run-in-tests
-  Effect.runSync(accumulateAssortmentDiscoveryDecisions({ context: value, decisions }));
+const evaluate = (value: ReturnType<typeof context>, decisions: readonly AssortmentDiscoveryInclusionDecision[]) =>
+  accumulateAssortmentDiscoveryDecisions({ context: value, decisions });
 
-it('accumulates A/B/D safely, omits C, deduplicates, and is independent of input order', () => {
-  const value = context();
-  const firstOrder = run(value, [
-    include(productRef('product-b'), value),
-    omit(productRef('product-c'), value),
-    include(productRef('product-a'), value),
-    include(productRef('product-d'), value),
-    include(productRef('product-a'), value),
-  ]);
-  const reverseOrder = run(value, [
-    include(productRef('product-d'), value),
-    include(productRef('product-a'), value),
-    omit(productRef('product-c'), value),
-    include(productRef('product-b'), value),
-  ]);
+it.effect('accumulates A/B/D safely, omits C, deduplicates, and is independent of input order', () =>
+  Effect.gen(function* accumulatesInStableOrder() {
+    const value = context();
+    const firstOrder = yield* evaluate(value, [
+      include(productRef('product-b'), value),
+      omit(productRef('product-c'), value),
+      include(productRef('product-a'), value),
+      include(productRef('product-d'), value),
+      include(productRef('product-a'), value),
+    ]);
+    const reverseOrder = yield* evaluate(value, [
+      include(productRef('product-d'), value),
+      include(productRef('product-a'), value),
+      omit(productRef('product-c'), value),
+      include(productRef('product-b'), value),
+    ]);
 
-  expect(firstOrder?.knownOmission).toBe(true);
-  expect(firstOrder?.includedProductRefs).toEqual([
-    productRef('product-a'),
-    productRef('product-b'),
-    productRef('product-d'),
-  ]);
-  expect(reverseOrder?.includedProductRefs).toEqual(firstOrder?.includedProductRefs);
-});
+    expect(firstOrder?.knownOmission).toBe(true);
+    expect(firstOrder?.includedProductRefs).toEqual([
+      productRef('product-a'),
+      productRef('product-b'),
+      productRef('product-d'),
+    ]);
+    expect(reverseOrder?.includedProductRefs).toEqual(firstOrder?.includedProductRefs);
+  }),
+);
 
-it('returns an empty Partial for known omission and no Partial for all safe inclusions', () => {
-  const value = context();
-  const empty = run(value, [omit(productRef('product-c'), value)]);
-  expect(empty).toMatchObject({ includedProductRefs: [], knownOmission: true });
+it.effect('returns an empty Partial for known omission and no Partial for all safe inclusions', () =>
+  Effect.gen(function* handlesEmptyAndCompleteResults() {
+    const value = context();
+    const empty = yield* evaluate(value, [omit(productRef('product-c'), value)]);
+    expect(empty).toMatchObject({ includedProductRefs: [], knownOmission: true });
 
-  const noPartial = run(value, [include(productRef('product-a'), value), include(productRef('product-b'), value)]);
-  expect(noPartial).toBeUndefined();
-});
+    const noPartial = yield* evaluate(value, [
+      include(productRef('product-a'), value),
+      include(productRef('product-b'), value),
+    ]);
+    expect(noPartial).toBeUndefined();
+  }),
+);
 
-it('treats invalidated and unverifiable slices as omission without fabricating evidence', () => {
-  const value = context();
-  const invalidated = run(value, [omit(productRef('product-c'), value, true)]);
-  const unverifiable = run(value, [omit(productRef('product-c'), value)]);
+it.effect('treats invalidated and unverifiable slices as omission without fabricating evidence', () =>
+  Effect.gen(function* omitsInvalidatedEvidence() {
+    const value = context();
+    const invalidated = yield* evaluate(value, [omit(productRef('product-c'), value, true)]);
+    const unverifiable = yield* evaluate(value, [omit(productRef('product-c'), value)]);
 
-  expect(invalidated).toMatchObject({ includedProductRefs: [], knownOmission: true });
-  expect(unverifiable).toMatchObject({ includedProductRefs: [], knownOmission: true });
-  if (invalidated !== undefined) {
-    expect('proof' in invalidated).toBe(false);
-  }
-});
+    expect(invalidated).toMatchObject({ includedProductRefs: [], knownOmission: true });
+    expect(unverifiable).toMatchObject({ includedProductRefs: [], knownOmission: true });
+    if (invalidated !== undefined) {
+      expect('proof' in invalidated).toBe(false);
+    }
+  }),
+);
 
-it('rejects wrong request contexts and cross-tenant Product slices before accumulation', () => {
-  const expected = context();
-  const wrongSubject = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureContextSchema)({
-    ...encodedContext(expected),
-    subject: {
-      kind: 'IDENTIFIED',
+it.effect('rejects wrong request contexts and cross-tenant Product slices before accumulation', () =>
+  Effect.gen(function* rejectsContextMismatches() {
+    const expected = context();
+    const wrongSubject = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureContextSchema)({
+      ...encodedContext(expected),
       subject: {
-        kind: 'RETAIL_CUSTOMER_PROFILE',
-        profileRef: ref('commerce.customer-context', 'commerce.customer-context.retail-customer-profile', 'profile-2'),
+        kind: 'IDENTIFIED',
+        subject: {
+          kind: 'RETAIL_CUSTOMER_PROFILE',
+          profileRef: ref(
+            'commerce.customer-context',
+            'commerce.customer-context.retail-customer-profile',
+            'profile-2',
+          ),
+        },
       },
-    },
-  });
-  expect(() => run(expected, [omit(productRef('product-a'), wrongSubject)])).toThrow();
-  expect(() => coverage(productRef('foreign-product', otherTenantId), expected)).toThrow();
-});
+    });
+    const contextFailure = yield* Effect.flip(evaluate(expected, [omit(productRef('product-a'), wrongSubject)]));
+    expect(contextFailure).toBeDefined();
+    expect(() => coverage(productRef('foreign-product', otherTenantId), expected)).toThrow();
+  }),
+);
 
-it('encodes only safe Product refs and cannot expose internal Partial metadata', () => {
-  const value = context();
-  const partial = run(value, [omit(productRef('product-c'), value)]);
-  if (partial === undefined) {
-    throw new Error('expected known omission');
-  }
-  const projection = encodeAssortmentSafeDiscoveryProjection(partial);
-  expect(projection).toEqual({ includedProductRefs: [] });
-  expect('knownOmission' in projection).toBe(false);
-  expect('context' in projection).toBe(false);
-  expect('omittedProductCount' in projection).toBe(false);
-  expect('omittedProductRefs' in projection).toBe(false);
-  expect('reason' in projection).toBe(false);
-  expect('proof' in projection).toBe(false);
+it.effect('encodes only safe Product refs and cannot expose internal Partial metadata', () =>
+  Effect.gen(function* encodesOnlySafeRefs() {
+    const value = context();
+    const partial = yield* evaluate(value, [omit(productRef('product-c'), value)]);
+    if (partial === undefined) {
+      throw new Error('expected known omission');
+    }
+    const projection = encodeAssortmentSafeDiscoveryProjection(partial);
+    expect(projection).toEqual({ includedProductRefs: [] });
+    expect('knownOmission' in projection).toBe(false);
+    expect('context' in projection).toBe(false);
+    expect('omittedProductCount' in projection).toBe(false);
+    expect('omittedProductRefs' in projection).toBe(false);
+    expect('reason' in projection).toBe(false);
+    expect('proof' in projection).toBe(false);
 
-  expect(() =>
-    Schema.decodeUnknownSync(AssortmentSafeDiscoveryProjectionSchema, { onExcessProperty: 'error' })({
-      includedProductRefs: [],
-      knownOmission: true,
-      omittedProductCount: 1,
-      policyPath: 'private',
-    }),
-  ).toThrow();
-  expect(() =>
-    Schema.decodeUnknownSync(AssortmentSafeDiscoveryProjectionSchema)({
-      includedProductRefs: [productRef('product-b'), productRef('product-a')],
-    }),
-  ).toThrow();
-});
+    expect(() =>
+      Schema.decodeUnknownSync(AssortmentSafeDiscoveryProjectionSchema, { onExcessProperty: 'error' })({
+        includedProductRefs: [],
+        knownOmission: true,
+        omittedProductCount: 1,
+        policyPath: 'private',
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(AssortmentSafeDiscoveryProjectionSchema)({
+        includedProductRefs: [productRef('product-b'), productRef('product-a')],
+      }),
+    ).toThrow();
+  }),
+);
 
-it('keeps the internal Partial schema valid for accumulator output', () => {
-  const value = context();
-  const partial = run(value, [omit(productRef('product-c'), value)]);
-  expect(partial === undefined ? false : Schema.is(AssortmentPartialDiscoveryResultSchema)(partial)).toBe(true);
-});
+it.effect('keeps the internal Partial schema valid for accumulator output', () =>
+  Effect.gen(function* validatesAccumulatorOutput() {
+    const value = context();
+    const partial = yield* evaluate(value, [omit(productRef('product-c'), value)]);
+    expect(partial === undefined ? false : Schema.is(AssortmentPartialDiscoveryResultSchema)(partial)).toBe(true);
+  }),
+);

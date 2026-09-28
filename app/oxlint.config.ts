@@ -246,6 +246,96 @@ export default defineConfig({
       },
     },
     {
+      // These owner persistence tests emulate the small fluent Drizzle surface accepted by
+      // the scoped transaction executor. The test doubles need an intentionally narrower type.
+      files: [
+        'verticals/assortment/tests/integration/commitment-confirmation-persistence-postgres.test.ts',
+        'verticals/assortment/tests/unit/boundary-administration-actions.test.ts',
+        'verticals/assortment/tests/unit/governed-configuration-read-persistence.test.ts',
+        'verticals/assortment/tests/unit/owner-authorization-current.test.ts',
+      ],
+      rules: {
+        'anti-slop/no-chained-type-assertions': 'off',
+        'anti-slop/require-safety-comment-for-type-assertion': 'off',
+        'typescript/no-unsafe-type-assertion': 'off',
+      },
+    },
+    {
+      // The malformed evidence fixture must reach the runtime validator with a compile-time
+      // owner type; accepting the cast is the assertion under test.
+      files: ['verticals/assortment/tests/unit/decision-evaluation.test.ts'],
+      rules: {
+        // The recursive freeze helper distinguishes nested objects from primitives.
+        'anti-slop/no-runtime-typeof': 'off',
+        'typescript/no-unsafe-type-assertion': 'off',
+      },
+    },
+    {
+      // The generated Assortment read adapters translate Effect's typed error callback into
+      // the public read error. This is an Effect combinator, not a Promise callback.
+      files: ['verticals/assortment/src/api/purchase.read.ts', 'verticals/assortment/src/api/visibility.read.ts'],
+      rules: {
+        'promise/prefer-await-to-callbacks': 'off',
+      },
+    },
+    {
+      // The published generated client owns caller-specific transport metadata and the
+      // compatibility browser runner; the caller supplies the W3C correlation header.
+      files: ['verticals/assortment/src/api/assortment-client.ts'],
+      rules: {
+        'effect-native/no-per-operation-http-api-client': 'off',
+        'effect-native/no-scattered-browser-effect-run': 'off',
+        'effect-native/no-threaded-correlation-parameter': 'off',
+      },
+    },
+    {
+      // The generated Assortment page invokes its published browser client.
+      files: ['verticals/assortment/src/routes/**/page.tsx'],
+      rules: {
+        'effect-native/no-scattered-browser-effect-run': 'off',
+      },
+    },
+    {
+      // The generated read factory injects these owner-local ports and the trusted read
+      // correlation ID. The boundary validator accepts unknown data before schema decoding.
+      files: ['verticals/assortment/shared/domain/ports/decision-evaluation.ts'],
+      rules: {
+        'anti-slop/no-unknown-parameters': 'off',
+        'effect-native/no-dependency-parameters': 'off',
+        'effect-native/no-threaded-correlation-parameter': 'off',
+        'effect-native/no-wide-factory-signature': 'off',
+        'effect-native/require-context-service-for-service-interface': 'off',
+      },
+    },
+    {
+      // These owner-local ports are supplied by scoped Action or Read runtime factories.
+      files: [
+        'verticals/assortment/src/services/boundary-administration.service.ts',
+        'verticals/assortment/src/services/decision-explanation-read.service.ts',
+        'verticals/assortment/src/services/governed-configuration-read.service.ts',
+      ],
+      rules: {
+        'effect-native/require-context-service-for-service-interface': 'off',
+      },
+    },
+    {
+      // This transaction-scoped factory composes its owner evidence source and repository.
+      files: ['verticals/assortment/src/services/decision-evidence.repository.ts'],
+      rules: {
+        'anti-slop-effect/no-service-constructor-imports': 'off',
+      },
+    },
+    {
+      // The Action factory supplies transaction-scoped evaluation and persistence ports to
+      // one issuance; these dependencies are explicit in the existing issuer contract.
+      files: ['verticals/assortment/src/services/assortment-commitment-confirmation.service.ts'],
+      rules: {
+        'effect-native/no-dependency-parameters': 'off',
+        'effect-native/no-wide-factory-signature': 'off',
+        'effect-native/require-context-service-for-service-interface': 'off',
+      },
+    },
+    {
       files: ['**/*.{js,jsx,mjs,cjs}'],
       rules: {
         'no-undef': 'error',
@@ -484,6 +574,39 @@ export default defineConfig({
         'verticals/commerce-customer-context/src/api/commerce-customer-context-client.ts',
         'verticals/payment-term-catalog/shared/api.ts',
         'verticals/payment-term-catalog/src/api/payment-term-catalog-client.ts',
+      ],
+      rules: {
+        'oxc/no-barrel-file': 'off',
+        'sonarjs/no-wildcard-import': 'off',
+      },
+    },
+    {
+      // Drizzle column declaration order is the physical Assortment schema contract.
+      files: ['verticals/assortment/src/database/schema.ts'],
+      rules: { 'perfectionist/sort-objects': 'off' },
+    },
+    {
+      // Codesmith emits these exact owner shims as re-exports of canonical public contracts.
+      // The module API boundary checker verifies their generated source and target specifier.
+      files: [
+        'verticals/commerce-customer-context/shared/apis/market-affected-use-assessment.ts',
+        'verticals/commerce-customer-context/shared/apis/market-subject-restrictions-current.ts',
+        'verticals/commerce-customer-context/shared/apis/payment-term-affected-use-assessment.ts',
+        'verticals/commerce-customer-context/src/api/market-affected-use-assessment-client.ts',
+        'verticals/commerce-customer-context/src/api/market-subject-restrictions-current-client.ts',
+        'verticals/commerce-customer-context/src/api/payment-term-affected-use-assessment-client.ts',
+        'verticals/payment-term-catalog/shared/apis/current-payment-terms.ts',
+        'verticals/payment-term-catalog/src/api/current-payment-terms-client.ts',
+        'verticals/price-group-catalog/shared/apis/price-group-definition.ts',
+        'verticals/price-group-catalog/shared/apis/validate-price-group-compatibility.ts',
+        'verticals/price-group-catalog/src/api/price-group-definition-client.ts',
+        'verticals/price-group-catalog/src/api/validate-price-group-compatibility-client.ts',
+        'verticals/pricing/shared/apis/current-supported-currencies.ts',
+        'verticals/pricing/src/api/current-supported-currencies-client.ts',
+        'verticals/storefront-registry/shared/apis/current-storefront-application.ts',
+        'verticals/storefront-registry/shared/apis/verify-current-storefront-application-v1.ts',
+        'verticals/storefront-registry/src/api/current-storefront-application-client.ts',
+        'verticals/storefront-registry/src/api/verify-current-storefront-application-v1-client.ts',
       ],
       rules: {
         'oxc/no-barrel-file': 'off',

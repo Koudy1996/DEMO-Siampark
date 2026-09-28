@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Predicate, Result, Schema } from 'effect'; // oxlint-disable-line max-classes-per-file -- The runtime service and sanitized input error form one owner-local contract; expires: 2027-09-23.
+import { Context, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 
 import {
   AssortmentDecisionSubjectSchema,
@@ -32,11 +32,13 @@ import {
   AssortmentProspectivePurchaseEvidenceSchema,
 } from '../consumer-evidence.ts';
 import type {
-  AssortmentConsumerConstituentEvidence,
   AssortmentConsumerDecisionEvidenceReference,
   AssortmentProspectivePurchaseEvidence,
 } from '../consumer-evidence.ts';
 import type { AssortmentOwnerFailure } from './owner-evidence.ts';
+import { AssortmentDecisionRequestInvalidError } from './decision-request-invalid-error.ts';
+
+export { AssortmentDecisionRequestInvalidError } from './decision-request-invalid-error.ts';
 
 const AssortmentGovernedDecisionTypeSchema = Schema.toType(AssortmentGovernedDecisionSchema);
 const AssortmentConsumerDecisionEvidenceReferenceTypeSchema = Schema.toType(
@@ -76,7 +78,6 @@ export type AssortmentPurchaseEvaluationRequest = typeof AssortmentPurchaseEvalu
 
 /** The trusted portion copied from ReadHandlerContext.scope. */
 export interface AssortmentTrustedReadScope {
-  // oxlint-disable-next-line effect-native/no-threaded-correlation-parameter -- ReadHandlerContext supplies the trusted transport correlation identity.
   readonly correlationId: string;
   readonly legalEntityId?: string;
   readonly principalId: string;
@@ -107,7 +108,6 @@ export interface AssortmentOwnedPurchaseDecision {
  * Boundary/Candidate resolvers, currentness checks, and immutable Decision
  * Evidence before returning. No external owner API is invented here.
  */
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- This owner-local source is injected by the generated read factory; expires: 2027-09-23.
 export interface AssortmentDecisionSourcePort {
   readonly resolvePurchase: (
     request: AssortmentPurchaseEvaluationRequest,
@@ -120,20 +120,11 @@ export interface AssortmentDecisionSourcePort {
 }
 
 /** Full evidence is persisted owner-locally; only these bounded references leave the module. */
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- This owner-local evidence sink is injected by the generated read factory; expires: 2027-09-23.
 export interface AssortmentDecisionEvidenceStore {
   readonly persist: (
     input: AssortmentOwnedPurchaseConstituentDecision | AssortmentOwnedVisibilityDecision,
   ) => Effect.Effect<AssortmentConsumerDecisionEvidenceReference, AssortmentOwnerFailure>;
 }
-
-export class AssortmentDecisionRequestInvalidError extends Schema.TaggedError<AssortmentDecisionRequestInvalidError>()(
-  'AssortmentDecisionRequestInvalidError',
-  {
-    code: Schema.Literal('INVALID_DECISION_REQUEST'),
-    reason: Schema.Literals(['INVALID_INPUT', 'TRUSTED_SCOPE_MISMATCH']),
-  },
-) {}
 
 export interface AssortmentPurchaseEvaluationResult {
   readonly consumerEvidence?: AssortmentProspectivePurchaseEvidence;
@@ -206,7 +197,6 @@ const validateScope = (
   return Effect.void;
 };
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Recursive boundary check accepts unknown owner output before schema validation; expires: 2027-09-23.
 const deeplyFrozen = (value: unknown, seen = new Set<object>()): boolean => {
   if (!Predicate.isObjectOrArray(value)) {
     return true;
@@ -439,9 +429,7 @@ export interface AssortmentDecisionEvaluationDependencies {
   readonly source: AssortmentDecisionSourcePort;
 }
 
-// oxlint-disable-next-line effect-native/no-wide-factory-signature -- Owner-local Boundary/Candidate and evidence-store collaborators are explicit deployment seams; expires: 2027-09-23.
 export const makeAssortmentDecisionEvaluation = (
-  // oxlint-disable-next-line effect-native/no-dependency-parameters -- This explicit owner-local seam is the dependency injection boundary used by the generated read adapters; expires: 2027-09-23.
   dependencies: AssortmentDecisionEvaluationDependencies,
 ): AssortmentDecisionEvaluationPort => ({
   evaluatePurchase: Effect.fn('AssortmentDecisionEvaluation.evaluatePurchase')(
@@ -460,41 +448,55 @@ export const makeAssortmentDecisionEvaluation = (
       if (owned.decision.outcome === 'INDETERMINATE') {
         return { decision: response };
       }
-      const references: AssortmentConsumerConstituentEvidence[] = [];
-      // oxlint-disable-next-line effect-native/no-imperative-loop-in-effect-gen -- Evidence references are persisted sequentially to retain deterministic constituent order.
-      for (const item of owned.constituents) {
-        if (item.decision.outcome === 'INDETERMINATE') {
-          return { decision: unavailable() };
-        }
-        const reference = yield* dependencies.evidenceStore
-          .persist(item)
-          .pipe(Effect.catchTag('AssortmentDependencyFailureError', () => Effect.void));
-        if (reference === undefined || !Schema.is(AssortmentConsumerDecisionEvidenceReferenceTypeSchema)(reference)) {
-          return { decision: unavailable() };
-        }
-        references.push(
-          item.decision.outcome === 'ELIGIBLE'
-            ? { constituent: item.constituent, decisionEvidence: reference, outcome: 'ELIGIBLE' }
-            : {
-                constituent: item.constituent,
-                decisionEvidence: reference,
-                outcome: 'INELIGIBLE',
-                safeReasonCode: ineligibleReason(item.decision),
-              },
-        );
+      const persistedReferences = yield* Effect.forEach(
+        owned.constituents,
+        Effect.fn('AssortmentDecisionEvaluation.persistConstituentEvidence')(
+          function* persistConstituentEvidence(item) {
+            if (item.decision.outcome === 'INDETERMINATE') {
+              return Option.none();
+            }
+            const referenceOption = yield* dependencies.evidenceStore.persist(item).pipe(
+              Effect.asSome,
+              Effect.catchTag('AssortmentDependencyFailureError', () => Effect.succeedNone),
+            );
+            if (Option.isNone(referenceOption)) {
+              return Option.none();
+            }
+            const reference = referenceOption.value;
+            if (!Schema.is(AssortmentConsumerDecisionEvidenceReferenceTypeSchema)(reference)) {
+              return Option.none();
+            }
+            return Option.some(
+              item.decision.outcome === 'ELIGIBLE'
+                ? { constituent: item.constituent, decisionEvidence: reference, outcome: 'ELIGIBLE' as const }
+                : {
+                    constituent: item.constituent,
+                    decisionEvidence: reference,
+                    outcome: 'INELIGIBLE' as const,
+                    safeReasonCode: ineligibleReason(item.decision),
+                  },
+            );
+          },
+        ),
+        { concurrency: 1 },
+      );
+      const references = Option.all(persistedReferences);
+      if (Option.isNone(references)) {
+        return { decision: unavailable() };
       }
+      const evaluatedConstituents = references.value;
       const consumerEvidence =
         owned.request.setComposition === undefined
           ? {
               composedOutcome: owned.decision.outcome,
-              evaluatedConstituents: references,
+              evaluatedConstituents,
               subject: owned.request.subject,
               topLevelConstituent: owned.request.constituent,
               trustedContext: owned.request.trustedContext,
             }
           : {
               composedOutcome: owned.decision.outcome,
-              evaluatedConstituents: references,
+              evaluatedConstituents,
               setComposition: owned.request.setComposition,
               subject: owned.request.subject,
               topLevelConstituent: owned.request.constituent,

@@ -180,8 +180,7 @@ export const AssortmentProspectivePurchaseEvidenceSchema = Schema.Struct({
     if (evidence.composedOutcome === 'ELIGIBLE' && evidence.evaluatedConstituents.length !== expected.length) {
       return 'positive Set evidence requires every pinned constituent';
     }
-    // oxlint-disable-next-line unicorn/no-useless-undefined -- Schema filter success is represented explicitly.
-    return undefined;
+    return true;
   }),
 );
 export type AssortmentProspectivePurchaseEvidence = typeof AssortmentProspectivePurchaseEvidenceSchema.Type;

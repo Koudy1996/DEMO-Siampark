@@ -1,6 +1,6 @@
-/* oxlint-disable perfectionist/sort-objects -- Drizzle declaration order is the physical schema contract; expires: 2027-03-31. */
 import { tenantLegalEntityRlsPolicies, tenantRlsPolicies } from '@app/core-runtime';
 import { defineRelations, sql } from 'drizzle-orm';
+import type { Schema } from 'effect';
 import {
   check,
   foreignKey,
@@ -472,8 +472,8 @@ export const decisionEvidence = assortmentSchema.table.withRLS(
     ...scopeColumns(),
     requestFingerprint: text('request_fingerprint').notNull(),
     outcome: text('outcome').notNull(),
-    requestJson: jsonb('request_json').notNull(),
-    decisionJson: jsonb('decision_json').notNull(),
+    requestJson: jsonb('request_json').$type<Schema.Json>().notNull(),
+    decisionJson: jsonb('decision_json').$type<Schema.Json>().notNull(),
     recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -494,11 +494,11 @@ export const commitmentConfirmations = assortmentSchema.table.withRLS(
     attemptModuleId: text('attempt_module_id').notNull(),
     attemptResourceId: text('attempt_resource_id').notNull(),
     attemptResourceType: text('attempt_resource_type').notNull(),
-    prospectiveMeaningJson: jsonb('prospective_meaning_json').notNull(),
+    prospectiveMeaningJson: jsonb('prospective_meaning_json').$type<Schema.Json>().notNull(),
     constituentFingerprint: text('constituent_fingerprint').notNull(),
-    constituentJson: jsonb('constituent_json').notNull(),
-    candidateJson: jsonb('candidate_json').notNull(),
-    decisionEvidenceJson: jsonb('decision_evidence_json').notNull(),
+    constituentJson: jsonb('constituent_json').$type<Schema.Json>().notNull(),
+    candidateJson: jsonb('candidate_json').$type<Schema.Json>().notNull(),
+    decisionEvidenceJson: jsonb('decision_evidence_json').$type<Schema.Json>().notNull(),
     issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     actionInvocationId: uuid('action_invocation_id').notNull(),

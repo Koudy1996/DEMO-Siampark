@@ -98,7 +98,6 @@ const canonicalPurchaseRequest = Schema.decodeUnknownSync(AssortmentPurchaseRequ
 });
 
 const deepFreeze = <Value>(value: Value): Value => {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Test fixture recursion establishes deep immutability for owner evidence.
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const nested of Object.values(value)) {
       deepFreeze(nested);
@@ -562,14 +561,12 @@ it.effect('keeps an authoritative PURCHASE deny bounded and degrades evidence-st
 );
 
 it.effect('rejects malformed and shallow-frozen owner evidence', () =>
-  // oxlint-disable-next-line typescript/consistent-return -- Impossible fixture branch fails the test Effect explicitly.
   Effect.gen(function* rejectsMutableEvidence() {
     const malformed: AssortmentDecisionSourcePort = {
       resolvePurchase: () => Effect.fail(dependencyFailure()),
       resolveVisibility: () =>
         Effect.succeed({
           // SAFETY: malformed owner data is intentional; the facade must reject it before projection.
-          // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: this deliberately malformed fixture never reaches a public response.
           decision: { evidence: { factCurrentness: [] }, outcome: 'ELIGIBLE' } as never,
           request: canonicalVisibilityRequest,
         }),
@@ -585,10 +582,9 @@ it.effect('rejects malformed and shallow-frozen owner evidence', () =>
     });
 
     const deeplyValid = decisionFor(canonicalVisibilityRequest, 'ELIGIBLE');
-    const validEvidence = deeplyValid.evidence;
-    if (validEvidence === undefined) {
-      return yield* Effect.fail(dependencyFailure());
-    }
+    const validEvidence = yield* deeplyValid.evidence === undefined
+      ? Effect.fail(dependencyFailure())
+      : Effect.succeed(deeplyValid.evidence);
     const shallow = Object.freeze({
       evidence: {
         ...validEvidence,

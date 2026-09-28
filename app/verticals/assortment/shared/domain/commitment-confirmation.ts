@@ -1,4 +1,4 @@
-import { DateTime, Schema } from 'effect'; // oxlint-disable-line max-classes-per-file -- These tagged failures form one cohesive owner vocabulary; expires: 2027-03-31.
+import { DateTime, Schema } from 'effect';
 import type { Effect } from 'effect';
 
 import {
@@ -8,6 +8,16 @@ import {
   AssortmentPurchaseConstituentSchema,
 } from './decision-contracts.ts';
 import type { AssortmentCandidate } from './decision-contracts.ts';
+import type { AssortmentCommitmentConfirmationError as CommitmentConfirmationError } from './commitment-confirmation-errors/index.ts';
+
+export {
+  AssortmentCommitmentConfirmationErrorSchema,
+  AssortmentCommitmentConfirmationExpired,
+  AssortmentCommitmentConfirmationInvalid,
+  AssortmentCommitmentConfirmationScopeMismatch,
+  AssortmentCommitmentConfirmationUnavailable,
+} from './commitment-confirmation-errors/index.ts';
+export type { AssortmentCommitmentConfirmationError } from './commitment-confirmation-errors/index.ts';
 
 const InstantSchema = Schema.DateTimeUtcFromString;
 const AssortmentModuleId = 'commerce.assortment' as const;
@@ -16,7 +26,7 @@ const ConfirmationResourceType = 'commerce.assortment.commitment-confirmation' a
 const AssortmentCommitmentConfirmationRefSchema = AssortmentOwnerResourceRefSchema.check(
   Schema.makeFilter((reference) =>
     reference.moduleId === AssortmentModuleId && reference.resourceType === ConfirmationResourceType
-      ? undefined
+      ? true
       : 'confirmation reference must be owned by Assortment',
   ),
 );
@@ -50,7 +60,7 @@ const AssortmentPurchaseAllowCandidateSchema = AssortmentCandidateSchema.check(
     }
     const { tenantId } = candidate.commercialScope.sellingLegalEntityRef;
     return candidateReferences(candidate).every((reference) => reference.tenantId === tenantId)
-      ? undefined
+      ? true
       : 'candidate references must share the commercial-scope tenant';
   }),
 );
@@ -60,7 +70,7 @@ const AssortmentDecisionEvidenceReferenceSchema = AssortmentEvidenceReferenceSch
     reference.ownerModuleId === AssortmentModuleId &&
     reference.evidenceRef.moduleId === AssortmentModuleId &&
     reference.evidenceRef.resourceType === 'commerce.assortment.decision-evidence'
-      ? undefined
+      ? true
       : 'confirmation must reference immutable Assortment Decision Evidence',
   ),
 );
@@ -85,7 +95,7 @@ export const AssortmentCommitmentConfirmationPayloadSchema = Schema.Struct({
     ];
     return refs.every((reference) => reference.tenantId === tenantId) &&
       payload.candidate.commercialScope.sellingLegalEntityRef.tenantId === tenantId
-      ? undefined
+      ? true
       : 'confirmation references must use one tenant';
   }),
 );
@@ -117,7 +127,7 @@ export const AssortmentCommitmentConfirmationResultSchema = Schema.Struct({
         confirmation.decisionEvidenceRef.sourceRevision.sourceRef.tenantId !== tenantId) ||
       confirmation.confirmationRef.tenantId !== tenantId
       ? 'confirmation references must use one tenant'
-      : undefined;
+      : true;
   }),
 );
 export type AssortmentCommitmentConfirmationResult = typeof AssortmentCommitmentConfirmationResultSchema.Type;
@@ -149,35 +159,6 @@ export const assortmentCommitmentConfirmationMatchesExactScope = (
   confirmationConstituentEquivalence(confirmation.constituent, expected.constituent) &&
   confirmationEvidenceEquivalence(confirmation.decisionEvidenceRef, expected.decisionEvidenceRef);
 
-export class AssortmentCommitmentConfirmationInvalid extends Schema.TaggedError<AssortmentCommitmentConfirmationInvalid>()(
-  'AssortmentCommitmentConfirmationInvalid',
-  { code: Schema.Literal('assortment_confirmation_invalid'), reason: Schema.String },
-) {}
-
-export class AssortmentCommitmentConfirmationScopeMismatch extends Schema.TaggedError<AssortmentCommitmentConfirmationScopeMismatch>()(
-  'AssortmentCommitmentConfirmationScopeMismatch',
-  { code: Schema.Literal('assortment_confirmation_scope_mismatch'), reason: Schema.String },
-) {}
-
-export class AssortmentCommitmentConfirmationExpired extends Schema.TaggedError<AssortmentCommitmentConfirmationExpired>()(
-  'AssortmentCommitmentConfirmationExpired',
-  { code: Schema.Literal('assortment_confirmation_expired'), reason: Schema.String },
-) {}
-
-export class AssortmentCommitmentConfirmationUnavailable extends Schema.TaggedError<AssortmentCommitmentConfirmationUnavailable>()(
-  'AssortmentCommitmentConfirmationUnavailable',
-  { code: Schema.Literal('assortment_confirmation_unavailable'), reason: Schema.String },
-) {}
-
-export const AssortmentCommitmentConfirmationErrorSchema = Schema.Union([
-  AssortmentCommitmentConfirmationExpired,
-  AssortmentCommitmentConfirmationInvalid,
-  AssortmentCommitmentConfirmationScopeMismatch,
-  AssortmentCommitmentConfirmationUnavailable,
-]);
-
-export type AssortmentCommitmentConfirmationError = typeof AssortmentCommitmentConfirmationErrorSchema.Type;
-
 export const commitmentConfirmationRef = (tenantId: string, resourceId: string) => ({
   moduleId: AssortmentModuleId,
   resourceId,
@@ -189,5 +170,5 @@ export interface AssortmentCommitmentConfirmationIssuer {
   readonly issue: (
     payload: AssortmentCommitmentConfirmationPayload,
     metadata: Readonly<{ readonly actionInvocationId: string; readonly actorPrincipalId: string }>,
-  ) => Effect.Effect<AssortmentCommitmentConfirmationResult, AssortmentCommitmentConfirmationError>;
+  ) => Effect.Effect<AssortmentCommitmentConfirmationResult, CommitmentConfirmationError>;
 }

@@ -1,5 +1,4 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion, typescript/no-unsafe-type-assertion -- The fake fluent Drizzle query builder models only this repository's scoped insert/select seam; expires: 2027-09-24. */
-import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
+import type { OperationalScope } from '@app/core-runtime';
 import { Cause, Effect, Exit, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 import {
@@ -12,7 +11,12 @@ import {
   AssortmentOwnerResourceRefSchema,
   AssortmentPurchaseConstituentSchema,
 } from '../../shared/domain/decision-contracts.ts';
-import { assortmentCommitmentConfirmationRepositoryForScope } from '../../src/services/assortment-commitment-confirmation.repository.ts';
+import { assortmentCommitmentConfirmationRepositoryFromPort } from '../../src/services/assortment-commitment-confirmation.repository.ts';
+import type {
+  AssortmentCommitmentConfirmationPersistencePort,
+  CommitmentConfirmationInsert,
+  ConfirmationRow,
+} from '../../src/services/assortment-commitment-confirmation.repository.ts';
 
 const tenantId = '018f8b4e-35a2-7b51-8d56-91a4f37d6a11';
 const legalEntityId = 'sle-1';
@@ -73,55 +77,35 @@ const scope = {
 } satisfies OperationalScope;
 const metadata = { actionInvocationId: invocationId, actorPrincipalId: principalId };
 
-type QueryRows = readonly object[];
-type FakeQuery = Effect.Effect<QueryRows, unknown> & {
-  from: () => FakeQuery;
-  limit: () => FakeQuery;
-  onConflictDoNothing: () => FakeQuery;
-  returning: () => FakeQuery;
-  values: (value: Record<string, unknown>) => FakeQuery;
-  where: () => FakeQuery;
-};
-
-const replayTransaction = () => {
-  let insertedValues: Record<string, unknown> | undefined;
+const replayPort = (): AssortmentCommitmentConfirmationPersistencePort => {
+  let insertedValues: CommitmentConfirmationInsert | undefined;
   let insertCount = 0;
-  const makeQuery = (rows: QueryRows): FakeQuery => {
-    const query = Effect.succeed(rows) as unknown as FakeQuery;
-    query.from = () => query;
-    query.limit = () => query;
-    query.onConflictDoNothing = () => query;
-    query.returning = () => query;
-    query.values = (value) => {
-      insertedValues ??= value;
-      insertCount += 1;
-      return query;
-    };
-    query.where = () => query;
-    return query;
-  };
   return {
-    insert: () =>
-      makeQuery(insertCount === 0 ? [{ commitmentConfirmationId: confirmation.confirmationRef.resourceId }] : []),
-    select: () =>
-      makeQuery(
+    findByInvocation: () =>
+      Effect.succeed(
         insertedValues === undefined
           ? []
           : [
               {
                 ...insertedValues,
                 commitmentConfirmationId: confirmation.confirmationRef.resourceId,
-                legalEntityId,
-                tenantId,
-              },
+              } satisfies ConfirmationRow,
             ],
       ),
-  } as unknown as ScopedTransactionExecutor;
+    insert: (value) => {
+      const inserted = insertCount === 0;
+      if (inserted) {
+        insertedValues = value;
+      }
+      insertCount += 1;
+      return Effect.succeed(inserted);
+    },
+  };
 };
 
 it.effect('replays immutable confirmation by invocation and rejects changed payload or actor', () =>
   Effect.gen(function* repositoryReplay() {
-    const repository = assortmentCommitmentConfirmationRepositoryForScope(replayTransaction(), scope);
+    const repository = assortmentCommitmentConfirmationRepositoryFromPort(replayPort(), scope);
     const first = yield* repository.persist(payload, confirmation, scope, metadata);
     expect(first).toEqual(confirmation);
 

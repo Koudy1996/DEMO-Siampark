@@ -1,5 +1,5 @@
-// oxlint-disable-next-line typescript/consistent-type-imports -- The framework baseline requires Schema in the exact value import.
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, Schema } from '@modern-js/bff-effect/effect-client';
+import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@modern-js/bff-effect/effect-client';
+import type { Schema } from '@modern-js/bff-effect/effect-client';
 import { identity } from 'effect';
 import {
   MicroVerticalBuildMarkerSchema,

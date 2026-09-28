@@ -1,9 +1,7 @@
-import type { DatabasePoolDeadlines } from '@app/core-runtime';
 import { DatabaseConfig, configureDatabasePool } from '@app/core-runtime';
 import { PgClient } from '@effect/sql-pg';
 import { makeWithDefaults } from 'drizzle-orm/effect-postgres';
 import { Context, Effect, Layer, Redacted } from 'effect';
-import { Reactivity } from 'effect/unstable/reactivity';
 import { AssortmentDatabaseConnectionError } from './connection-error.ts';
 import { assortmentRelations } from './schema.ts';
 import type { AssortmentDatabaseExecutor } from './types.ts';
@@ -19,35 +17,18 @@ const connectionFailure = (cause: unknown): AssortmentDatabaseConnectionError =>
     reason: 'Unable to initialize the Assortment native PostgreSQL client',
   });
 
-type ContextServiceContract<Service> =
-  Service extends Context.Key<infer _Identifier, infer Contract> ? Contract : never;
-
-export const makeAssortmentDatabase = Effect.fn('AssortmentDatabase.make')(function* makeDatabase(
-  configuration: ContextServiceContract<typeof DatabaseConfig> & {
-    readonly poolDeadlines?: Partial<DatabasePoolDeadlines>;
-  },
-) {
-  const poolConfiguration = yield* configureDatabasePool(
-    Redacted.make(configuration.connectionString),
-    configuration.poolDeadlines,
-  ).pipe(Effect.mapError((error) => new AssortmentDatabaseConnectionError({ reason: error.reason })));
-  const reactivity = yield* Reactivity.make;
-  const client = yield* PgClient.make(poolConfiguration).pipe(
-    // oxlint-disable-next-line effect-native/no-effect-provide-in-library -- PgClient requires the owner-local Reactivity service during scoped acquisition; expires: 2027-03-31.
-    Effect.provideService(Reactivity.Reactivity, reactivity),
-    Effect.mapError(connectionFailure),
-  );
-  return {
-    executor: yield* makeWithDefaults({ relations: assortmentRelations }).pipe(
-      // oxlint-disable-next-line effect-native/no-effect-provide-in-library -- Drizzle requires the acquired owner-local PgClient; expires: 2027-03-31.
-      Effect.provideService(PgClient.PgClient, client),
-    ),
-  };
-});
+export const AssortmentPgClientLive = Layer.effect(
+  PgClient.PgClient,
+  Effect.gen(function* makeAssortmentPgClient() {
+    const configuration = yield* DatabaseConfig;
+    const poolConfiguration = yield* configureDatabasePool(Redacted.make(configuration.connectionString)).pipe(
+      Effect.mapError((error) => new AssortmentDatabaseConnectionError({ reason: error.reason })),
+    );
+    return yield* PgClient.make(poolConfiguration).pipe(Effect.mapError(connectionFailure));
+  }),
+);
 
 export const AssortmentDatabaseLive = Layer.effect(
   AssortmentDatabase,
-  Effect.gen(function* makeAssortmentDatabaseService() {
-    return yield* makeAssortmentDatabase(yield* DatabaseConfig);
-  }),
+  makeWithDefaults({ relations: assortmentRelations }).pipe(Effect.map((executor) => ({ executor }))),
 );

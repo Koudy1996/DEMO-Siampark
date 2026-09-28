@@ -29,7 +29,6 @@ const readVisibility = (
   context.services.evaluation.evaluateVisibility(input, context.scope).pipe(
     Effect.map((result) => ({ evidence: { resultCount: 1 }, result })),
     // Effect.catchTag is typed error recovery, not Promise callback control flow.
-    // oxlint-disable-next-line promise/prefer-await-to-callbacks
     Effect.catchTag('AssortmentDecisionRequestInvalidError', (error) =>
       Effect.fail(new ReadInputValidationError({ code: READ_INPUT_INVALID, reason: error.reason })),
     ),

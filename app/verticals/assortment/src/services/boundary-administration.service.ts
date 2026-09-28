@@ -51,7 +51,6 @@ export type ReplaceBoundaryOutcome =
   | Conflict
   | NotFound
   | Stale;
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- The Action runtime supplies this owner contract through the scoped transaction factory.
 export interface BoundaryAdministrationService {
   readonly create: (input: CreateClosedAssortmentBoundaryPayload & Common) => Effect.Effect<BoundaryOutcome, Failure>;
   readonly end: (input: EndClosedAssortmentBoundaryPayload & Common) => Effect.Effect<EndBoundaryOutcome, Failure>;

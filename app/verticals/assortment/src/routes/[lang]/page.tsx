@@ -13,7 +13,6 @@ const AssortmentHome = () => {
 
   useEffect(() => {
     let cancelled = false;
-    // oxlint-disable-next-line effect-native/no-scattered-browser-effect-run -- Generated route compatibility surface uses the client entrypoint's approved runner until a vertical browser adapter is scaffolded. remove-when: Codesmith emits the shared browser query adapter for vertical pages.
     void runEffectRequest(
       getAssortmentReadiness().pipe(
         Effect.matchEffect({

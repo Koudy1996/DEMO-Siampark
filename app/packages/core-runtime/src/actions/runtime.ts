@@ -1328,22 +1328,25 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
           ? Option.none<ActionTenantPermission>()
           : yield* resolveActionTenantPermission(payload, input.registration.descriptor.tenantPermission);
         const { legalEntityPermission } = input.registration.descriptor;
-        const businessPermissionTarget = yield* resolveActionBusinessPermissionTarget(
-          payload,
-          scope,
-          getActionBusinessPermissionTargetResolver(input.registration),
-        );
-        // oxlint-disable-next-line effect-native/no-sequential-independent-yields -- Preserve business-before-Assortment resolver order so owner callbacks observe the declared authorization sequence.
-        const assortmentPermissionTargets = yield* resolveActionAssortmentPermissionTargets(
-          payload,
-          scope,
-          getActionAssortmentPermissionTargetResolver(input.registration),
-        );
-        // oxlint-disable-next-line effect-native/no-sequential-independent-yields -- Preserve business-before-resource resolver execution because owner callbacks may throw or observe mutable state.
-        const resourcePermissionTarget = yield* resolveActionResourcePermissionTarget(
-          payload,
-          scope,
-          getActionResourcePermissionTargetResolver(input.registration),
+        const [businessPermissionTarget, assortmentPermissionTargets, resourcePermissionTarget] = yield* Effect.all(
+          [
+            resolveActionBusinessPermissionTarget(
+              payload,
+              scope,
+              getActionBusinessPermissionTargetResolver(input.registration),
+            ),
+            resolveActionAssortmentPermissionTargets(
+              payload,
+              scope,
+              getActionAssortmentPermissionTargetResolver(input.registration),
+            ),
+            resolveActionResourcePermissionTarget(
+              payload,
+              scope,
+              getActionResourcePermissionTargetResolver(input.registration),
+            ),
+          ],
+          { concurrency: 1 },
         );
         const hasCanonicalScopeTarget =
           Option.isSome(tenantPermission) ||

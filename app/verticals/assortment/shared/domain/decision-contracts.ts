@@ -417,8 +417,7 @@ export const AssortmentPurchaseRequestSchema = Schema.Struct({
     ) {
       return 'Set composition revision must match the top-level Catalog Selection';
     }
-    // oxlint-disable-next-line unicorn/no-useless-undefined -- Schema filter success is represented explicitly.
-    return undefined;
+    return true;
   }),
 );
 export type AssortmentPurchaseRequest = typeof AssortmentPurchaseRequestSchema.Type;

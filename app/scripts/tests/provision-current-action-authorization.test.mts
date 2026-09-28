@@ -165,6 +165,7 @@ const addedVerticalActionKeys = [
   'commerce.assortment.create-rule-revision',
   'commerce.assortment.end-applicability-binding',
   'commerce.assortment.end-closed-assortment-boundary',
+  'commerce.assortment.issue-assortment-commitment-confirmation',
   'commerce.assortment.replace-applicability-binding',
   'commerce.assortment.replace-closed-assortment-boundary',
   'commerce.assortment.retire-rule',

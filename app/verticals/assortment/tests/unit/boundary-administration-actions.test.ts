@@ -77,7 +77,6 @@ const effectQuery = (rows: QueryRows | Effect.Effect<QueryRows, unknown>, events
   const baseEffect = Effect.isEffect(rows) ? rows : Effect.succeed(rows);
   // SAFETY: The fake query builder exposes the same fluent terminal methods used by this owner service.
   // SAFETY: The fake query builder deliberately augments an Effect with the fluent methods consumed by Drizzle.
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- remove-when: owner service accepts an explicit query-builder port
   const effect = baseEffect as unknown as Effect.Effect<QueryRows> & {
     from: () => typeof effect;
     limit: () => typeof effect;
@@ -97,7 +96,6 @@ const fakeTransaction = ({ events, insertResults = [], selectResults = [] }: Fak
   let insertIndex = 0;
   let selectIndex = 0;
   // SAFETY: The harness deliberately implements only the select/insert/invoke capabilities consumed by the owner service.
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- remove-when: owner service accepts an explicit query-builder port
   return {
     insert: () => {
       const currentInsertIndex = insertIndex;

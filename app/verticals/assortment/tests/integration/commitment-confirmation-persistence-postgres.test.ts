@@ -1,4 +1,3 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- Assortment and Core use the same transaction protocol at this scope-installer boundary; expires: 2027-09-24. */
 import { randomUUID } from 'node:crypto';
 
 import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
@@ -20,11 +19,14 @@ import {
 } from '../../shared/domain/commitment-confirmation.ts';
 import {
   AssortmentCandidateSchema,
+  AssortmentGovernedDecisionSchema,
   AssortmentOwnerResourceRefSchema,
+  AssortmentPurchaseRequestSchema,
   AssortmentPurchaseConstituentSchema,
 } from '../../shared/domain/decision-contracts.ts';
-import { assortmentRelations, commitmentConfirmations } from '../../src/database/schema.ts';
+import { assortmentRelations, commitmentConfirmations, decisionEvidence } from '../../src/database/schema.ts';
 import { assortmentCommitmentConfirmationRepositoryForScope } from '../../src/services/assortment-commitment-confirmation.repository.ts';
+import { assortmentDecisionEvidenceRepositoryForScope } from '../../src/services/decision-evidence.repository.ts';
 
 const tenantId = randomUUID();
 const legalEntityId = randomUUID();
@@ -97,6 +99,37 @@ const confirmation = Schema.decodeUnknownSync(AssortmentCommitmentConfirmationRe
   issuedAt: '2026-09-24T10:00:00.000Z',
 });
 const metadata = { actionInvocationId, actorPrincipalId: principalId };
+const evidenceRequest = Schema.decodeUnknownSync(AssortmentPurchaseRequestSchema)({
+  constituent: {
+    catalogSelection: { configuration: { kind: 'NONE' }, productRef, variantKind: 'ATOMIC', variantRef },
+    role: 'TOP_LEVEL',
+  },
+  decisionPurpose: 'PURCHASE',
+  subject: {
+    kind: 'IDENTIFIED',
+    subject: {
+      kind: 'RETAIL_CUSTOMER_PROFILE',
+      profileRef: ref('commerce.customer-context', 'commerce.customer-context.retail-customer-profile', 'profile-1'),
+    },
+  },
+  trustedContext: {
+    channelRef: ref('commerce.channel', 'commerce.channel.channel', 'web'),
+    operationTime: '2026-09-24T10:00:00.000Z',
+    sellingLegalEntityRef: ref('commerce.legal-entity', 'commerce.legal-entity.selling-legal-entity', legalEntityId),
+    tenantId,
+  },
+});
+const evidenceDecision = Schema.decodeUnknownSync(AssortmentGovernedDecisionSchema)({
+  evidence: {
+    factCurrentness: [],
+    operationTime: '2026-09-24T10:00:00.000Z',
+    setCompleteness: [],
+    subject: evidenceRequest.subject,
+    target: { kind: 'CATALOG_SELECTION', selection: evidenceRequest.constituent.catalogSelection },
+    trustedContext: { ...evidenceRequest.trustedContext, operationTime: '2026-09-24T10:00:00.000Z' },
+  },
+  outcome: 'ELIGIBLE',
+});
 
 const runScoped = <Value>(
   database: AssortmentTestDatabase,
@@ -134,6 +167,9 @@ const cleanupRows = (admin: AssortmentTestDatabase) =>
   admin.transaction((transaction) =>
     Effect.gen(function* cleanupCommitmentConfirmations() {
       yield* transaction.execute(sql`set local session_replication_role = 'replica'`, 'objects');
+      yield* transaction
+        .delete(decisionEvidence)
+        .where(and(eq(decisionEvidence.tenantId, tenantId), eq(decisionEvidence.legalEntityId, legalEntityId)));
       yield* transaction
         .delete(commitmentConfirmations)
         .where(
@@ -188,6 +224,42 @@ it.live('persists immutable confirmations with replay, RLS isolation, and append
         ),
       );
       expect(persisted).toEqual(confirmation);
+
+      yield* admin.transaction((transaction) =>
+        transaction.execute(
+          sql`grant select, insert, update, delete on table assortment.assortment_decision_evidence to ontos_runtime`,
+          'objects',
+        ),
+      );
+      yield* Effect.addFinalizer(() =>
+        admin
+          .transaction((transaction) =>
+            transaction.execute(
+              sql`revoke select, insert, update, delete on table assortment.assortment_decision_evidence from ontos_runtime`,
+              'objects',
+            ),
+          )
+          .pipe(Effect.orDie),
+      );
+      const evidenceReference = yield* runRepositoryScoped(runtime, scope, (transaction) =>
+        assortmentDecisionEvidenceRepositoryForScope(transaction, scope).persist({
+          constituent: evidenceRequest.constituent,
+          decision: evidenceDecision,
+          request: evidenceRequest,
+        }),
+      );
+      const persistedEvidence = yield* runRepositoryScoped(runtime, scope, (transaction) =>
+        assortmentDecisionEvidenceRepositoryForScope(transaction, scope).resolve(evidenceReference.evidenceRef),
+      );
+      expect(persistedEvidence.request).toEqual(evidenceRequest);
+      expect(persistedEvidence.evidence).toEqual(evidenceDecision.evidence);
+      const wrongScope = { ...scope, tenantId: foreignTenantId };
+      const wrongScopeEvidence = yield* runRepositoryScoped(runtime, wrongScope, (transaction) =>
+        Effect.result(
+          assortmentDecisionEvidenceRepositoryForScope(transaction, wrongScope).resolve(evidenceReference.evidenceRef),
+        ),
+      );
+      expect(wrongScopeEvidence._tag).toBe('Failure');
 
       const replayed = yield* runRepositoryScoped(runtime, scope, (transaction) =>
         assortmentCommitmentConfirmationRepositoryForScope(transaction, scope).persist(

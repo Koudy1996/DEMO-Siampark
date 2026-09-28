@@ -116,218 +116,238 @@ const entry = (
     verification,
   });
 
-const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) =>
-  // oxlint-disable-next-line effect-native/no-effect-run-in-tests
-  Effect.runSync(effect);
+const evaluate = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => effect;
 
-it('rebuilds deterministic exact-context state and rejects duplicate slices', () => {
-  const value = context('profile-1');
-  const first = entry(value, product('product-b'));
-  const second = entry(value, product('product-a'));
-  const rebuilt = run(rebuildAssortmentSearchProjection([first, second]));
-  expect(rebuilt.entries.map((item: (typeof rebuilt.entries)[number]) => item.productRef.resourceId)).toEqual([
-    'product-a',
-    'product-b',
-  ]);
+it.effect('rebuilds deterministic exact-context state and rejects duplicate slices', () =>
+  Effect.gen(function* rebuildsDeterministicState() {
+    const value = context('profile-1');
+    const first = entry(value, product('product-b'));
+    const second = entry(value, product('product-a'));
+    const rebuilt = yield* evaluate(rebuildAssortmentSearchProjection([first, second]));
+    expect(rebuilt.entries.map((item: (typeof rebuilt.entries)[number]) => item.productRef.resourceId)).toEqual([
+      'product-a',
+      'product-b',
+    ]);
 
-  expect(() => run(rebuildAssortmentSearchProjection([first, first]))).toThrow();
-  const encoded = Schema.encodeSync(AssortmentSearchProjectionStateSchema)(rebuilt);
-  expect('eventOffset' in encoded).toBe(false);
-  expect('ttl' in encoded).toBe(false);
-  expect('indexComplete' in encoded).toBe(false);
-  expect(() =>
-    Schema.decodeUnknownSync(AssortmentSearchProjectionStateSchema, { onExcessProperty: 'error' })({
-      ...encoded,
-      eventOffset: 10,
-      ttl: 60,
-    }),
-  ).toThrow();
-});
+    const duplicateFailure = yield* Effect.flip(evaluate(rebuildAssortmentSearchProjection([first, first])));
+    expect(duplicateFailure).toBeDefined();
+    const encoded = Schema.encodeSync(AssortmentSearchProjectionStateSchema)(rebuilt);
+    expect('eventOffset' in encoded).toBe(false);
+    expect('ttl' in encoded).toBe(false);
+    expect('indexComplete' in encoded).toBe(false);
+    expect(() =>
+      Schema.decodeUnknownSync(AssortmentSearchProjectionStateSchema, { onExcessProperty: 'error' })({
+        ...encoded,
+        eventOffset: 10,
+        ttl: 60,
+      }),
+    ).toThrow();
+  }),
+);
 
-it('includes only an established exact slice and omits unsafe states or scope mismatches', () => {
-  const requested = context('profile-1');
-  const exactProduct = product('product-1');
-  for (const verification of ['STALE', 'UNCERTAIN', 'UNVERIFIABLE', 'INVALIDATED'] as const) {
-    const decision = run(
+it.effect('includes only an established exact slice and omits unsafe states or scope mismatches', () =>
+  Effect.gen(function* includesOnlyEstablishedExactSlices() {
+    const requested = context('profile-1');
+    const exactProduct = product('product-1');
+    const unsafeDecisions = yield* Effect.all(
+      (['STALE', 'UNCERTAIN', 'UNVERIFIABLE', 'INVALIDATED'] as const).map((verification) =>
+        checkAssortmentSearchProjectionInclusion({
+          context: requested,
+          entry: entry(requested, exactProduct, verification),
+          productRef: exactProduct,
+        }),
+      ),
+    );
+    expect(unsafeDecisions.map((decision) => decision.decision)).toEqual(['OMIT', 'OMIT', 'OMIT', 'OMIT']);
+
+    const included = yield* evaluate(
       checkAssortmentSearchProjectionInclusion({
         context: requested,
-        entry: entry(requested, exactProduct, verification),
+        entry: entry(requested, exactProduct),
         productRef: exactProduct,
       }),
     );
-    expect(decision.decision).toBe('OMIT');
-  }
+    expect(included.decision).toBe('INCLUDE');
+    expect(() =>
+      Schema.decodeUnknownSync(AssortmentDiscoveryInclusionDecisionSchema)(
+        Schema.encodeSync(AssortmentDiscoveryInclusionDecisionSchema)(included),
+      ),
+    ).not.toThrow();
 
-  const included = run(
-    checkAssortmentSearchProjectionInclusion({
-      context: requested,
-      entry: entry(requested, exactProduct),
-      productRef: exactProduct,
-    }),
-  );
-  expect(included.decision).toBe('INCLUDE');
-  expect(() =>
-    Schema.decodeUnknownSync(AssortmentDiscoveryInclusionDecisionSchema)(
-      Schema.encodeSync(AssortmentDiscoveryInclusionDecisionSchema)(included),
-    ),
-  ).not.toThrow();
+    const wrongContext = yield* evaluate(
+      checkAssortmentSearchProjectionInclusion({
+        context: requested,
+        entry: entry(context('profile-2'), exactProduct),
+        productRef: exactProduct,
+      }),
+    );
+    expect(wrongContext.decision).toBe('OMIT');
 
-  const wrongContext = run(
-    checkAssortmentSearchProjectionInclusion({
-      context: requested,
-      entry: entry(context('profile-2'), exactProduct),
-      productRef: exactProduct,
-    }),
-  );
-  expect(wrongContext.decision).toBe('OMIT');
+    const missing = yield* evaluate(
+      checkAssortmentSearchProjectionInclusion({ context: requested, productRef: product('missing') }),
+    );
+    expect(missing.decision).toBe('OMIT');
+  }),
+);
 
-  const missing = run(checkAssortmentSearchProjectionInclusion({ context: requested, productRef: product('missing') }));
-  expect(missing.decision).toBe('OMIT');
-});
-
-it('requires explicit Assortment equivalence before reusing a broader projection slice', () => {
-  const source = context('profile-1');
-  const target = context('profile-2');
-  const productRef = product('product-1');
-  const sourceEntry = entry(source, productRef);
-  const equivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
-    kind: 'ASSORTMENT_PROVEN_CONTEXT_EQUIVALENCE',
-    productRef,
-    proof: {
-      evidenceRef: ref('commerce.assortment', 'commerce.assortment.discovery-proof', 'equivalence-proof'),
-      ownerModuleId: 'commerce.assortment',
-    },
-    source: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(source),
-    target: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(target),
-  });
-
-  const withoutEquivalence = run(
-    checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, productRef }),
-  );
-  expect(withoutEquivalence.decision).toBe('OMIT');
-
-  const withEquivalence = run(
-    checkAssortmentSearchProjectionInclusion({
-      context: target,
-      entry: sourceEntry,
-      equivalence,
+it.effect('requires explicit Assortment equivalence before reusing a broader projection slice', () =>
+  Effect.gen(function* requiresExplicitContextEquivalence() {
+    const source = context('profile-1');
+    const target = context('profile-2');
+    const productRef = product('product-1');
+    const sourceEntry = entry(source, productRef);
+    const equivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
+      kind: 'ASSORTMENT_PROVEN_CONTEXT_EQUIVALENCE',
       productRef,
-    }),
-  );
-  expect(withEquivalence.decision).toBe('INCLUDE');
+      proof: {
+        evidenceRef: ref('commerce.assortment', 'commerce.assortment.discovery-proof', 'equivalence-proof'),
+        ownerModuleId: 'commerce.assortment',
+      },
+      source: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(source),
+      target: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(target),
+    });
 
-  const staleSource = run(
-    checkAssortmentSearchProjectionInclusion({
-      context: target,
-      entry: entry(source, productRef, 'STALE'),
-      equivalence,
-      productRef,
-    }),
-  );
-  expect(staleSource.decision).toBe('OMIT');
-});
+    const withoutEquivalence = yield* evaluate(
+      checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, productRef }),
+    );
+    expect(withoutEquivalence.decision).toBe('OMIT');
 
-it('does not let a Guest slice refill an identified context without exact equivalence', () => {
-  const source = guestContext();
-  const target = context('profile-2');
-  const productRef = product('product-guest');
-  const sourceEntry = entry(source, productRef);
-  const withoutEquivalence = run(
-    checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, productRef }),
-  );
-  expect(withoutEquivalence.decision).toBe('OMIT');
-
-  const equivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
-    kind: 'ASSORTMENT_PROVEN_CONTEXT_EQUIVALENCE',
-    productRef,
-    proof: {
-      evidenceRef: ref('commerce.assortment', 'commerce.assortment.discovery-proof', 'guest-equivalence-proof'),
-      ownerModuleId: 'commerce.assortment',
-    },
-    source: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(source),
-    target: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(target),
-  });
-  expect(
-    run(checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, equivalence, productRef }))
-      .decision,
-  ).toBe('INCLUDE');
-
-  const wrongProductEquivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
-    ...Schema.encodeSync(AssortmentDiscoveryDisclosureEquivalenceSchema)(equivalence),
-    productRef: product('different-product'),
-  });
-  expect(
-    run(
+    const withEquivalence = yield* evaluate(
       checkAssortmentSearchProjectionInclusion({
         context: target,
         entry: sourceEntry,
-        equivalence: wrongProductEquivalence,
+        equivalence,
         productRef,
       }),
-    ).decision,
-  ).toBe('OMIT');
-  expect(() =>
-    Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
-      ...Schema.encodeSync(AssortmentDiscoveryDisclosureEquivalenceSchema)(equivalence),
-      productRef: product('foreign-product'),
+    );
+    expect(withEquivalence.decision).toBe('INCLUDE');
+
+    const staleSource = yield* evaluate(
+      checkAssortmentSearchProjectionInclusion({
+        context: target,
+        entry: entry(source, productRef, 'STALE'),
+        equivalence,
+        productRef,
+      }),
+    );
+    expect(staleSource.decision).toBe('OMIT');
+  }),
+);
+
+it.effect('does not let a Guest slice refill an identified context without exact equivalence', () =>
+  Effect.gen(function* keepsGuestContextIsolated() {
+    const source = guestContext();
+    const target = context('profile-2');
+    const productRef = product('product-guest');
+    const sourceEntry = entry(source, productRef);
+    const withoutEquivalence = yield* evaluate(
+      checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, productRef }),
+    );
+    expect(withoutEquivalence.decision).toBe('OMIT');
+
+    const equivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
+      kind: 'ASSORTMENT_PROVEN_CONTEXT_EQUIVALENCE',
+      productRef,
       proof: {
-        ...equivalence.proof,
+        evidenceRef: ref('commerce.assortment', 'commerce.assortment.discovery-proof', 'guest-equivalence-proof'),
+        ownerModuleId: 'commerce.assortment',
+      },
+      source: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(source),
+      target: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(target),
+    });
+    expect(
+      (yield* evaluate(
+        checkAssortmentSearchProjectionInclusion({ context: target, entry: sourceEntry, equivalence, productRef }),
+      )).decision,
+    ).toBe('INCLUDE');
+
+    const wrongProductEquivalence = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
+      ...Schema.encodeSync(AssortmentDiscoveryDisclosureEquivalenceSchema)(equivalence),
+      productRef: product('different-product'),
+    });
+    expect(
+      (yield* evaluate(
+        checkAssortmentSearchProjectionInclusion({
+          context: target,
+          entry: sourceEntry,
+          equivalence: wrongProductEquivalence,
+          productRef,
+        }),
+      )).decision,
+    ).toBe('OMIT');
+    expect(() =>
+      Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureEquivalenceSchema)({
+        ...Schema.encodeSync(AssortmentDiscoveryDisclosureEquivalenceSchema)(equivalence),
+        productRef: product('foreign-product'),
+        proof: {
+          ...equivalence.proof,
+          evidenceRef: ref(
+            'commerce.assortment',
+            'commerce.assortment.discovery-proof',
+            'foreign-proof',
+            'foreign-tenant',
+          ),
+        },
+      }),
+    ).toThrow();
+  }),
+);
+
+it.effect('stops an invalidated exact slice until replacement coverage is rebuilt', () =>
+  Effect.gen(function* stopsInvalidatedCoverageUntilRebuild() {
+    const value = context('profile-1');
+    const productRef = product('product-1');
+    const state = yield* evaluate(rebuildAssortmentSearchProjection([entry(value, productRef)]));
+    const invalidation = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureInvalidationSchema)({
+      context: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(value),
+      productRef,
+      proof: {
         evidenceRef: ref(
           'commerce.assortment',
           'commerce.assortment.discovery-proof',
-          'foreign-proof',
-          'foreign-tenant',
+          `${productRef.resourceId}-proof`,
         ),
+        ownerModuleId: 'commerce.assortment',
       },
-    }),
-  ).toThrow();
-});
+      state: 'INVALIDATED',
+    });
+    const invalidated = yield* evaluate(applyAssortmentSearchProjectionInvalidation(state, invalidation));
+    expect(invalidated.entries[0]?.verification).toBe('INVALIDATED');
+    expect(
+      (yield* evaluate(
+        evaluateAssortmentSearchProjection({
+          context: value,
+          productRefs: [productRef],
+          state: invalidated,
+        }),
+      ))[0]?.decision,
+    ).toBe('OMIT');
 
-it('stops an invalidated exact slice until replacement coverage is rebuilt', () => {
-  const value = context('profile-1');
-  const productRef = product('product-1');
-  const state = run(rebuildAssortmentSearchProjection([entry(value, productRef)]));
-  const invalidation = Schema.decodeUnknownSync(AssortmentDiscoveryDisclosureInvalidationSchema)({
-    context: Schema.encodeSync(AssortmentDiscoveryDisclosureContextSchema)(value),
-    productRef,
-    proof: {
-      evidenceRef: ref('commerce.assortment', 'commerce.assortment.discovery-proof', `${productRef.resourceId}-proof`),
-      ownerModuleId: 'commerce.assortment',
-    },
-    state: 'INVALIDATED',
-  });
-  const invalidated = run(applyAssortmentSearchProjectionInvalidation(state, invalidation));
-  expect(invalidated.entries[0]?.verification).toBe('INVALIDATED');
-  expect(
-    run(
-      evaluateAssortmentSearchProjection({
-        context: value,
-        productRefs: [productRef],
-        state: invalidated,
-      }),
-    )[0]?.decision,
-  ).toBe('OMIT');
+    const rebuilt = yield* evaluate(rebuildAssortmentSearchProjection([entry(value, productRef)]));
+    expect(
+      (yield* evaluate(
+        evaluateAssortmentSearchProjection({
+          context: value,
+          productRefs: [productRef],
+          state: rebuilt,
+        }),
+      ))[0]?.decision,
+    ).toBe('INCLUDE');
+  }),
+);
 
-  const rebuilt = run(rebuildAssortmentSearchProjection([entry(value, productRef)]));
-  expect(
-    run(
-      evaluateAssortmentSearchProjection({
-        context: value,
-        productRefs: [productRef],
-        state: rebuilt,
-      }),
-    )[0]?.decision,
-  ).toBe('INCLUDE');
-});
-
-it('keeps cross-context entries isolated in batch evaluation', () => {
-  const source = context('profile-1');
-  const target = context('profile-2');
-  const productRef = product('product-1');
-  const state = run(rebuildAssortmentSearchProjection([entry(source, productRef)]));
-  const decisions = run(evaluateAssortmentSearchProjection({ context: target, productRefs: [productRef], state }));
-  expect(decisions[0]?.decision).toBe('OMIT');
-});
+it.effect('keeps cross-context entries isolated in batch evaluation', () =>
+  Effect.gen(function* isolatesCrossContextEntries() {
+    const source = context('profile-1');
+    const target = context('profile-2');
+    const productRef = product('product-1');
+    const state = yield* evaluate(rebuildAssortmentSearchProjection([entry(source, productRef)]));
+    const decisions = yield* evaluate(
+      evaluateAssortmentSearchProjection({ context: target, productRefs: [productRef], state }),
+    );
+    expect(decisions[0]?.decision).toBe('OMIT');
+  }),
+);
 
 it.effect('requires an authoritative detail recheck and fails closed on port failure', () =>
   Effect.gen(function* detailRecheck() {

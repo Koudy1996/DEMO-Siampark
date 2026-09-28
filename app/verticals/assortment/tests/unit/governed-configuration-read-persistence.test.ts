@@ -1,4 +1,3 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion, typescript/no-unsafe-type-assertion -- The fake fluent Drizzle query builder models only the scoped SELECT seam; expires: 2027-09-23. */
 import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
 import { Effect, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';

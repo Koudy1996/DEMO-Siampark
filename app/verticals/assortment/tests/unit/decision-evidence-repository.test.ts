@@ -1,6 +1,5 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion, typescript/no-unsafe-type-assertion -- The fake fluent Drizzle query builder models only this repository's scoped insert/select seam; expires: 2027-09-23. */
-import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
-import { Effect, Schema } from 'effect';
+import type { OperationalScope } from '@app/core-runtime';
+import { Effect, Option, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 import {
   AssortmentDependencyFailureError,
@@ -9,7 +8,12 @@ import {
   AssortmentPurchaseRequestSchema,
 } from '../../shared/domain/decision-contracts.ts';
 import { AssortmentConsumerDecisionEvidenceReferenceSchema } from '../../shared/domain/consumer-evidence.ts';
-import { assortmentDecisionEvidenceRepositoryForScope } from '../../src/services/decision-evidence.repository.ts';
+import { assortmentDecisionEvidenceRepositoryFromPort } from '../../src/services/decision-evidence.repository.ts';
+import type {
+  AssortmentDecisionEvidenceInsert,
+  AssortmentDecisionEvidencePersistencePort,
+  AssortmentDecisionEvidenceRow,
+} from '../../src/services/decision-evidence.repository.ts';
 
 const tenantId = '018f8b4e-35a2-7b51-8d56-91a4f37d6a11';
 const legalEntityId = '018f8b4e-35a2-7b51-8d56-91a4f37d6a12';
@@ -70,57 +74,59 @@ const decision = Schema.decodeUnknownSync(AssortmentGovernedDecisionSchema)({
 
 const storedInput = { constituent: request.constituent, decision, request };
 const referenceId = '018f8b4e-35a2-7b51-8d56-91a4f37d6a14';
+type EvidenceLookup = Readonly<{ readonly id: string; readonly legalEntityId: string; readonly tenantId: string }>;
 interface InsertCapture {
-  value?: Record<string, unknown>;
+  value?: AssortmentDecisionEvidenceInsert;
 }
 
-type QueryRows = readonly object[];
-type FakeQuery = Effect.Effect<QueryRows, unknown> & {
-  from: () => FakeQuery;
-  limit: () => FakeQuery;
-  returning: () => FakeQuery;
-  values: (value: Record<string, unknown>) => FakeQuery;
-  where: () => FakeQuery;
-};
+const persistenceFailure = () =>
+  new AssortmentDependencyFailureError({
+    code: 'DEPENDENCY_FAILURE',
+    ownerModuleId: Schema.decodeUnknownSync(AssortmentOwnerResourceRefSchema)(
+      ref('commerce.assortment', 'commerce.assortment.decision-evidence', referenceId),
+    ).moduleId,
+    retryable: true,
+    safeReasonCode: 'DEPENDENCY_UNAVAILABLE',
+  });
 
-const fakeTransaction = (options?: {
-  readonly inserted?: { value?: Record<string, unknown> };
-  readonly insertFailure?: unknown;
-  readonly selected?: QueryRows;
-  readonly selectFailure?: unknown;
-}) => {
-  const makeQuery = (rows: QueryRows, failure?: unknown): FakeQuery => {
-    const base = failure === undefined ? Effect.succeed(rows) : Effect.fail(failure);
-    const query = base as unknown as FakeQuery;
-    query.from = () => query;
-    query.limit = () => query;
-    query.returning = () => query;
-    query.values = (value) => {
-      if (options?.inserted !== undefined) {
-        options.inserted.value = value;
-      }
-      return query;
-    };
-    query.where = () => query;
-    return query;
-  };
-  return {
-    insert: () => makeQuery([{ decisionEvidenceId: referenceId }], options?.insertFailure),
-    select: () => makeQuery(options?.selected ?? [], options?.selectFailure),
-  } as unknown as ScopedTransactionExecutor;
-};
+const persistencePort = (options?: {
+  readonly inserted?: InsertCapture;
+  readonly queries?: EvidenceLookup[];
+  readonly selected?: readonly AssortmentDecisionEvidenceRow[];
+  readonly selectFailure?: Error;
+}): AssortmentDecisionEvidencePersistencePort => ({
+  find: (query) => {
+    options?.queries?.push(query);
+    return options?.selectFailure === undefined
+      ? Effect.succeed(options?.selected ?? [])
+      : Effect.fail(persistenceFailure());
+  },
+  insert: (value) => {
+    if (options?.inserted !== undefined) {
+      options.inserted.value = value;
+    }
+    return Effect.succeed(Option.some(referenceId));
+  },
+});
+
+const repositoryFor = (options?: Parameters<typeof persistencePort>[0]) =>
+  assortmentDecisionEvidenceRepositoryFromPort(persistencePort(options), scope);
 
 it.effect('persists validated evidence and resolves the exact tenant/legal-entity reference', () =>
   Effect.gen(function* persistsAndResolves() {
     const inserted: InsertCapture = {};
-    const repository = assortmentDecisionEvidenceRepositoryForScope(fakeTransaction({ inserted }), scope);
+    const repository = repositoryFor({ inserted });
     const reference = yield* repository.persist(storedInput);
     expect(Schema.is(AssortmentConsumerDecisionEvidenceReferenceSchema)(reference)).toBe(true);
     const row = inserted.value;
-    const resolved = yield* assortmentDecisionEvidenceRepositoryForScope(
-      fakeTransaction({ selected: [{ ...row, decisionEvidenceId: referenceId }] }),
-      scope,
-    ).resolve(reference.evidenceRef);
+    if (row === undefined) {
+      throw new Error('expected the persistence port to capture inserted evidence');
+    }
+    const queries: EvidenceLookup[] = [];
+    const resolved = yield* repositoryFor({ queries, selected: [{ ...row, decisionEvidenceId: referenceId }] }).resolve(
+      reference.evidenceRef,
+    );
+    expect(queries).toEqual([{ id: referenceId, legalEntityId, tenantId }]);
     expect(resolved.request).toEqual(request);
     expect(resolved.evidence).toEqual(decision.evidence);
   }),
@@ -128,7 +134,7 @@ it.effect('persists validated evidence and resolves the exact tenant/legal-entit
 
 it.effect('fails closed for wrong reference scope, missing rows, database failures, and tampered evidence', () =>
   Effect.gen(function* failsClosed() {
-    const repository = assortmentDecisionEvidenceRepositoryForScope(fakeTransaction(), scope);
+    const persistenceRepository = repositoryFor();
     const foreign = {
       ...ref(
         'commerce.assortment',
@@ -137,21 +143,18 @@ it.effect('fails closed for wrong reference scope, missing rows, database failur
         '90000000-0000-4000-8000-000000000009',
       ),
     };
-    expect(Schema.is(AssortmentDependencyFailureError)(yield* Effect.flip(repository.resolve(foreign)))).toBe(true);
+    expect(
+      Schema.is(AssortmentDependencyFailureError)(yield* Effect.flip(persistenceRepository.resolve(foreign))),
+    ).toBe(true);
     expect(
       Schema.is(AssortmentDependencyFailureError)(
         yield* Effect.flip(
-          assortmentDecisionEvidenceRepositoryForScope(fakeTransaction(), scope).resolve(
-            ref('commerce.assortment', 'commerce.assortment.decision-evidence', referenceId),
-          ),
+          repositoryFor().resolve(ref('commerce.assortment', 'commerce.assortment.decision-evidence', referenceId)),
         ),
       ),
     ).toBe(true);
 
-    const dbFailure = assortmentDecisionEvidenceRepositoryForScope(
-      fakeTransaction({ selectFailure: new Error('database unavailable') }),
-      scope,
-    );
+    const dbFailure = repositoryFor({ selectFailure: new Error('database unavailable') });
     expect(
       Schema.is(AssortmentDependencyFailureError)(
         yield* Effect.flip(
@@ -172,7 +175,7 @@ it.effect('fails closed for wrong reference scope, missing rows, database failur
     expect(
       Schema.is(AssortmentDependencyFailureError)(
         yield* Effect.flip(
-          assortmentDecisionEvidenceRepositoryForScope(fakeTransaction({ selected: [tampered] }), scope).resolve(
+          repositoryFor({ selected: [tampered] }).resolve(
             ref('commerce.assortment', 'commerce.assortment.decision-evidence', referenceId),
           ),
         ),

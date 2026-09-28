@@ -1,8 +1,3 @@
-/*
- * The adapter translates owner-private Drizzle failures and nullable SQL columns into the
- * exact public configuration union. These rules are intentionally scoped to this boundary.
- */
-// oxlint-disable anti-slop/no-conditional-empty-object-spread, sonarjs/no-duplicate-string -- owner DB adapter normalization; expires: 2027-09-23.
 import type { AssortmentPermissionAccessTarget, OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
 import { DateTime, Effect, Match, Schema } from 'effect';
 import { and, eq } from 'drizzle-orm';
@@ -29,6 +24,8 @@ import { AssortmentPolicyPersistenceUnavailable } from '../../shared/domain/poli
 
 type Failure = InstanceType<typeof AssortmentPolicyPersistenceUnavailable>;
 type ConfigurationResource = AssortmentConfigurationRequest['resource'];
+const AssortmentConfigurationCandidateSchema = Schema.Struct({ configuration: Schema.Unknown });
+type AssortmentConfigurationCandidate = typeof AssortmentConfigurationCandidateSchema.Encoded;
 
 /** The owner-local source must query only the requested resource under the supplied scope. */
 export interface AssortmentConfigurationReadSource {
@@ -39,7 +36,6 @@ export interface AssortmentConfigurationReadSource {
 }
 
 /** The generated API remains fail-closed until an owner read adapter is installed. */
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- ReadRuntime supplies this owner-local service through its scoped read factory.
 export interface AssortmentConfigurationReadService {
   readonly read: (request: AssortmentConfigurationRequest) => Effect.Effect<AssortmentConfigurationResponse, Failure>;
 }
@@ -55,7 +51,10 @@ const unavailable = (cause?: unknown) => {
   return failure;
 };
 
-const ref = (resourceType: string, resourceId: string, tenantId: string, moduleId = 'commerce.assortment') => ({
+const MODULE_ID = 'commerce.assortment';
+const CUSTOMER_CONTEXT_MODULE_ID = 'commerce.customer-context';
+const PARTY_REGISTRY_MODULE_ID = 'party.registry';
+const ref = (resourceType: string, resourceId: string, tenantId: string, moduleId = MODULE_ID) => ({
   moduleId,
   resourceId,
   resourceType,
@@ -79,8 +78,9 @@ const selectorForKind = (kind: AssortmentCatalogSelectorKind, target: ReturnType
     Match.exhaustive,
   );
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Schema is the owner adapter's I/O boundary.
-const decodeConfiguration = (value: unknown): Effect.Effect<AssortmentConfigurationResponse, Failure> =>
+const decodeConfiguration = (
+  value: AssortmentConfigurationCandidate,
+): Effect.Effect<AssortmentConfigurationResponse, Failure> =>
   Schema.decodeUnknownEffect(AssortmentConfigurationResponseSchema)(value).pipe(
     Effect.mapError((cause) => unavailable(cause)),
   );
@@ -117,7 +117,7 @@ const configurationSourceForScope = (
             kind: 'RULE',
             value: {
               createdAt: instant(row.createdAt),
-              ...(retiredAt === undefined ? {} : { retiredAt: instant(retiredAt) }),
+              ...(retiredAt !== undefined && { retiredAt: instant(retiredAt) }),
               stableCode: row.stableCode,
               stableRuleRef: ref(resourceTypes.stableRule, row.stableRuleId, tenant),
             },
@@ -168,7 +168,7 @@ const configurationSourceForScope = (
               effect: row.effect,
               meaningFingerprint: row.semanticFingerprint,
               revision: {
-                ownerModuleId: 'commerce.assortment',
+                ownerModuleId: MODULE_ID,
                 revision: String(row.revisionNumber),
                 sourceRef: ref(resourceTypes.revision, row.ruleRevisionId, tenant),
               },
@@ -219,7 +219,7 @@ const configurationSourceForScope = (
               'commerce.customer-context.customer-group',
               row.customerGroupResourceId ?? '',
               tenant,
-              'commerce.customer-context',
+              CUSTOMER_CONTEXT_MODULE_ID,
             ),
             kind: 'COMMERCE_CUSTOMER_GROUP' as const,
           };
@@ -231,7 +231,7 @@ const configurationSourceForScope = (
                 'party.registry.counterparty',
                 row.subjectResourceId ?? '',
                 tenant,
-                'party.registry',
+                PARTY_REGISTRY_MODULE_ID,
               ),
               kind: 'COUNTERPARTY' as const,
             },
@@ -245,29 +245,25 @@ const configurationSourceForScope = (
                 'commerce.customer-context.retail-customer-profile',
                 row.subjectResourceId ?? '',
                 tenant,
-                'commerce.customer-context',
+                CUSTOMER_CONTEXT_MODULE_ID,
               ),
             },
           };
         }
         const commercialScope = {
           channelRef: ref('commerce.channel.channel', row.channelResourceId, tenant, 'commerce.channel'),
-          sellingLegalEntityRef: ref('party.registry.legal-entity', legalEntityId, tenant, 'party.registry'),
-          ...(row.marketResourceId === null
-            ? {}
-            : {
-                commerceMarketRef: ref('commerce.market.market', row.marketResourceId, tenant, 'commerce.market'),
-              }),
-          ...(row.storefrontResourceId === null
-            ? {}
-            : {
-                storefrontRef: ref(
-                  'commerce.storefront.storefront',
-                  row.storefrontResourceId,
-                  tenant,
-                  'commerce.storefront',
-                ),
-              }),
+          sellingLegalEntityRef: ref('party.registry.legal-entity', legalEntityId, tenant, PARTY_REGISTRY_MODULE_ID),
+          ...(row.marketResourceId !== null && {
+            commerceMarketRef: ref('commerce.market.market', row.marketResourceId, tenant, 'commerce.market'),
+          }),
+          ...(row.storefrontResourceId !== null && {
+            storefrontRef: ref(
+              'commerce.storefront.storefront',
+              row.storefrontResourceId,
+              tenant,
+              'commerce.storefront',
+            ),
+          }),
         };
         const ends = yield* transaction
           .select({ effectiveTo: applicabilityBindingEndFacts.effectiveAt })
@@ -289,9 +285,9 @@ const configurationSourceForScope = (
               bindingRef: ref(resourceTypes.binding, row.applicabilityBindingId, tenant),
               commercialScope,
               effectiveFrom: instant(row.effectiveFrom),
-              ...(ends[0] === undefined ? {} : { effectiveTo: instant(ends[0].effectiveTo) }),
+              ...(ends[0] !== undefined && { effectiveTo: instant(ends[0].effectiveTo) }),
               ruleRevision: {
-                ownerModuleId: 'commerce.assortment',
+                ownerModuleId: MODULE_ID,
                 revision: String(revision.revisionNumber),
                 sourceRef: ref(resourceTypes.revision, revision.ruleRevisionId, tenant),
               },
@@ -332,7 +328,12 @@ const configurationSourceForScope = (
       const subject =
         row.subjectKind === 'COUNTERPARTY'
           ? {
-              counterpartyRef: ref('party.registry.counterparty', row.subjectResourceId, tenant, 'party.registry'),
+              counterpartyRef: ref(
+                'party.registry.counterparty',
+                row.subjectResourceId,
+                tenant,
+                PARTY_REGISTRY_MODULE_ID,
+              ),
               kind: 'COUNTERPARTY' as const,
             }
           : {
@@ -341,7 +342,7 @@ const configurationSourceForScope = (
                 'commerce.customer-context.retail-customer-profile',
                 row.subjectResourceId,
                 tenant,
-                'commerce.customer-context',
+                CUSTOMER_CONTEXT_MODULE_ID,
               ),
             };
       return yield* decodeConfiguration({
@@ -351,26 +352,27 @@ const configurationSourceForScope = (
             boundaryRef: ref(resourceTypes.boundary, row.closedBoundaryId, tenant),
             commercialScope: {
               channelRef: ref('commerce.channel.channel', row.channelResourceId, tenant, 'commerce.channel'),
-              sellingLegalEntityRef: ref('party.registry.legal-entity', legalEntityId, tenant, 'party.registry'),
-              ...(row.marketResourceId === null
-                ? {}
-                : {
-                    commerceMarketRef: ref('commerce.market.market', row.marketResourceId, tenant, 'commerce.market'),
-                  }),
-              ...(row.storefrontResourceId === null
-                ? {}
-                : {
-                    storefrontRef: ref(
-                      'commerce.storefront.storefront',
-                      row.storefrontResourceId,
-                      tenant,
-                      'commerce.storefront',
-                    ),
-                  }),
+              sellingLegalEntityRef: ref(
+                'party.registry.legal-entity',
+                legalEntityId,
+                tenant,
+                PARTY_REGISTRY_MODULE_ID,
+              ),
+              ...(row.marketResourceId !== null && {
+                commerceMarketRef: ref('commerce.market.market', row.marketResourceId, tenant, 'commerce.market'),
+              }),
+              ...(row.storefrontResourceId !== null && {
+                storefrontRef: ref(
+                  'commerce.storefront.storefront',
+                  row.storefrontResourceId,
+                  tenant,
+                  'commerce.storefront',
+                ),
+              }),
             },
             decisionPurpose: row.purpose,
             effectiveFrom: instant(row.effectiveFrom),
-            ...(ends[0] === undefined ? {} : { effectiveTo: instant(ends[0].effectiveTo) }),
+            ...(ends[0] !== undefined && { effectiveTo: instant(ends[0].effectiveTo) }),
             meaningFingerprint: row.semanticFingerprint,
             subject,
           },
@@ -383,7 +385,7 @@ const configurationSourceForScope = (
 export const assortmentConfigurationReadSourceForScope = configurationSourceForScope;
 
 const isOwnedResource = (resource: ConfigurationResource): boolean =>
-  resource.moduleId === 'commerce.assortment' &&
+  resource.moduleId === MODULE_ID &&
   [
     'commerce.assortment.stable-rule',
     'commerce.assortment.rule-revision',

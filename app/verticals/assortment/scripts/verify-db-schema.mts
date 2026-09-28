@@ -3,7 +3,8 @@ import { DatabaseConfig, loadDatabaseConnectionPair } from '@app/core-runtime';
 import { sql } from 'drizzle-orm';
 import { Array as EffectArray, Effect, Layer, Order, Schema } from 'effect';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import { AssortmentDatabase, AssortmentDatabaseLive } from '../src/database/client.ts';
+import { Reactivity } from 'effect/unstable/reactivity';
+import { AssortmentDatabase, AssortmentDatabaseLive, AssortmentPgClientLive } from '../src/database/client.ts';
 import {
   ASSORTMENT_SCHEMA_NAME,
   ASSORTMENT_TABLES,
@@ -124,7 +125,13 @@ const verification = Effect.gen(function* verifyAssortmentDatabase() {
 });
 
 const runtime = AssortmentDatabaseLive.pipe(
-  Layer.provide(Layer.effect(DatabaseConfig, loadDatabaseConnectionPair().pipe(Effect.map(({ admin }) => admin)))),
+  Layer.provide(AssortmentPgClientLive),
+  Layer.provide(
+    Layer.mergeAll(
+      Layer.effect(DatabaseConfig, loadDatabaseConnectionPair().pipe(Effect.map(({ admin }) => admin))),
+      Reactivity.layer,
+    ),
+  ),
 );
 const result = await Effect.runPromise(Effect.provide(verification, runtime));
 console.log(`Verified ${result.typedTableCount} typed tables in PostgreSQL schema ${ASSORTMENT_SCHEMA_NAME}`);

@@ -11,7 +11,6 @@ import type {
 import { assortmentApiContract, assortmentApi, assortmentOperationContexts } from '../../shared/api';
 import type { OperationContext, AssortmentReadiness } from '../../shared/api';
 
-// oxlint-disable-next-line effect-native/no-scattered-browser-effect-run -- Generated compatibility surface retained until consumers use the centralized browser runtime.
 export { Effect, runEffectRequest } from '@modern-js/bff-effect/effect-client';
 
 // <generated-action-http-client-exports>
@@ -44,7 +43,6 @@ export interface AssortmentClientOptions {
   baseUrl?: string | URL;
   locale?: string;
   operationContext?: OperationContext;
-  // oxlint-disable-next-line effect-native/no-threaded-correlation-parameter -- Caller-provided W3C wire header consumed by the generated HTTP transport.
   traceparent?: string;
 }
 
@@ -62,7 +60,6 @@ export const createAssortmentClient = (
     if (options.traceparent !== undefined) {
       Object.assign(requestContext, { traceparent: options.traceparent });
     }
-    // oxlint-disable-next-line effect-native/no-per-operation-http-api-client -- Generated public factory binds caller-specific base URL and request metadata for one operation.
     return yield* makeEffectHttpApiClient(assortmentApi, {
       baseUrl: options.baseUrl ?? assortmentApiContract.apiPrefix,
       requestContext,
@@ -72,7 +69,6 @@ export const createAssortmentClient = (
 export const getAssortmentReadiness = (
   options: AssortmentClientOptions = {},
 ): AssortmentClientEffect<AssortmentReadiness> =>
-  // oxlint-disable-next-line effect-native/no-per-operation-http-api-client -- Generated wrapper delegates caller-specific transport metadata without shared cross-request state.
   createAssortmentClient({
     ...options,
     operationContext: options.operationContext ?? assortmentOperationContexts.readiness,

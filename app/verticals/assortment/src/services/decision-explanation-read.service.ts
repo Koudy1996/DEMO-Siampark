@@ -29,7 +29,6 @@ export type AssortmentStoredDecisionEvidence = Readonly<{
   readonly outcome: 'ELIGIBLE' | 'INELIGIBLE' | 'INDETERMINATE';
   readonly request: AssortmentDecisionRequest;
 }>;
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- the evidence reader is an owner-local Core port supplied by the read factory.
 export interface AssortmentDecisionEvidenceResolver {
   readonly resolve: (
     reference: AssortmentOwnerResourceRef,

@@ -37,8 +37,6 @@ const GOVERNED_HANDLER_LAYER_SLOT_START = '// <generated-governed-http-handler-l
 const GOVERNED_HANDLER_LAYER_SLOT_END = '// </generated-governed-http-handler-layers>';
 const HTTP_API_CONTRACT_MODULE = 'effect/unstable/httpapi';
 const GOVERNED_HTTP_API_IDENTITY_ALIAS = 'governedHttpApiIdentity';
-const PUBLIC_CONTRACT_SHIM_LINT =
-  '/* eslint-disable oxc/no-barrel-file, sonarjs/no-wildcard-import -- This generated owner shim preserves one canonical public contract source without copying schemas; expires: 2027-03-31. */';
 
 const GovernedReadKindSchema = Schema.Literals([MODULE_API_KIND, REPORT_KIND, SEARCH_PROVIDER_KIND]);
 type GovernedReadKind = typeof GovernedReadKindSchema.Type;
@@ -1999,8 +1997,7 @@ const publicContractSpecifier = (source: string): string | undefined =>
     ?.specifier;
 
 const isExactPublicContractShim = (source: string, header: string, specifier: string): boolean =>
-  source ===
-  `${header}// @ontos-public-contract ${specifier}\n${PUBLIC_CONTRACT_SHIM_LINT}\nexport * from '${specifier}';\n`;
+  source === `${header}// @ontos-public-contract ${specifier}\nexport * from '${specifier}';\n`;
 
 const publicContractSpecifierParts = (specifier: string): PublicContractSpecifierParts | undefined => {
   const [scope, packageStem, ...subpathSegments] = specifier.split('/');

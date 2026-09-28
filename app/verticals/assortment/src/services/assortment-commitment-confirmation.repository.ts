@@ -33,47 +33,29 @@ const unavailable = (cause?: unknown) => {
 
 const encodeOwnerRef = (value: typeof AssortmentOwnerResourceRefSchema.Type) =>
   Schema.encodeUnknownEffect(Schema.toCodecJson(AssortmentOwnerResourceRefSchema))(value).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is validated by the owner codec.
-    Effect.flatMap((encoded) => Schema.decodeEffect(Schema.Json)(encoded)),
     Effect.mapError(unavailable),
   );
 const encodeConstituent = (value: typeof AssortmentPurchaseConstituentSchema.Type) =>
   Schema.encodeUnknownEffect(Schema.toCodecJson(AssortmentPurchaseConstituentSchema))(value).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is validated by the owner codec.
-    Effect.flatMap((encoded) => Schema.decodeEffect(Schema.Json)(encoded)),
     Effect.mapError(unavailable),
   );
 const encodeCandidate = (value: typeof AssortmentCandidateSchema.Type) =>
-  Schema.encodeUnknownEffect(Schema.toCodecJson(AssortmentCandidateSchema))(value).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is validated by the owner codec.
-    Effect.flatMap((encoded) => Schema.decodeEffect(Schema.Json)(encoded)),
-    Effect.mapError(unavailable),
-  );
+  Schema.encodeUnknownEffect(Schema.toCodecJson(AssortmentCandidateSchema))(value).pipe(Effect.mapError(unavailable));
 const encodeEvidenceReference = (value: typeof AssortmentEvidenceReferenceSchema.Type) =>
   Schema.encodeUnknownEffect(Schema.toCodecJson(AssortmentEvidenceReferenceSchema))(value).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is validated by the owner codec.
-    Effect.flatMap((encoded) => Schema.decodeEffect(Schema.Json)(encoded)),
     Effect.mapError(unavailable),
   );
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is decoded at this persistence boundary; expires: 2027-09-24.
-const decodeOwnerRef = (value: unknown) =>
-  Schema.decodeUnknownEffect(Schema.toCodecJson(AssortmentOwnerResourceRefSchema))(value).pipe(
+const decodeOwnerRef = (value: Schema.Json) =>
+  Schema.decodeEffect(Schema.toCodecJson(AssortmentOwnerResourceRefSchema))(value).pipe(Effect.mapError(unavailable));
+const decodeConstituent = (value: Schema.Json) =>
+  Schema.decodeEffect(Schema.toCodecJson(AssortmentPurchaseConstituentSchema))(value).pipe(
     Effect.mapError(unavailable),
   );
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is decoded at this persistence boundary; expires: 2027-09-24.
-const decodeConstituent = (value: unknown) =>
-  Schema.decodeUnknownEffect(Schema.toCodecJson(AssortmentPurchaseConstituentSchema))(value).pipe(
-    Effect.mapError(unavailable),
-  );
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is decoded at this persistence boundary; expires: 2027-09-24.
-const decodeCandidate = (value: unknown) =>
-  Schema.decodeUnknownEffect(Schema.toCodecJson(AssortmentCandidateSchema))(value).pipe(Effect.mapError(unavailable));
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is decoded at this persistence boundary; expires: 2027-09-24.
-const decodeEvidenceReference = (value: unknown) =>
-  Schema.decodeUnknownEffect(Schema.toCodecJson(AssortmentEvidenceReferenceSchema))(value).pipe(
-    Effect.mapError(unavailable),
-  );
+const decodeCandidate = (value: Schema.Json) =>
+  Schema.decodeEffect(Schema.toCodecJson(AssortmentCandidateSchema))(value).pipe(Effect.mapError(unavailable));
+const decodeEvidenceReference = (value: Schema.Json) =>
+  Schema.decodeEffect(Schema.toCodecJson(AssortmentEvidenceReferenceSchema))(value).pipe(Effect.mapError(unavailable));
 
 const ownerRefEquivalence = Schema.toEquivalence(AssortmentOwnerResourceRefSchema);
 const constituentEquivalence = Schema.toEquivalence(AssortmentPurchaseConstituentSchema);
@@ -82,7 +64,7 @@ const evidenceReferenceEquivalence = Schema.toEquivalence(AssortmentEvidenceRefe
 
 type ScopedTransaction = Parameters<ReadServiceFactory<Readonly<Record<string, never>>>>[0];
 
-type ConfirmationRow = Pick<
+export type ConfirmationRow = Pick<
   typeof commitmentConfirmations.$inferSelect,
   | 'actionInvocationId'
   | 'actorPrincipalId'
@@ -99,6 +81,38 @@ type ConfirmationRow = Pick<
   | 'prospectiveMeaningJson'
   | 'tenantId'
 >;
+
+export type CommitmentConfirmationInsert = Pick<
+  typeof commitmentConfirmations.$inferInsert,
+  | 'actionInvocationId'
+  | 'actorPrincipalId'
+  | 'attemptModuleId'
+  | 'attemptResourceId'
+  | 'attemptResourceType'
+  | 'candidateJson'
+  | 'commitmentConfirmationId'
+  | 'constituentFingerprint'
+  | 'constituentJson'
+  | 'decisionEvidenceJson'
+  | 'expiresAt'
+  | 'issuedAt'
+  | 'legalEntityId'
+  | 'prospectiveMeaningJson'
+  | 'tenantId'
+>;
+
+export interface AssortmentCommitmentConfirmationPersistencePort {
+  readonly findByInvocation: (
+    query: Readonly<{
+      readonly actionInvocationId: string;
+      readonly legalEntityId: string;
+      readonly tenantId: string;
+    }>,
+  ) => Effect.Effect<readonly ConfirmationRow[], InstanceType<typeof AssortmentCommitmentConfirmationUnavailable>>;
+  readonly insert: (
+    record: CommitmentConfirmationInsert,
+  ) => Effect.Effect<boolean, InstanceType<typeof AssortmentCommitmentConfirmationUnavailable>>;
+}
 
 const decodeConfirmationRow = Effect.fn('AssortmentCommitmentConfirmationRepository.decodeConfirmationRow')(
   function* decodeStoredConfirmation(row: ConfirmationRow) {
@@ -155,45 +169,67 @@ const replayConflict = () =>
     reason: 'Confirmation action invocation was already used with a different payload or actor',
   });
 
-const storedConfirmation = (
+const persistencePortForTransaction = (
   transaction: ScopedTransaction,
+): AssortmentCommitmentConfirmationPersistencePort => ({
+  findByInvocation: ({ actionInvocationId, legalEntityId, tenantId }) =>
+    transaction
+      .select({
+        actionInvocationId: commitmentConfirmations.actionInvocationId,
+        actorPrincipalId: commitmentConfirmations.actorPrincipalId,
+        attemptModuleId: commitmentConfirmations.attemptModuleId,
+        attemptResourceId: commitmentConfirmations.attemptResourceId,
+        attemptResourceType: commitmentConfirmations.attemptResourceType,
+        candidateJson: commitmentConfirmations.candidateJson,
+        commitmentConfirmationId: commitmentConfirmations.commitmentConfirmationId,
+        constituentJson: commitmentConfirmations.constituentJson,
+        decisionEvidenceJson: commitmentConfirmations.decisionEvidenceJson,
+        expiresAt: commitmentConfirmations.expiresAt,
+        issuedAt: commitmentConfirmations.issuedAt,
+        legalEntityId: commitmentConfirmations.legalEntityId,
+        prospectiveMeaningJson: commitmentConfirmations.prospectiveMeaningJson,
+        tenantId: commitmentConfirmations.tenantId,
+      })
+      .from(commitmentConfirmations)
+      .where(
+        and(
+          eq(commitmentConfirmations.actionInvocationId, actionInvocationId),
+          eq(commitmentConfirmations.tenantId, tenantId),
+          eq(commitmentConfirmations.legalEntityId, legalEntityId),
+        ),
+      )
+      .limit(1)
+      .pipe(Effect.mapError(unavailable)),
+  insert: (record) =>
+    transaction
+      .insert(commitmentConfirmations)
+      .values(record)
+      .onConflictDoNothing({
+        target: [
+          commitmentConfirmations.tenantId,
+          commitmentConfirmations.legalEntityId,
+          commitmentConfirmations.actionInvocationId,
+        ],
+      })
+      .returning({ commitmentConfirmationId: commitmentConfirmations.commitmentConfirmationId })
+      .pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(unavailable),
+      ),
+});
+
+const storedConfirmation = (
+  persistence: AssortmentCommitmentConfirmationPersistencePort,
   scope: OperationalScope,
   legalEntityId: string,
   actionInvocationId: string,
-) =>
-  transaction
-    .select({
-      actionInvocationId: commitmentConfirmations.actionInvocationId,
-      actorPrincipalId: commitmentConfirmations.actorPrincipalId,
-      attemptModuleId: commitmentConfirmations.attemptModuleId,
-      attemptResourceId: commitmentConfirmations.attemptResourceId,
-      attemptResourceType: commitmentConfirmations.attemptResourceType,
-      candidateJson: commitmentConfirmations.candidateJson,
-      commitmentConfirmationId: commitmentConfirmations.commitmentConfirmationId,
-      constituentJson: commitmentConfirmations.constituentJson,
-      decisionEvidenceJson: commitmentConfirmations.decisionEvidenceJson,
-      expiresAt: commitmentConfirmations.expiresAt,
-      issuedAt: commitmentConfirmations.issuedAt,
-      legalEntityId: commitmentConfirmations.legalEntityId,
-      prospectiveMeaningJson: commitmentConfirmations.prospectiveMeaningJson,
-      tenantId: commitmentConfirmations.tenantId,
-    })
-    .from(commitmentConfirmations)
-    .where(
-      and(
-        eq(commitmentConfirmations.actionInvocationId, actionInvocationId),
-        eq(commitmentConfirmations.tenantId, scope.tenantId),
-        eq(commitmentConfirmations.legalEntityId, legalEntityId),
-      ),
-    )
-    .limit(1)
-    .pipe(Effect.mapError(unavailable));
+) => persistence.findByInvocation({ actionInvocationId, legalEntityId, tenantId: scope.tenantId });
 
-export const assortmentCommitmentConfirmationRepositoryForScope = (
-  transaction: ScopedTransaction,
+export const assortmentCommitmentConfirmationRepositoryFromPort = (
+  persistence: AssortmentCommitmentConfirmationPersistencePort,
   scope: OperationalScope,
 ): AssortmentCommitmentConfirmationRepository => ({
-  persist: Effect.fn('assortmentCommitmentConfirmationRepositoryForScope.persist')(
+  persist: Effect.fn('assortmentCommitmentConfirmationRepositoryFromPort.persist')(
     function* persistConfirmation(payload, result, persistenceScope, metadata) {
       if (
         persistenceScope.legalEntityId === undefined ||
@@ -213,40 +249,29 @@ export const assortmentCommitmentConfirmationRepositoryForScope = (
         ],
         { concurrency: 4 },
       );
-      const rows = yield* transaction
-        .insert(commitmentConfirmations)
-        .values({
-          actionInvocationId: metadata.actionInvocationId,
-          actorPrincipalId: metadata.actorPrincipalId,
-          attemptModuleId: payload.attemptRef.moduleId,
-          attemptResourceId: payload.attemptRef.resourceId,
-          attemptResourceType: payload.attemptRef.resourceType,
-          candidateJson,
-          commitmentConfirmationId: result.confirmationRef.resourceId,
-          constituentFingerprint: assortmentMeaningFingerprint(payload.constituent),
-          constituentJson,
-          decisionEvidenceJson,
-          expiresAt: DateTime.toDateUtc(result.expiresAt),
-          issuedAt: DateTime.toDateUtc(result.issuedAt),
-          legalEntityId: persistenceScope.legalEntityId,
-          prospectiveMeaningJson,
-          tenantId: persistenceScope.tenantId,
-        })
-        .onConflictDoNothing({
-          target: [
-            commitmentConfirmations.tenantId,
-            commitmentConfirmations.legalEntityId,
-            commitmentConfirmations.actionInvocationId,
-          ],
-        })
-        .returning({ commitmentConfirmationId: commitmentConfirmations.commitmentConfirmationId })
-        .pipe(Effect.mapError(unavailable));
-      if (rows.length > 0) {
+      const inserted = yield* persistence.insert({
+        actionInvocationId: metadata.actionInvocationId,
+        actorPrincipalId: metadata.actorPrincipalId,
+        attemptModuleId: payload.attemptRef.moduleId,
+        attemptResourceId: payload.attemptRef.resourceId,
+        attemptResourceType: payload.attemptRef.resourceType,
+        candidateJson,
+        commitmentConfirmationId: result.confirmationRef.resourceId,
+        constituentFingerprint: assortmentMeaningFingerprint(payload.constituent),
+        constituentJson,
+        decisionEvidenceJson,
+        expiresAt: DateTime.toDateUtc(result.expiresAt),
+        issuedAt: DateTime.toDateUtc(result.issuedAt),
+        legalEntityId: persistenceScope.legalEntityId,
+        prospectiveMeaningJson,
+        tenantId: persistenceScope.tenantId,
+      });
+      if (inserted) {
         return result;
       }
 
       const [row] = yield* storedConfirmation(
-        transaction,
+        persistence,
         scope,
         persistenceScope.legalEntityId,
         metadata.actionInvocationId,
@@ -259,3 +284,9 @@ export const assortmentCommitmentConfirmationRepositoryForScope = (
     },
   ),
 });
+
+export const assortmentCommitmentConfirmationRepositoryForScope = (
+  transaction: ScopedTransaction,
+  scope: OperationalScope,
+): AssortmentCommitmentConfirmationRepository =>
+  assortmentCommitmentConfirmationRepositoryFromPort(persistencePortForTransaction(transaction), scope);

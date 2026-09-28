@@ -1,6 +1,5 @@
-/* oxlint-disable anti-slop-effect/no-service-constructor-imports -- The owner-local transaction factory composes explicit source and repository seams; expires: 2027-09-23. */
 import type { OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
-import { DateTime, Effect, Result, Schema } from 'effect';
+import { DateTime, Effect, Option, Result, Schema } from 'effect';
 import { and, eq } from 'drizzle-orm';
 import {
   AssortmentDecisionEvidenceSchema,
@@ -39,6 +38,35 @@ export type AssortmentPersistedDecisionEvidence = Readonly<{
   readonly outcome: 'ELIGIBLE' | 'INELIGIBLE';
   readonly request: AssortmentDecisionRequest;
 }>;
+
+export type AssortmentDecisionEvidenceInsert = Readonly<{
+  readonly decisionJson: Schema.Json;
+  readonly legalEntityId: string;
+  readonly outcome: 'ELIGIBLE' | 'INELIGIBLE';
+  readonly requestFingerprint: string;
+  readonly requestJson: Schema.Json;
+  readonly tenantId: string;
+}>;
+
+export type AssortmentDecisionEvidenceRow = Readonly<{
+  readonly decisionEvidenceId: string;
+  readonly decisionJson: Schema.Json;
+  readonly legalEntityId: string;
+  readonly outcome: string;
+  readonly requestFingerprint: string;
+  readonly requestJson: Schema.Json;
+  readonly tenantId: string;
+}>;
+
+/** Narrow transaction-scoped query seam for persistence behavior and owner-focused tests. */
+export interface AssortmentDecisionEvidencePersistencePort {
+  readonly find: (
+    query: Readonly<{ readonly id: string; readonly legalEntityId: string; readonly tenantId: string }>,
+  ) => Effect.Effect<readonly AssortmentDecisionEvidenceRow[], AssortmentOwnerFailure>;
+  readonly insert: (
+    record: AssortmentDecisionEvidenceInsert,
+  ) => Effect.Effect<Option.Option<string>, AssortmentOwnerFailure>;
+}
 
 const ownerModuleId = Result.getOrThrow(Schema.decodeResult(AssortmentOwnerModuleIdSchema)(MODULE_ID));
 
@@ -89,26 +117,16 @@ const requestOf = (input: PersistableDecision): AssortmentDecisionRequest => inp
 const evidenceOf = (input: PersistableDecision): AssortmentGovernedDecision => input.decision;
 
 const encodeDecision = (decision: AssortmentGovernedDecision) =>
-  Schema.encodeUnknownEffect(DecisionJsonCodec)(decision).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is opaque only after the governed codec validated the evidence.
-    Effect.flatMap((value) => Schema.decodeEffect(Schema.Json)(value)),
-    Effect.mapError(unavailable),
-  );
+  Schema.encodeUnknownEffect(DecisionJsonCodec)(decision).pipe(Effect.mapError(unavailable));
 
 const encodeRequest = (request: AssortmentDecisionRequest) =>
-  Schema.encodeUnknownEffect(RequestJsonCodec)(request).pipe(
-    // oxlint-disable-next-line effect-native/no-json-schema-as-document-contract -- JSONB is opaque only after the governed codec validated the request.
-    Effect.flatMap((value) => Schema.decodeEffect(Schema.Json)(value)),
-    Effect.mapError(unavailable),
-  );
+  Schema.encodeUnknownEffect(RequestJsonCodec)(request).pipe(Effect.mapError(unavailable));
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is parsed at this repository boundary.
-const decodeDecision = (value: unknown) =>
-  Schema.decodeUnknownEffect(DecisionJsonCodec)(value).pipe(Effect.mapError(unavailable));
+const decodeDecision = (value: Schema.Json) =>
+  Schema.decodeEffect(DecisionJsonCodec)(value).pipe(Effect.mapError(unavailable));
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONB is parsed at this repository boundary.
-const decodeRequest = (value: unknown) =>
-  Schema.decodeUnknownEffect(RequestJsonCodec)(value).pipe(Effect.mapError(unavailable));
+const decodeRequest = (value: Schema.Json) =>
+  Schema.decodeEffect(RequestJsonCodec)(value).pipe(Effect.mapError(unavailable));
 
 const storedEvidence = (
   decision: AssortmentGovernedDecision,
@@ -127,8 +145,43 @@ const storedEvidence = (
   return Effect.succeed({ evidence: decision.evidence, outcome: decision.outcome, request });
 };
 
-export const assortmentDecisionEvidenceRepositoryForScope = (
+const persistencePortForTransaction = (
   transaction: ScopedTransactionExecutor,
+): AssortmentDecisionEvidencePersistencePort => ({
+  find: ({ id, legalEntityId, tenantId }) =>
+    transaction
+      .select({
+        decisionEvidenceId: decisionEvidence.decisionEvidenceId,
+        decisionJson: decisionEvidence.decisionJson,
+        legalEntityId: decisionEvidence.legalEntityId,
+        outcome: decisionEvidence.outcome,
+        requestFingerprint: decisionEvidence.requestFingerprint,
+        requestJson: decisionEvidence.requestJson,
+        tenantId: decisionEvidence.tenantId,
+      })
+      .from(decisionEvidence)
+      .where(
+        and(
+          eq(decisionEvidence.decisionEvidenceId, id),
+          eq(decisionEvidence.tenantId, tenantId),
+          eq(decisionEvidence.legalEntityId, legalEntityId),
+        ),
+      )
+      .limit(1)
+      .pipe(Effect.mapError(unavailable)),
+  insert: (record) =>
+    transaction
+      .insert(decisionEvidence)
+      .values(record)
+      .returning({ decisionEvidenceId: decisionEvidence.decisionEvidenceId })
+      .pipe(
+        Effect.map((rows) => Option.fromUndefinedOr(rows[0]?.decisionEvidenceId)),
+        Effect.mapError(unavailable),
+      ),
+});
+
+export const assortmentDecisionEvidenceRepositoryFromPort = (
+  persistence: AssortmentDecisionEvidencePersistencePort,
   scope: OperationalScope,
 ): AssortmentDecisionEvidenceStore & {
   readonly resolve: (
@@ -150,23 +203,19 @@ export const assortmentDecisionEvidenceRepositoryForScope = (
     const [decisionJson, requestJson] = yield* Effect.all([encodeDecision(decision), encodeRequest(request)], {
       concurrency: 2,
     });
-    const [row] = yield* transaction
-      .insert(decisionEvidence)
-      .values({
-        decisionJson,
-        legalEntityId,
-        outcome: decision.outcome,
-        requestFingerprint: assortmentDecisionRequestFingerprint(request),
-        requestJson,
-        tenantId: scope.tenantId,
-      })
-      .returning({ decisionEvidenceId: decisionEvidence.decisionEvidenceId })
-      .pipe(Effect.mapError(unavailable));
-    if (row === undefined) {
+    const insertedId = yield* persistence.insert({
+      decisionJson,
+      legalEntityId,
+      outcome: decision.outcome,
+      requestFingerprint: assortmentDecisionRequestFingerprint(request),
+      requestJson,
+      tenantId: scope.tenantId,
+    });
+    if (Option.isNone(insertedId)) {
       return yield* unavailable();
     }
     return yield* Schema.decodeEffect(AssortmentConsumerDecisionEvidenceReferenceSchema)(
-      decisionEvidenceReference(scope.tenantId, row.decisionEvidenceId),
+      decisionEvidenceReference(scope.tenantId, insertedId.value),
     ).pipe(Effect.mapError(unavailable));
   }),
   resolve: Effect.fn('assortmentDecisionEvidenceRepositoryForScope.resolve')(
@@ -179,25 +228,11 @@ export const assortmentDecisionEvidenceRepositoryForScope = (
       ) {
         return yield* unavailable();
       }
-      const [row] = yield* transaction
-        .select({
-          decisionJson: decisionEvidence.decisionJson,
-          legalEntityId: decisionEvidence.legalEntityId,
-          outcome: decisionEvidence.outcome,
-          requestFingerprint: decisionEvidence.requestFingerprint,
-          requestJson: decisionEvidence.requestJson,
-          tenantId: decisionEvidence.tenantId,
-        })
-        .from(decisionEvidence)
-        .where(
-          and(
-            eq(decisionEvidence.decisionEvidenceId, reference.resourceId),
-            eq(decisionEvidence.tenantId, scope.tenantId),
-            eq(decisionEvidence.legalEntityId, scope.legalEntityId),
-          ),
-        )
-        .limit(1)
-        .pipe(Effect.mapError(unavailable));
+      const [row] = yield* persistence.find({
+        id: reference.resourceId,
+        legalEntityId: scope.legalEntityId,
+        tenantId: scope.tenantId,
+      });
       if (row === undefined || row.tenantId !== scope.tenantId || row.legalEntityId !== scope.legalEntityId) {
         return yield* unavailable();
       }
@@ -209,6 +244,11 @@ export const assortmentDecisionEvidenceRepositoryForScope = (
     },
   ),
 });
+
+export const assortmentDecisionEvidenceRepositoryForScope = (
+  transaction: ScopedTransactionExecutor,
+  scope: OperationalScope,
+) => assortmentDecisionEvidenceRepositoryFromPort(persistencePortForTransaction(transaction), scope);
 
 export const assortmentDecisionEvaluationForScope = (transaction: ScopedTransactionExecutor, scope: OperationalScope) =>
   makeAssortmentDecisionEvaluation({

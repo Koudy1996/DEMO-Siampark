@@ -63,7 +63,6 @@ const MAX_VALIDITY_MILLIS = 30_000;
 // transaction-scoped service factory without leaking a global DB capability.
 type ScopedTransaction = Parameters<ReadServiceFactory<Readonly<Record<string, never>>>>[0];
 
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- Owner-local positive evidence is an explicit injected seam until the upstream commerce proof owner is available; expires: 2027-03-31.
 export interface AssortmentCommitmentConfirmationEvaluationPort {
   readonly evaluate: (
     payload: AssortmentCommitmentConfirmationPayload,
@@ -82,7 +81,6 @@ type AssortmentCommitmentConfirmationEvaluation = Readonly<{
   readonly prospectivePurchaseMeaningRef: AssortmentCommitmentConfirmationPayload['prospectivePurchaseMeaningRef'];
 }>;
 
-// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- Owner-local persistence is an explicit transaction-scoped seam supplied by the Action factory; expires: 2027-03-31.
 export interface AssortmentCommitmentConfirmationRepository {
   readonly persist: (
     payload: AssortmentCommitmentConfirmationPayload,
@@ -125,8 +123,10 @@ const scopeMatches = (payload: AssortmentCommitmentConfirmationPayload, scope: O
   payload.candidate.commercialScope.sellingLegalEntityRef.tenantId === scope.tenantId &&
   payload.candidate.commercialScope.sellingLegalEntityRef.resourceId === scope.legalEntityId;
 
-const invalid = (reason: string) =>
-  new AssortmentCommitmentConfirmationInvalid({ code: 'assortment_confirmation_invalid', reason });
+const invalid = (reason: string, cause?: unknown) => {
+  const failure = new AssortmentCommitmentConfirmationInvalid({ code: 'assortment_confirmation_invalid', reason });
+  return cause === undefined ? failure : Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
+};
 
 const INCOMPLETE_EVIDENCE_REASON = 'Current positive purchase evidence is not complete and authoritative';
 
@@ -242,7 +242,6 @@ const issue = Effect.fn('AssortmentCommitmentConfirmationService.issue')(functio
   scope: OperationalScope,
   now: DateTime.Utc,
   evaluation: AssortmentCommitmentConfirmationEvaluationPort,
-  // oxlint-disable-next-line effect-native/no-dependency-parameters -- This repository is the explicit transaction-scoped owner seam for one issuance; expires: 2027-03-31.
   repository: AssortmentCommitmentConfirmationRepository,
   metadata: AssortmentCommitmentConfirmationPersistenceMetadata,
 ) {
@@ -260,8 +259,7 @@ const issue = Effect.fn('AssortmentCommitmentConfirmationService.issue')(functio
     return yield* invalid(INCOMPLETE_EVIDENCE_REASON);
   }
   const constructedEvidence = yield* constructAssortmentSuccessfulAttemptEvidence(evaluated.attemptEvidence).pipe(
-    // oxlint-disable-next-line effect-native/no-failure-discarding-error-callback -- Internal evidence construction details collapse to a safe owner error; expires: 2027-03-31.
-    Effect.mapError(() => invalid(INCOMPLETE_EVIDENCE_REASON)),
+    Effect.mapError((cause) => invalid(INCOMPLETE_EVIDENCE_REASON, cause)),
   );
   const ordinaryResolution = resolveAssortmentOrdinary(evaluated.ordinaryInput);
   const decisionEvidence = constructedEvidence.decision.evidence;
@@ -285,18 +283,13 @@ const issue = Effect.fn('AssortmentCommitmentConfirmationService.issue')(functio
     expiresAt: DateTime.formatIso(expiresAt),
     issuedAt: DateTime.formatIso(issuedAt),
     prospectivePurchaseMeaningRef: payload.prospectivePurchaseMeaningRef,
-  }).pipe(
-    // oxlint-disable-next-line effect-native/no-failure-discarding-error-callback -- Schema details never cross the owner boundary; expires: 2027-03-31.
-    Effect.mapError(() => invalid('Confirmation contract validation failed')),
-  );
+  }).pipe(Effect.mapError((cause) => invalid('Confirmation contract validation failed', cause)));
   return yield* repository.persist(payload, result, scope, metadata);
 });
 
-// oxlint-disable-next-line effect-native/no-wide-factory-signature -- Scope, evaluator, and repository are the explicit owner-local deployment seams; expires: 2027-03-31.
 export const makeAssortmentCommitmentConfirmationService = (
   scope: OperationalScope,
   evaluation: AssortmentCommitmentConfirmationEvaluationPort = unavailableEvaluation,
-  // oxlint-disable-next-line effect-native/no-dependency-parameters -- The repository is a transaction-scoped owner seam supplied by the generated Action factory; expires: 2027-03-31.
   repository: AssortmentCommitmentConfirmationRepository = unavailableRepository,
 ): AssortmentCommitmentConfirmationIssuer => ({
   issue: Effect.fn('AssortmentCommitmentConfirmationService.issueWithClock')(
