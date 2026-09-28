@@ -1,12 +1,29 @@
 name: Ultramodern Workspace Gates and Main-to-Stage Deploy
 
+# Repository-root documentation feeds no app check (app/ tools read app/AGENTS.md, not the root one).
 on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - CONTEXT-MAP.md
+      - README.md
+      - AGENTS.md
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - CONTEXT-MAP.md
+      - README.md
+      - AGENTS.md
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Deploy the whole stage topology instead of the diff since the last successful stage deployment (seeding or rewritten history).
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,36 +45,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Format
-            command: pnpm format:check
           - name: Effect Rule Implementation
             command: pnpm typecheck:lint-rules && pnpm test:lint-rules
-          - name: Lint
-            command: pnpm lint
           - name: Typecheck
             command: pnpm typecheck
-          - name: Skills
-            command: pnpm skills:check
-          - name: I18n Boundaries
-            command: pnpm i18n:boundaries
-          - name: API Boundaries
-            command: pnpm api:check
           - name: OntOS API Boundary Rules
             command: pnpm api:check:ontos
           - name: Database Access Boundaries
             command: pnpm database-access:check
-          - name: Lean Core Dependencies
-            command: pnpm lean-core:check
           - name: Module Entrypoint Contracts
             command: pnpm module-entrypoints:check
-          - name: Module Contract Generation
-            command: pnpm check:module-contracts
-          - name: Workspace Contract
-            command: pnpm contract:check
           - name: Complete Unit and Component Tests
             command: pnpm test:unit
-          - name: Action Unit Tests
-            command: pnpm action:test:unit
           - name: Repository Tooling Tests
             command: pnpm test:scripts
           - name: Deployment Impact Planner Tests
@@ -76,17 +75,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "26.7.0"
-
-      - name: Setup mise
-        uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566 # v3.2.0
-
-      - name: Install dependencies from the frozen lockfile
-        working-directory: app
-        run: mise exec -- pnpm install --frozen-lockfile
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
 
       - name: Run ${{ matrix.name }}
         working-directory: app
@@ -94,6 +84,92 @@ jobs:
           MODERN_PUBLIC_SITE_URL: http://localhost:8080
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- ${{ matrix.command }}
+
+  static-contracts:
+    name: Static Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODERN_PUBLIC_SITE_URL: http://localhost:8080
+      ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Keep package manifests, lockfiles, and hook configs out of the repository root
+        run: |
+          stray="$(
+            git ls-files -- ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/npm-shrinkwrap.json' \
+              ':(glob)**/pnpm-lock.yaml' ':(glob)**/pnpm-workspace.yaml' ':(glob)**/yarn.lock' ':(glob)**/bun.lock*' \
+              ':(exclude)app/**'
+            git ls-files -- ':(glob)**/lefthook.yml' ':(glob)**/lefthook.yaml' ':(glob)**/.lefthook.yml' \
+              ':(glob)**/.lefthook.yaml' ':(exclude,top)lefthook.yml'
+          )"
+          if [[ -n "$stray" ]]; then
+            echo "::error::The app workspace lives in app/ and its git hooks in the root lefthook.yml. Move or delete:"
+            echo "$stray"
+            exit 1
+          fi
+
+      - name: Install the app workspace
+        id: install
+        uses: ./.github/actions/install-app
+
+      # Each check is a step, not a job: they take seconds, so a job each paid the install many times over.
+      # Every step runs after a successful install, so one run reports every failing check.
+      - name: Validate the root lefthook config
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: app/node_modules/.bin/lefthook validate
+
+      # The pre-commit hook is the format and lint gate, run from the git root exactly as a commit runs it.
+      - name: Format and Lint through the pre-commit hook on every file
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          mise exec --cd app -- sh -c 'cd .. && app/node_modules/.bin/lefthook run pre-commit --all-files --no-auto-install'
+          git diff --exit-code HEAD
+
+      - name: Skills
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm skills:check
+
+      - name: I18n Boundaries
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm i18n:boundaries
+
+      - name: API Boundaries
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm api:check
+
+      - name: Lean Core Dependencies
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm lean-core:check
+
+      - name: Workspace Contract
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm contract:check
+
+      - name: Module Contract Generation
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm check:module-contracts
+
+      - name: Action Unit Tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: app
+        run: mise exec -- pnpm action:test:unit
 
   service-integration:
     name: Database, Migration, RLS, Authorization, and Outbox Integration
@@ -130,17 +206,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
         with:
-          node-version: "26.7.0"
-
-      - name: Setup mise
-        uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566 # v3.2.0
-
-      - name: Install dependencies from the frozen lockfile
-        working-directory: app
-        run: mise exec -- pnpm install --frozen-lockfile
+          save-store: "true"
 
       - name: Start fresh PostgreSQL and SpiceDB services
         working-directory: app
@@ -155,6 +224,21 @@ jobs:
           DROP OWNED BY ontos_runtime;
           DROP ROLE ontos_runtime;
           SQL
+
+      - name: Run the assembled stage migrator artifact against the fresh database
+        working-directory: app
+        # Stage-shaped: the migrator ships only its zerops.yaml deployFiles, runs its real start entry
+        # point, bootstraps SpiceDB's database, and opts into the Commerce portal realm with its own
+        # provider runtime role that nothing pre-creates — exactly what the stage migrator receives.
+        env:
+          COMMERCE_PORTAL_AUTH_DATABASE_ADMIN_URL: postgresql://ontos_ci_admin:ontos_ci_admin@localhost:5433/ontos_ci
+          COMMERCE_PORTAL_AUTH_DATABASE_URL: postgresql://commerce_auth_runtime:commerce_auth_runtime@localhost:5433/ontos_ci
+          MIGRATOR_PORT: "8080"
+          NODE_ENV: production
+          SPICEDB_DATABASE_URL: postgresql://spicedb:spicedb@localhost:5433/spicedb
+          ULTRAMODERN_DEPLOYMENT_ENVIRONMENT: stage
+          ULTRAMODERN_ZEROPS_SERVICE: migrator
+        run: mise exec -- sh scripts/prove-zerops-migrator-artifact.sh "$RUNNER_TEMP/zerops-migrator-artifact"
 
       - name: Apply and verify Core, Auth, and Contacts migrations, plus Party Registry
         working-directory: app
@@ -223,22 +307,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "26.7.0"
-
-      - name: Setup mise
-        uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566 # v3.2.0
-
-      - name: Install dependencies from the frozen lockfile
-        working-directory: app
-        run: mise exec -- pnpm install --frozen-lockfile
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
 
       - name: Build Node deployment artifacts
         working-directory: app
         env:
-          GIT_CEILING_DIRECTORIES: ${{ github.workspace }}
           MODERN_PUBLIC_SITE_URL: http://localhost:8080
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm build
@@ -247,7 +321,6 @@ jobs:
         working-directory: app
         env:
           DATABASE_URL: postgresql://ontos_proof:ontos_proof@localhost:5432/ontos_proof
-          GIT_CEILING_DIRECTORIES: ${{ github.workspace }}
           MODERN_PUBLIC_SITE_URL: http://localhost:8080
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm node:proof
@@ -268,24 +341,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "26.7.0"
-
-      - name: Setup mise
-        uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566 # v3.2.0
-
-      - name: Install dependencies from the frozen lockfile
-        working-directory: app
-        run: mise exec -- pnpm install --frozen-lockfile
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
 
       - name: Build and prove Cloudflare/workerd artifacts
         working-directory: app
         env:
-          GIT_CEILING_DIRECTORIES: ${{ github.workspace }}
           MODERN_PUBLIC_SITE_URL: https://shell-super-app.invalid
-          pnpm_config_workspace_concurrency: "1"
           ULTRAMODERN_PUBLIC_URL_CATALOG: https://catalog.invalid
           ULTRAMODERN_PUBLIC_URL_COMMERCE_CUSTOMER_CONTEXT: https://commerce-customer-context.invalid
           ULTRAMODERN_PUBLIC_URL_COMMERCE_MARKET_CATALOG: https://commerce-market-catalog.invalid
@@ -296,24 +358,30 @@ jobs:
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm cloudflare:build
 
+      # The Commerce Cloudflare build once crashed parsing Catalog's root HttpApi chain because React
+      # Compiler also compiled server code. Production imports only the quantity-preparation client;
+      # this case keeps the whole Catalog client barrel compiling in the Commerce workerd graph.
+      - name: Build Commerce for workerd with the whole Catalog client barrel
+        working-directory: app
+        env:
+          MODERN_PUBLIC_SITE_URL: https://shell-super-app.invalid
+          ULTRAMODERN_PUBLIC_URL_COMMERCE_CUSTOMER_CONTEXT: https://commerce-customer-context.invalid
+        run: |
+          mise exec -- pnpm --filter @app/commerce-customer-context run cloudflare:build:full-catalog-client-guard
+          grep -qF '"CatalogApiFoundation"' verticals/commerce-customer-context/dist-cloudflare/worker/__modern_bff_effect.js
+
   deploy-stage:
     name: Deploy stage to Zerops after merge to main
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    needs: [workspace-gate, service-integration, node-runtime, cloudflare-runtime]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: [workspace-gate, static-contracts, service-integration, node-runtime, cloudflare-runtime]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: stage
+    permissions:
+      contents: read
+      deployments: read
     env:
-      ZEROPS_CATALOG_SERVICE_ID: ${{ vars.ZEROPS_CATALOG_SERVICE_ID }}
-      ZEROPS_COMMERCE_CUSTOMER_CONTEXT_SERVICE_ID: ${{ vars.ZEROPS_COMMERCE_CUSTOMER_CONTEXT_SERVICE_ID }}
-      ZEROPS_COMMERCE_CUSTOMER_CONTEXT_WORKER_SERVICE_ID: ${{ vars.ZEROPS_COMMERCE_CUSTOMER_CONTEXT_WORKER_SERVICE_ID }}
       ZEROPS_MIGRATOR_SERVICE_ID: ${{ vars.ZEROPS_MIGRATOR_SERVICE_ID }}
-      ZEROPS_PARTY_REGISTRY_SERVICE_ID: ${{ vars.ZEROPS_PARTY_REGISTRY_SERVICE_ID }}
-      ZEROPS_PARTY_REGISTRY_WORKER_SERVICE_ID: ${{ vars.ZEROPS_PARTY_REGISTRY_WORKER_SERVICE_ID }}
-      ZEROPS_PAYMENT_TERM_CATALOG_SERVICE_ID: ${{ vars.ZEROPS_PAYMENT_TERM_CATALOG_SERVICE_ID }}
-      ZEROPS_PRICE_GROUP_CATALOG_SERVICE_ID: ${{ vars.ZEROPS_PRICE_GROUP_CATALOG_SERVICE_ID }}
-      ZEROPS_PRICE_GROUP_CATALOG_WORKER_SERVICE_ID: ${{ vars.ZEROPS_PRICE_GROUP_CATALOG_WORKER_SERVICE_ID }}
       ZEROPS_PROJECT_ID: ${{ vars.ZEROPS_PROJECT_ID }}
       ZEROPS_SHELL_SERVICE_ID: ${{ vars.ZEROPS_SHELL_SERVICE_ID }}
       ZEROPS_SPICEDB_SERVICE_ID: ${{ vars.ZEROPS_SPICEDB_SERVICE_ID }}
@@ -329,17 +397,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "26.7.0"
-
-      - name: Setup mise
-        uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566 # v3.2.0
-
-      - name: Install deployment planner dependencies
-        working-directory: app
-        run: mise exec -- pnpm install --frozen-lockfile
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
 
       - name: Derive exact-build authorization inventory
         working-directory: app
@@ -347,16 +406,29 @@ jobs:
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm authorization:inventory:check
 
+      - name: Resolve the last successful stage deployment
+        id: base
+        if: ${{ !inputs.full }}
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise exec -- pnpm deployment-base:resolve --environment stage
+
       - name: Generate topology-driven deployment impact plan
         id: impact
         working-directory: app
         env:
-          BEFORE_SHA: ${{ github.event.before }}
-        run: >-
-          mise exec -- pnpm deployment-impact:plan
-          --authorization-environment stage
-          --base "$BEFORE_SHA"
-          --head "$GITHUB_SHA"
+          BASE_SHA: ${{ steps.base.outputs.base }}
+          FULL_PLAN: ${{ inputs.full }}
+        run: |
+          base_arguments=()
+          if [[ "$FULL_PLAN" != 'true' ]]; then
+            base_arguments=(--base "$BASE_SHA")
+          fi
+          mise exec -- pnpm deployment-impact:plan \
+            --authorization-environment stage \
+            "${base_arguments[@]}" \
+            --head "$GITHUB_SHA"
 
       - name: Record reviewed deployment impact plan
         env:
@@ -371,7 +443,10 @@ jobs:
 
       - name: Install Zerops CLI
         if: steps.impact.outputs.any == 'true'
-        run: npm install --global @zerops/zcli@1.1.0
+        # mise owns Node, so its shims must learn the globally installed zcli binary.
+        run: |
+          npm install --global @zerops/zcli@1.1.0
+          mise reshim
 
       - name: Authenticate to Zerops
         if: steps.impact.outputs.any == 'true'
@@ -403,9 +478,9 @@ jobs:
           --limit 200
           --minimum-severity DEBUG
 
+      # zcli waits for the stop process and exits non-zero when it fails, so a migrator left running fails the deploy.
       - name: Stop migrator after any attempted migration
         if: always() && steps.migrator.outcome != 'skipped'
-        continue-on-error: true
         run: >-
           zcli service stop
           --project-id "$ZEROPS_PROJECT_ID"
@@ -439,10 +514,14 @@ jobs:
         if: steps.impact.outputs.providers != '[]'
         env:
           PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
+          # Provider units come from the topology, so their service ids are looked up by the variable
+          # name the topology implies instead of a hand-kept list that silently misses new units.
+          # Public subdomains are declared once per service in app/zerops-import.yaml, not re-enabled per deploy.
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
         run: |
           while IFS= read -r unit; do
             environment_key="ZEROPS_$(printf '%s' "$unit" | tr '[:lower:]' '[:upper:]' | tr '-' '_')_SERVICE_ID"
-            service_id="${!environment_key:-}"
+            service_id="$(jq -r --arg key "$environment_key" '.[$key] // empty' <<<"$STAGE_VARIABLES_JSON")"
             if [[ -z "$service_id" ]]; then
               echo "Missing stage service variable $environment_key for planned unit $unit" >&2
               exit 1
@@ -463,11 +542,6 @@ jobs:
                 --minimum-severity DEBUG || true
               echo "Deployment failed for planned provider unit $unit" >&2
               exit 1
-            fi
-            if [[ "$unit" != *-worker ]]; then
-              zcli service enable-subdomain \
-                --project-id "$ZEROPS_PROJECT_ID" \
-                --service-id "$service_id" || true
             fi
           done < <(jq -r '.[]' <<<"$PROVIDERS_JSON")
 
@@ -494,11 +568,3 @@ jobs:
           --service-id "$ZEROPS_SHELL_SERVICE_ID"
           --limit 200
           --minimum-severity DEBUG
-
-      - name: Enable Shell Zerops public subdomain
-        if: steps.impact.outputs.shell == 'true'
-        continue-on-error: true
-        run: >-
-          zcli service enable-subdomain
-          --project-id "$ZEROPS_PROJECT_ID"
-          --service-id "$ZEROPS_SHELL_SERVICE_ID"

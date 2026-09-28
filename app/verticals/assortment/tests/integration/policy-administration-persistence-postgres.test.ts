@@ -5,10 +5,10 @@ import { DateTime, Effect, Exit, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
-  makeTestDatabaseFromPool,
-  testDatabasePools,
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
 } from '../../../../packages/core-runtime/tests/support/database.ts';
-import type { TestDatabaseFromPool } from '../../../../packages/core-runtime/tests/support/database.ts';
+import type { TestDatabaseFromClient } from '../../../../packages/core-runtime/tests/support/database.ts';
 import { installOperationalScope } from '../../../../packages/core-runtime/src/db/scoped-transaction.ts';
 import { coreRelations } from '../../../../packages/core-runtime/src/db/schema.ts';
 import {
@@ -57,7 +57,7 @@ const scope = {
   tenantId,
 } satisfies OperationalScope;
 
-type CoreTestDatabase = TestDatabaseFromPool<typeof coreRelations>;
+type CoreTestDatabase = TestDatabaseFromClient<typeof coreRelations>;
 
 const instant = (value: string) => Schema.decodeUnknownSync(Schema.DateTimeUtcFromString)(value);
 const at = instant('2030-01-01T00:00:00.000Z');
@@ -124,12 +124,12 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* policyAdministrationPersistenceAcceptance() {
-        const { admin: adminPool } = yield* testDatabasePools;
-        const admin = yield* makeTestDatabaseFromPool(adminPool, assortmentRelations);
+        const { admin: adminClient } = yield* testDatabaseClients;
+        const admin = yield* makeTestDatabaseFromClient(adminClient, assortmentRelations);
         // The owner service is exercised through an administrative test connection because
         // this lane verifies the owner transaction's persistence semantics. Runtime-role
         // capabilities remain covered by the owner database-security verifier.
-        const ownerDatabase = yield* makeTestDatabaseFromPool(adminPool, coreRelations);
+        const ownerDatabase = yield* makeTestDatabaseFromClient(adminClient, coreRelations);
 
         const cleanup = () =>
           admin.transaction((transaction) =>

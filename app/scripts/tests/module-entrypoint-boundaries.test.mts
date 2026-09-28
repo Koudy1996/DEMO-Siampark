@@ -223,9 +223,7 @@ export const ${options.authorizedOperation} = (
   ...[credential, requestCorrelation, options = {}]: ${apiStem}AuthorizedInvocation
 ) =>
   ${options.clientHelper}(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.${options.endpointGroup}.execute(${
-      options.invocationKind === MODULE_API_KIND ? '{ headers: {}, params: {}, payload, query: {} }' : '{ payload }'
-    })),
+    Effect.flatMap((client) => client.${options.endpointGroup}.execute({ payload })),
   );
 export const ${options.publicOperation} = (
   payload: ${requestType},
@@ -378,15 +376,13 @@ it('governed servers bind the trusted handler, authentication, registration, and
     group: 'stockList',
     readValue: 'stockListRead',
   });
-  const accepts = (candidate: string): boolean =>
-    hasGeneratedGovernedServerContract(
-      candidate,
-      exportedName,
-      `export const api = HttpApi.make('InventoryApi')
+  const closedApi = `export const api = HttpApi.make('InventoryApi')
 // <generated-governed-http-api-additions>
 // </generated-governed-http-api-additions>
-.pipe(identity);`,
-    );
+.annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
+.pipe(identity);`;
+  const accepts = (candidate: string, api = closedApi): boolean =>
+    hasGeneratedGovernedServerContract(candidate, exportedName, api);
   expect(accepts(source)).toBe(true);
   expect(accepts(source.replace(MODULE_API_HEADER, ''))).toBe(false);
   expect(accepts(source.replace('    problems,', '    problems: problems,'))).toBe(true);
@@ -443,15 +439,13 @@ const makeFixture = Effect.fn(function* mergedScenario1(
   yield* initialize(root);
   yield* write(
     root,
-    '.modernjs/ultramodern.json',
+    'topology/reference-topology.json',
     JSON.stringify({
-      topology: {
-        apps: [
-          { id: 'shell-super-app', path: 'apps/shell-super-app' },
-          { id: 'inventory-stock', path: INVENTORY_VERTICAL_PATH },
-          ...(includeParty === true ? [{ id: PARTY_DEPLOYMENT_ID, path: 'verticals/party-registry' }] : []),
-        ],
-      },
+      shell: { id: 'shell-super-app', path: 'apps/shell-super-app' },
+      verticals: [
+        { id: 'inventory-stock', path: INVENTORY_VERTICAL_PATH },
+        ...(includeParty === true ? [{ id: PARTY_DEPLOYMENT_ID, path: 'verticals/party-registry' }] : []),
+      ],
     }),
   );
   yield* write(root, `${INVENTORY_VERTICAL_PATH}/package.json`, JSON.stringify({ name: '@app/inventory-stock' }));
@@ -466,7 +460,7 @@ export const routeMeta = { ownerAppId: 'shell-super-app', entrypoint: defineSyst
   yield* write(
     root,
     'apps/shell-super-app/src/routes/ultramodern-route-metadata.ts',
-    `export const routes = [{ entrypoint: { entrypointKey: 'shell-super-app.page.home' } }];`,
+    `import { routeMeta as route0 } from './home/route.meta';`,
   );
   yield* write(
     root,
@@ -492,7 +486,7 @@ export const routeMeta = { moduleId: 'inventory.stock', ownerAppId: 'inventory-s
   yield* write(
     root,
     'verticals/inventory-stock/src/routes/ultramodern-route-metadata.ts',
-    `export const routes = [{ entrypoint: { entrypointKey: 'inventory.stock.page.orders' } }];`,
+    `import { routeMeta as route0 } from './orders/route.meta';`,
   );
   yield* write(root, ACTION_FILE, validAction);
   yield* write(root, WORKER_FILE, validWorker);
@@ -744,7 +738,8 @@ export const api = HttpApi.make('InventoryApi')
   // <generated-governed-http-api-additions>
   .addHttpApi(StockListApi)
   // </generated-governed-http-api-additions>
-  ;
+  .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
+  .pipe(identity);
 `,
   );
   yield* write(
@@ -786,7 +781,7 @@ export const api = HttpApi.make('InventoryApi')
   yield* write(
     root,
     `${vertical}/api/index.ts`,
-    `import { assembleEffectBffRuntime } from '@app/shared-contracts/server/effect-bff-runtime';
+    `import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 // <generated-governed-http-handler-imports>
 import { stockListReadApiLive } from './stock-list-read-server.ts';
 // </generated-governed-http-handler-imports>
@@ -1283,7 +1278,7 @@ export const executeStockListWithAuthorization`,
       .replaceAll('executeStockList', 'decoy')}
 export const executeStockListWithAuthorization = (payload, credential, requestCorrelation, options) =>
   stockListClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.stockList.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.stockList.execute({ payload })),
   );
 export const executeStockList = (payload, requestCorrelation, options) =>
   executeStockListWithAuthorization(payload, 'Bearer bypass', requestCorrelation, options);`;
@@ -1292,7 +1287,7 @@ export const executeStockList = (payload, requestCorrelation, options) =>
       'export const executeStockList = (\n  operationGateway: unknown,\n  payload:',
     );
     const bypassedEndpointClient = validClient.replace(
-      'Effect.flatMap((client) => client.stockList.execute({ headers: {}, params: {}, payload, query: {} }))',
+      'Effect.flatMap((client) => client.stockList.execute({ payload }))',
       'Effect.flatMap(() => Effect.succeed({ bypass: true }))',
     );
     const shadowedFactoryClient = validClient.replace(
@@ -2006,14 +2001,10 @@ export const stockLevelsRead = defineRead({ accessKind: 'report', entrypoint: st
     );
     yield* write(
       root,
-      '.modernjs/ultramodern.json',
+      'topology/reference-topology.json',
       JSON.stringify({
-        topology: {
-          apps: [
-            { id: 'shell-super-app', path: 'apps/shell-super-app' },
-            { id: INVENTORY_RUNTIME_ID, path: INVENTORY_VERTICAL_PATH },
-          ],
-        },
+        shell: { id: 'shell-super-app', path: 'apps/shell-super-app' },
+        verticals: [{ id: INVENTORY_RUNTIME_ID, path: INVENTORY_VERTICAL_PATH }],
       }),
     );
     const routeMetadataPath = 'verticals/inventory-stock/src/routes/orders/route.meta.ts';
@@ -2589,15 +2580,17 @@ it('keeps executable owner behavior out of published Outbox contracts', () => {
   ).toThrow(/must remain a generated schema-only Outbox contract/u);
 });
 
-it.live('rejects missing, orphaned, and cross-owner route manifest entries', () =>
+it.live('rejects route manifests that import missing or orphaned route metadata', () =>
   Effect.gen(function* testEffect8() {
     const root = yield* makeFixture();
     yield* write(
       root,
       'apps/shell-super-app/src/routes/ultramodern-route-metadata.ts',
-      `export const routes = [{ entrypoint: { entrypointKey: 'inventory.stock.page.orders' } }];`,
+      `import { routeMeta as route0 } from './orders/route.meta';`,
     );
-    expect(String(yield* Effect.flip(checkModuleEntrypointBoundaries(root)))).toMatch(/manifest is stale/u);
+    expect(String(yield* Effect.flip(checkModuleEntrypointBoundaries(root)))).toMatch(
+      /manifest is stale \(missing: apps\/shell-super-app\/src\/routes\/home\/route\.meta\.ts; orphaned: apps\/shell-super-app\/src\/routes\/orders\/route\.meta\.ts\)/u,
+    );
   }),
 );
 

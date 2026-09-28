@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ActionRuntime,
   ActionAuthorizationPreflight,
@@ -18,7 +19,7 @@ import {
   ModuleStateGateLive,
   OperationalScopeResolverLive,
 } from '@app/core-runtime/actions/runtime-wiring';
-import { assembleEffectBffRuntime } from '@app/shared-contracts/server/effect-bff-runtime';
+import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import { Effect, HttpApiBuilder, HttpRouter, Layer } from '@modern-js/bff-effect/effect-edge';
 import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
 import { Context, Layer as GovernedReadLayer, Logger, Option, References, Schema, Tracer } from 'effect';
@@ -929,7 +930,10 @@ export const makeCommerceCustomerContextApiRuntime = (
       ),
     ),
   );
-  const resolvedApiHandlersLive = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  const resolvedApiHandlersLive = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+    Layer.orDie,
+  );
   const transportLive = HttpRouter.cors({
     allowedHeaders: [...commerceCustomerContextCorsAllowedHeaders],
     allowedMethods: [...commerceCustomerContextCorsAllowedMethods],

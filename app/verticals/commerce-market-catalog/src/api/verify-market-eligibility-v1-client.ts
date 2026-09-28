@@ -40,9 +40,7 @@ export const executeVerifyMarketEligibilityV1WithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: VerifyMarketEligibilityV1AuthorizedInvocation
 ) =>
   verifyMarketEligibilityV1Client(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.verifyMarketEligibilityV1.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.verifyMarketEligibilityV1.execute({ payload })),
   );
 
 export const executeVerifyMarketEligibilityV1 = (

@@ -48,20 +48,31 @@ const AppIdSchema = Schema.String.pipe(Schema.brand('AppId'));
 const ModuleIdSchema = Schema.String.pipe(Schema.brand('ModuleId'));
 const OperationKeySchema = Schema.String.pipe(Schema.brand('OperationKey'));
 const StringRecordSchema = Schema.Record(Schema.String, Schema.String);
-const ModulePackageSchema = Schema.Struct({
-  dependencies: StringRecordSchema,
-  exports: StringRecordSchema,
-  modernjs: Schema.Struct({
-    ontosModule: Schema.Struct({
-      contractPath: Schema.String,
-      manifest: Schema.String,
-      moduleId: ModuleIdSchema,
-      registration: Schema.String,
-      schemaVersion: Schema.Number,
-    }),
+// The package document is rewritten by the tests, so undeclared owner fields must round-trip.
+const JsonRestSchema = [Schema.Record(Schema.String, Schema.Json)] as const;
+const ModulePackageSchema = Schema.StructWithRest(
+  Schema.Struct({
+    dependencies: StringRecordSchema,
+    exports: StringRecordSchema,
+    modernjs: Schema.StructWithRest(
+      Schema.Struct({
+        ontosModule: Schema.StructWithRest(
+          Schema.Struct({
+            contractPath: Schema.String,
+            manifest: Schema.String,
+            moduleId: ModuleIdSchema,
+            registration: Schema.String,
+            schemaVersion: Schema.Number,
+          }),
+          JsonRestSchema,
+        ),
+      }),
+      JsonRestSchema,
+    ),
+    scripts: StringRecordSchema,
   }),
-  scripts: StringRecordSchema,
-});
+  JsonRestSchema,
+);
 const ModuleTsconfigSchema = Schema.Struct({
   include: Schema.Array(Schema.String),
 });
@@ -75,14 +86,9 @@ const ModuleContractDocumentSchema = Schema.Struct({
   }),
   schemaVersion: Schema.String,
 });
-const decodeModulePackage = (source: string) =>
-  Schema.decodeUnknownEffect(ModulePackageSchema, {
-    onExcessProperty: 'preserve',
-  })(JSON.parse(source));
+const decodeModulePackage = (source: string) => Schema.decodeUnknownEffect(ModulePackageSchema)(JSON.parse(source));
 const decodeModuleContract = (source: string) =>
-  Schema.decodeUnknownEffect(ModuleContractDocumentSchema, {
-    onExcessProperty: 'preserve',
-  })(JSON.parse(source));
+  Schema.decodeUnknownEffect(ModuleContractDocumentSchema)(JSON.parse(source));
 
 const appRoot = path.resolve(import.meta.dirname, '..', '..', '..');
 const json = (value: JsonValue): string => `${JSON.stringify(value, null, 2)}\n`;
@@ -126,9 +132,9 @@ const createFixture = (): Effect.Effect<string, unknown> =>
         name: '@app/property-registry',
         private: true,
         scripts: {
-          build: 'modern build && MODERNJS_DEPLOY=node modern deploy --skip-build',
+          build: 'modern build --deploy-target node && modern deploy --skip-build --deploy-target node',
           'cloudflare:build':
-            'MODERNJS_DEPLOY=cloudflare modern build && MODERNJS_DEPLOY=cloudflare modern deploy --skip-build',
+            'modern build --deploy-target cloudflare && modern deploy --skip-build --deploy-target cloudflare',
           existing: 'preserve-me',
         },
         type: 'module',
@@ -158,8 +164,8 @@ const createFixture = (): Effect.Effect<string, unknown> =>
         name: '@app/documents-center',
         private: true,
         scripts: {
-          build: 'modern build',
-          'cloudflare:build': 'MODERNJS_DEPLOY=cloudflare modern build',
+          build: 'modern build --deploy-target node',
+          'cloudflare:build': 'modern build --deploy-target cloudflare',
         },
         type: 'module',
         version: '0.1.0',
@@ -585,7 +591,9 @@ export const untouched = true;
         );
         expect(generated).toMatch(/HttpApi\.make\('Fixture;Api'\)/u);
         expect(generated).toMatch(/return api;\s*\}\)\s*\/\/ <generated-governed-http-api-additions>/u);
-        expect(generated).toMatch(/<\/generated-governed-http-api-additions>\s*\.pipe\(governedHttpApiIdentity\);/u);
+        expect(generated).toMatch(
+          /<\/generated-governed-http-api-additions>\s*\.annotate\(HttpApi\.ParseOptions, \{ onExcessProperty: 'error' \}\)\s*\.pipe\(governedHttpApiIdentity\);/u,
+        );
         expect(generated).toMatch(/import \{ identity as governedHttpApiIdentity \} from 'effect';/u);
         expect(generated).toMatch(/export const governedHttpApi = fixtureApi;/u);
         expect(generated).toMatch(/export const untouched = true;/u);

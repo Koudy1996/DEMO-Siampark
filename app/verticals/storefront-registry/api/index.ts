@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ContextAccessLive,
   CorePersistenceLive,
@@ -12,7 +13,7 @@ import {
   OperationalScopeResolverLive,
 } from '@app/core-runtime/actions/runtime-wiring';
 import { microVerticalOperationAttributes } from '@app/shared-contracts';
-import { assembleEffectBffRuntime } from '@app/shared-contracts/server/effect-bff-runtime';
+import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import { Effect, HttpApiBuilder, HttpRouter, Layer } from '@modern-js/bff-effect/effect-edge';
 import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
 import { Layer as GovernedReadLayer, Logger, References, Schema, Tracer } from 'effect';
@@ -104,7 +105,10 @@ export const makeStorefrontRegistryApiRuntime = (
     verifyCurrentStorefrontApplicationV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(GovernedActionPrincipalVerifierLive, gatewayAssertionRedemption)));
-  const resolvedApiHandlersLive = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  const resolvedApiHandlersLive = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+    Layer.orDie,
+  );
   const transportLive = HttpRouter.cors({
     allowedHeaders: [...storefrontRegistryCorsAllowedHeaders],
     allowedMethods: [...storefrontRegistryCorsAllowedMethods],

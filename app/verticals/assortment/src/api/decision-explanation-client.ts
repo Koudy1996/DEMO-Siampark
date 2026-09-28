@@ -40,7 +40,7 @@ export const executeDecisionExplanationWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: DecisionExplanationAuthorizedInvocation
 ) =>
   decisionExplanationClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.decisionExplanation.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.decisionExplanation.execute({ payload })),
   );
 
 export const executeDecisionExplanation = (

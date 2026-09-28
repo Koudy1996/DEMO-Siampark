@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import { loadDatabaseConnectionPair, scopedRoutineInvokerFromTransaction } from '@app/core-runtime';
+import { scopedRoutineInvokerFromTransaction } from '@app/core-runtime';
 import { sql } from 'drizzle-orm';
 import { Effect, Match, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
-import { Pool } from 'pg';
-
-import { acquirePoolResource } from '../../../../packages/core-runtime/src/db/client.ts';
-import { makeTestDatabaseFromPool } from '../../../../packages/core-runtime/tests/support/database.ts';
+import {
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
+} from '../../../../packages/core-runtime/tests/support/database.ts';
 import { commerceCustomerContextRelations } from '../../src/database/schema.ts';
 import type { CommerceCustomerContextTransaction } from '../../src/database/types.ts';
 import { RetailPurchasingSubjectCurrentV1RequestSchema } from '../../shared/apis/retail-purchasing-subject-current-v1.ts';
@@ -52,15 +52,9 @@ const servicesFor = (
 it.live('verifies a Retail purchasing subject against committed owner binding rows', () =>
   Effect.scoped(
     Effect.gen(function* postgresOwnerProof() {
-      const connections = yield* loadDatabaseConnectionPair();
-      const adminPool = yield* acquirePoolResource(
-        () => new Pool({ connectionString: connections.admin.connectionString }),
-      );
-      const runtimePool = yield* acquirePoolResource(
-        () => new Pool({ connectionString: connections.runtime.connectionString, max: 2 }),
-      );
-      const admin = yield* makeTestDatabaseFromPool(adminPool, commerceCustomerContextRelations);
-      const runtime = yield* makeTestDatabaseFromPool(runtimePool, commerceCustomerContextRelations);
+      const { admin: adminClient, runtime: runtimeClient } = yield* testDatabaseClients;
+      const admin = yield* makeTestDatabaseFromClient(adminClient, commerceCustomerContextRelations);
+      const runtime = yield* makeTestDatabaseFromClient(runtimeClient, commerceCustomerContextRelations);
 
       const tenantId = randomUUID();
       const legalEntityId = randomUUID();

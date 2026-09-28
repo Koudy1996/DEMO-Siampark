@@ -7,10 +7,10 @@ import { Effect, Exit, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
-  makeTestDatabaseFromPool,
-  testDatabasePools,
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
 } from '../../../../packages/core-runtime/tests/support/database.ts';
-import type { TestDatabaseFromPool } from '../../../../packages/core-runtime/tests/support/database.ts';
+import type { TestDatabaseFromClient } from '../../../../packages/core-runtime/tests/support/database.ts';
 import { installOperationalScope } from '../../../../packages/core-runtime/src/db/scoped-transaction.ts';
 import type { CoreTransaction } from '../../../../packages/core-runtime/src/db/types.ts';
 import {
@@ -33,7 +33,7 @@ const foreignLegalEntityId = randomUUID();
 const principalId = randomUUID();
 const actionInvocationId = randomUUID();
 
-type AssortmentTestDatabase = TestDatabaseFromPool<typeof assortmentRelations>;
+type AssortmentTestDatabase = TestDatabaseFromClient<typeof assortmentRelations>;
 type AssortmentTransaction = Parameters<Parameters<AssortmentTestDatabase['transaction']>[0]>[0];
 
 const scope = {
@@ -167,9 +167,9 @@ const revokeRuntimeAccess = (admin: AssortmentTestDatabase) =>
 it.live('persists immutable confirmations with replay, RLS isolation, and append-only enforcement', () =>
   Effect.scoped(
     Effect.gen(function* commitmentConfirmationPersistenceAcceptance() {
-      const { admin: adminPool, runtimePool } = yield* testDatabasePools;
-      const admin = yield* makeTestDatabaseFromPool(adminPool, assortmentRelations);
-      const runtime = yield* makeTestDatabaseFromPool(runtimePool, assortmentRelations);
+      const { admin: adminClient, runtime: runtimeClient } = yield* testDatabaseClients;
+      const admin = yield* makeTestDatabaseFromClient(adminClient, assortmentRelations);
+      const runtime = yield* makeTestDatabaseFromClient(runtimeClient, assortmentRelations);
       yield* cleanupRows(admin);
       yield* grantRuntimeAccess(admin);
       yield* Effect.addFinalizer(() =>

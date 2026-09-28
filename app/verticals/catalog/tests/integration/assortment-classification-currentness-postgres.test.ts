@@ -5,8 +5,8 @@ import { DateTime, Effect } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
-  makeTestDatabaseFromPool,
-  testDatabasePools,
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
 } from '../../../../packages/core-runtime/tests/support/database.ts';
 import { installOperationalScope } from '../../../../packages/core-runtime/src/db/scoped-transaction.ts';
 import { coreRelations } from '../../../../packages/core-runtime/src/db/schema.ts';
@@ -39,9 +39,9 @@ const effectiveAt = DateTime.fromDateUnsafe(new Date('2030-01-01T00:00:00.000Z')
 it.live('invalidates an empty Product classification proof when a category assignment is added', () =>
   Effect.scoped(
     Effect.gen(function* classificationCurrentnessPostgres() {
-      const { admin: adminPool, runtimePool } = yield* testDatabasePools;
-      const admin = yield* makeTestDatabaseFromPool(adminPool, catalogRelations);
-      const runtime = yield* makeTestDatabaseFromPool(runtimePool, coreRelations);
+      const { admin: adminClient, runtime: runtimeClient } = yield* testDatabaseClients;
+      const admin = yield* makeTestDatabaseFromClient(adminClient, catalogRelations);
+      const runtime = yield* makeTestDatabaseFromClient(runtimeClient, coreRelations);
       const runScoped = <Value, Failure>(
         operation: (transaction: ScopedTransactionExecutor) => Effect.Effect<Value, Failure>,
       ) =>

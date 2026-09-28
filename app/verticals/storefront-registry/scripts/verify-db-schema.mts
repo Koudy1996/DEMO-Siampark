@@ -1,8 +1,9 @@
-// @effect-diagnostics asyncFunction:off globalConsole:off nodeBuiltinImport:off -- Operator-only database verification adapts the PostgreSQL driver at the infrastructure edge; expires: 2027-03-31.
+// @effect-diagnostics globalConsole:off nodeBuiltinImport:off -- Operator-only database verification adapts the PostgreSQL driver at the infrastructure edge; expires: 2027-03-31.
 import { loadDatabaseConnectionPair } from '@app/core-runtime';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import { Array as EffectArray, Console, Effect, Order, Schema } from 'effect';
-import { Client } from 'pg';
+import { PgClient } from '@effect/sql-pg';
+import { Array as EffectArray, Console, Effect, Order, Redacted, Schema } from 'effect';
+import { Reactivity } from 'effect/unstable/reactivity';
 
 import { STOREFRONT_REGISTRY_SCHEMA_NAME, STOREFRONT_REGISTRY_TABLES } from '../src/database/schema.ts';
 
@@ -18,6 +19,8 @@ interface InfrastructureRow {
   readonly policy_count: number;
   readonly raw_runtime_privilege_count: number;
   readonly runtime_routine_count: number;
+  readonly runtime_schema_create: boolean;
+  readonly runtime_schema_usage: boolean;
   readonly unsafe_runtime_routine_count: number;
 }
 
@@ -35,34 +38,29 @@ const expectedColumns = EffectArray.sort(
 
 const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
   const configuration = yield* loadDatabaseConnectionPair();
-  const client = yield* Effect.acquireRelease(
-    Effect.tryPromise({
-      catch: () =>
+  const client = yield* PgClient.makeClient({ url: Redacted.make(configuration.admin.connectionString) }).pipe(
+    Effect.mapError(
+      () =>
         new StorefrontRegistrySchemaVerificationError({
           reason: 'Unable to connect to the Storefront Registry database',
         }),
-      try: async () => {
-        const connection = new Client({ connectionString: configuration.admin.connectionString });
-        await connection.connect();
-        return connection;
-      },
-    }),
-    (connection) => Effect.promise(async () => await connection.end()),
+    ),
   );
-  const tables = yield* Effect.tryPromise({
-    catch: () =>
-      new StorefrontRegistrySchemaVerificationError({ reason: 'Unable to inspect Storefront Registry tables' }),
-    try: async () =>
-      await client.query<{ readonly table_name: string }>(
-        `select table_name
+  const tables = yield* client
+    .unsafe<{ readonly table_name: string }>(
+      `select table_name
            from information_schema.tables
           where table_schema = $1 and table_type = 'BASE TABLE'
           order by table_name`,
-        [STOREFRONT_REGISTRY_SCHEMA_NAME],
+      [STOREFRONT_REGISTRY_SCHEMA_NAME],
+    )
+    .pipe(
+      Effect.mapError(
+        () => new StorefrontRegistrySchemaVerificationError({ reason: 'Unable to inspect Storefront Registry tables' }),
       ),
-  });
+    );
   const actualTables = EffectArray.sort(
-    tables.rows.map(({ table_name }) => table_name),
+    tables.map(({ table_name }) => table_name),
     Order.String,
   );
   if (
@@ -73,20 +71,22 @@ const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
       reason: 'Storefront Registry table inventory mismatch',
     });
   }
-  const columns = yield* Effect.tryPromise({
-    catch: () =>
-      new StorefrontRegistrySchemaVerificationError({ reason: 'Unable to inspect Storefront Registry columns' }),
-    try: async () =>
-      await client.query<{ readonly column_name: string; readonly table_name: string }>(
-        `select table_name, column_name
+  const columns = yield* client
+    .unsafe<{ readonly column_name: string; readonly table_name: string }>(
+      `select table_name, column_name
            from information_schema.columns
           where table_schema = $1
           order by table_name, column_name`,
-        [STOREFRONT_REGISTRY_SCHEMA_NAME],
+      [STOREFRONT_REGISTRY_SCHEMA_NAME],
+    )
+    .pipe(
+      Effect.mapError(
+        () =>
+          new StorefrontRegistrySchemaVerificationError({ reason: 'Unable to inspect Storefront Registry columns' }),
       ),
-  });
+    );
   const actualColumns = EffectArray.sort(
-    columns.rows.map(({ column_name, table_name }) => `${table_name}.${column_name}`),
+    columns.map(({ column_name, table_name }) => `${table_name}.${column_name}`),
     Order.String,
   );
   if (
@@ -97,14 +97,11 @@ const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
       reason: 'Storefront Registry column inventory does not match the typed schema',
     });
   }
-  const infrastructure = yield* Effect.tryPromise({
-    catch: () =>
-      new StorefrontRegistrySchemaVerificationError({
-        reason: 'Unable to inspect Storefront Registry database infrastructure',
-      }),
-    try: async () =>
-      await client.query<InfrastructureRow>(
-        `select
+  const infrastructure = yield* client
+    .unsafe<InfrastructureRow>(
+      `select
+           has_schema_privilege('ontos_runtime', $1, 'USAGE') as runtime_schema_usage,
+           has_schema_privilege('ontos_runtime', $1, 'CREATE') as runtime_schema_create,
            (select count(*)::integer
               from pg_catalog.pg_trigger as trigger_record
               join pg_catalog.pg_class as relation on relation.oid = trigger_record.tgrelid
@@ -156,10 +153,17 @@ const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
                and (not routine.prosecdef
                  or not coalesce(routine.proconfig @> array['search_path=pg_catalog, pg_temp']::text[], false)))
              as unsafe_runtime_routine_count`,
-        [STOREFRONT_REGISTRY_SCHEMA_NAME],
+      [STOREFRONT_REGISTRY_SCHEMA_NAME],
+    )
+    .pipe(
+      Effect.mapError(
+        () =>
+          new StorefrontRegistrySchemaVerificationError({
+            reason: 'Unable to inspect Storefront Registry database infrastructure',
+          }),
       ),
-  });
-  const [row] = infrastructure.rows;
+    );
+  const [row] = infrastructure;
   const expectedPolicyCount = STOREFRONT_REGISTRY_TABLES.reduce(
     (count, table) => count + getTableConfig(table).policies.length,
     0,
@@ -172,6 +176,8 @@ const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
     row.policy_count !== expectedPolicyCount ||
     row.raw_runtime_privilege_count !== 0 ||
     row.runtime_routine_count !== 3 ||
+    !row.runtime_schema_usage ||
+    row.runtime_schema_create ||
     row.unsafe_runtime_routine_count !== 0
   ) {
     return yield* new StorefrontRegistrySchemaVerificationError({
@@ -183,6 +189,7 @@ const verification = Effect.gen(function* verifyStorefrontRegistryDatabase() {
 
 await Effect.runPromise(
   Effect.scoped(verification).pipe(
+    Effect.provide(Reactivity.layer),
     Effect.tap(({ tableCount }) =>
       Console.log(`Verified ${tableCount} tables in PostgreSQL schema ${STOREFRONT_REGISTRY_SCHEMA_NAME}`),
     ),

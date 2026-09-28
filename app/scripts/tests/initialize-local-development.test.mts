@@ -189,6 +189,7 @@ it.effect('publishes a schema-valid deterministic Czech Launch operator fixture'
       tenantId: LOCAL_DEVELOPMENT_CONTEXT.tenantId,
     });
     expect(CZECH_LAUNCH_COMMERCE_FIXTURE.policies.quantity.revision.value).toEqual({
+      audience: 'SHARED',
       basis: {
         targetDivisibilityRevision: 1,
         targetRef: {
@@ -232,6 +233,10 @@ it.effect('fails Czech Launch activation closed without every current owner proo
         },
       }).pipe(Effect.flip),
     ).toBeInstanceOf(CzechLaunchActivationRejected);
+    const withUndeclaredEvidence = { ...CZECH_LAUNCH_COMMERCE_FIXTURE.ownerFacts, undeclaredEvidence: true };
+    expect(yield* validateCzechLaunchActivation(withUndeclaredEvidence).pipe(Effect.flip)).toBeInstanceOf(
+      CzechLaunchActivationRejected,
+    );
 
     expect(yield* validateCzechLaunchActivation(CZECH_LAUNCH_COMMERCE_FIXTURE.ownerFacts)).toBeDefined();
   }),

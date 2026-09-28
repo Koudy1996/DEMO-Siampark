@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ContextAccessLive,
   CorePersistenceLive,
@@ -11,7 +12,7 @@ import {
   OperationalScopeResolverLive,
 } from '@app/core-runtime/actions/runtime-wiring';
 import { microVerticalOperationAttributes } from '@app/shared-contracts';
-import { assembleEffectBffRuntime } from '@app/shared-contracts/server/effect-bff-runtime';
+import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import { Effect, HttpApiBuilder, Layer } from '@modern-js/bff-effect/effect-edge';
 import { Layer as GovernedReadLayer, Logger, References, Tracer } from 'effect';
 import { pricingApi, pricingOperationContexts } from '../shared/api.ts';
@@ -82,7 +83,10 @@ export const governedReadApiHandlersLive = Layer.mergeAll(
   ),
   // </generated-governed-http-handler-support-layers>
 );
-const resolvedApiHandlersLive = governedReadApiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+const resolvedApiHandlersLive = governedReadApiHandlersLive.pipe(
+  Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+  Layer.orDie,
+);
 
 export default assembleEffectBffRuntime({
   api: pricingApi,

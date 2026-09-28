@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { NodeServices } from '@effect/platform-node';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import { hashAuthorizationEvidence } from '../check-authorization-readiness.mts';
@@ -13,6 +13,8 @@ import {
   validateAuthorizationPromotionGate,
 } from '../plan-deployment-impact.mts';
 import type { AuthorizationPromotionGateInput, PlanDeploymentImpactOptions } from '../plan-deployment-impact.mts';
+import { resolveStageDeploymentBase, StatusPagesJsonSchema } from '../resolve-stage-deployment-base.mts';
+import type { StageDeploymentSource } from '../resolve-stage-deployment-base.mts';
 
 const planningFailure = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
@@ -28,6 +30,7 @@ const planningFailure = <A, E>(effect: Effect.Effect<A, E>) =>
   );
 
 interface FixtureOptions {
+  readonly extraSharedPackages?: readonly FixtureOwner[];
   readonly includeContactOwner?: boolean;
   readonly includeWorker?: boolean;
   readonly setupIds?: readonly string[];
@@ -84,6 +87,8 @@ const SHELL_OWNER = {
   path: 'apps/shell-super-app',
 } as const satisfies FixtureOwner;
 const OWNERSHIP_PATH = 'topology/ownership.json';
+const TOPOLOGY_PATH = 'topology/reference-topology.json';
+const WORKSPACE_MANIFEST_PATH = 'pnpm-workspace.yaml';
 const DOCUMENTATION_PATH = 'docs/README.md';
 
 const planDeploymentImpact = (options: PlanDeploymentImpactOptions) =>
@@ -96,6 +101,15 @@ const writeJson = (root: string, relativePath: string, value: FixtureDocument) =
     yield* Effect.tryPromise(() => writeFile(target, `${JSON.stringify(value, undefined, 2)}\n`, 'utf-8'));
   });
 
+const writeWorkspaceProject = (root: string, owner: FixtureOwner) =>
+  Effect.gen(function* writeWorkspaceProjectEffect() {
+    const projectRoot = path.join(root, owner.path);
+    yield* Effect.tryPromise(() => mkdir(projectRoot, { recursive: true }));
+    yield* Effect.tryPromise(() =>
+      writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({ name: owner.package })}\n`, 'utf-8'),
+    );
+  });
+
 const makeFixture = (options: FixtureOptions = {}) =>
   Effect.gen(function* testEffect2() {
     const root = yield* Effect.acquireRelease(
@@ -105,9 +119,9 @@ const makeFixture = (options: FixtureOptions = {}) =>
     const verticalId = options.verticalId ?? 'contacts';
     const verticalPackage = `@app/${verticalId}`;
     const verticalPath = `verticals/${verticalId}`;
-    yield* writeJson(root, 'topology/reference-topology.json', {
+    yield* writeJson(root, TOPOLOGY_PATH, {
       schemaVersion: 1,
-      sharedPackages: [CORE_RUNTIME_OWNER, SHARED_CONTRACTS_OWNER],
+      sharedPackages: [CORE_RUNTIME_OWNER, SHARED_CONTRACTS_OWNER, ...(options.extraSharedPackages ?? [])],
       shell: {
         id: SHELL_ID,
         package: SHELL_PACKAGE,
@@ -127,12 +141,24 @@ const makeFixture = (options: FixtureOptions = {}) =>
         CORE_RUNTIME_OWNER,
         SHARED_CONTRACTS_OWNER,
         SHELL_OWNER,
+        ...(options.extraSharedPackages ?? []),
         ...(options.includeContactOwner === false
           ? []
           : [{ id: verticalId, package: verticalPackage, path: verticalPath }]),
       ],
       schemaVersion: 1,
     });
+    yield* Effect.tryPromise(() =>
+      writeFile(
+        path.join(root, WORKSPACE_MANIFEST_PATH),
+        'packages:\n  - \'apps/*\'\n  - verticals/*\n  - "packages/*"\nminimumReleaseAge: 1440\n',
+        'utf-8',
+      ),
+    );
+    for (const owner of [CORE_RUNTIME_OWNER, SHARED_CONTRACTS_OWNER, SHELL_OWNER]) {
+      yield* writeWorkspaceProject(root, owner);
+    }
+    yield* writeWorkspaceProject(root, { id: verticalId, package: verticalPackage, path: verticalPath });
     if (options.includeWorker === true) {
       const workerRoot = path.join(root, verticalPath);
       yield* Effect.tryPromise(() => mkdir(path.join(workerRoot, 'src/worker-host'), { recursive: true }));
@@ -340,15 +366,16 @@ for (const changedPath of [
   'scripts/postgres/bootstrap-spicedb-database.mts',
   'packages/core-runtime/src/install/spicedb-database-config.ts',
   'pnpm-lock.yaml',
-  'pnpm-workspace.yaml',
+  WORKSPACE_MANIFEST_PATH,
   '.mise.toml',
   'scripts/generate-outbox-worker-deployment.mjs',
   'scripts/materialize-outbox-worker.mjs',
   'scripts/materialize-zerops-runtime.mjs',
   'scripts/outbox-worker-delivery.mjs',
   'scripts/install-zerops-node.sh',
+  'scripts/verify-zerops-workspace-install.mts',
   'zerops.yaml',
-  'topology/reference-topology.json',
+  TOPOLOGY_PATH,
 ]) {
   it.live(`conservatively deploys every phase for ${changedPath}`, () =>
     Effect.gen(function* testEffect24() {
@@ -493,40 +520,136 @@ it.live('fails closed when a topology unit has no supported stage setup', () =>
   }),
 );
 
-it.live('uses a safe full deployment for an all-zero comparison base', () =>
+it.live('rejects an all-zero comparison base instead of planning a full deployment', () =>
   Effect.gen(function* testEffect38() {
     yield* withFixture((root) =>
       Effect.gen(function* testEffect39() {
-        const plan = yield* planDeploymentImpact({
-          baseRevision: '0000000000000000000000000000000000000000',
-          headRevision: 'HEAD',
-          rootDirectory: root,
-        });
-        expect(plan.comparison.mode).toBe('full');
-        expect(plan.comparison.reason ?? '').toMatch(/all-zero/u);
-        expect(plan.phases.map((phase) => phase.id)).toEqual(['migrator', 'spicedb', 'contacts', SHELL_ID]);
+        const failure = yield* planningFailure(
+          planDeploymentImpact({
+            baseRevision: '0000000000000000000000000000000000000000',
+            headRevision: 'HEAD',
+            rootDirectory: root,
+          }),
+        );
+        expect(failure).toContain('is not a commit in this checkout');
+        expect(failure).toContain('-f full=true');
       }),
     );
   }),
 );
 
-it.live('uses a safe full deployment for an unavailable comparison base', () =>
+const UNDECLARED_PACKAGE = {
+  id: 'foo',
+  package: '@app/foo',
+  path: 'packages/foo',
+} as const satisfies FixtureOwner;
+
+it.live('fails a full deployment for a workspace package missing from the topology', () =>
+  Effect.gen(function* testEffectUndeclaredPackage() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectUndeclaredPackageBody() {
+        yield* writeWorkspaceProject(root, UNDECLARED_PACKAGE);
+        const failure = yield* planningFailure(planDeploymentImpact({ rootDirectory: root }));
+        expect(failure).toContain(
+          'workspace project "packages/foo" is not declared in topology; add it to reference-topology.json sharedPackages and topology/ownership.json owners',
+        );
+      }),
+    );
+  }),
+);
+
+it.live('plans a full deployment once the workspace package is declared in topology and ownership', () =>
+  Effect.gen(function* testEffectDeclaredPackage() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* testEffectDeclaredPackageBody() {
+          yield* writeWorkspaceProject(root, UNDECLARED_PACKAGE);
+          const plan = yield* planDeploymentImpact({ rootDirectory: root });
+          expect(plan.comparison.mode).toBe('full');
+          expect(plan.phases.map((phase) => phase.id)).toEqual(['migrator', 'spicedb', 'contacts', SHELL_ID]);
+        }),
+      { extraSharedPackages: [UNDECLARED_PACKAGE] },
+    );
+  }),
+);
+
+it.live('fails a diff deployment for a workspace vertical missing from the topology', () =>
+  Effect.gen(function* testEffectUndeclaredVertical() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectUndeclaredVerticalBody() {
+        yield* writeWorkspaceProject(root, { id: 'orders', package: '@app/orders', path: 'verticals/orders' });
+        const failure = yield* planningFailure(
+          planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root }),
+        );
+        expect(failure).toContain('workspace project "verticals/orders" is not declared in topology');
+      }),
+    );
+  }),
+);
+
+it.live('ignores workspace directories without a package manifest', () =>
+  Effect.gen(function* testEffectNonProjectDirectory() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectNonProjectDirectoryBody() {
+        yield* Effect.tryPromise(() => mkdir(path.join(root, 'packages/.cache'), { recursive: true }));
+        const plan = yield* planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root });
+        expect(plan.any).toBe(false);
+      }),
+    );
+  }),
+);
+
+it.live('reads every workspace glob of an indentationless YAML list with comments', () =>
+  Effect.gen(function* testEffectCommentedWorkspace() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectCommentedWorkspaceBody() {
+        yield* Effect.tryPromise(() =>
+          writeFile(
+            path.join(root, WORKSPACE_MANIFEST_PATH),
+            "packages:\n- 'apps/*'\n\n# verticals and shared packages\n- verticals/* # providers\n- packages/*\ncatalogs: {}\n",
+            'utf-8',
+          ),
+        );
+        yield* writeWorkspaceProject(root, UNDECLARED_PACKAGE);
+        const failure = yield* planningFailure(planDeploymentImpact({ rootDirectory: root }));
+        expect(failure).toContain('workspace project "packages/foo" is not declared in topology');
+      }),
+    );
+  }),
+);
+
+it.live('rejects workspace globs the planner cannot enumerate', () =>
+  Effect.gen(function* testEffectUnsupportedGlob() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectUnsupportedGlobBody() {
+        yield* Effect.tryPromise(() =>
+          writeFile(path.join(root, WORKSPACE_MANIFEST_PATH), "packages:\n  - 'packages/**'\n", 'utf-8'),
+        );
+        const failure = yield* planningFailure(planDeploymentImpact({ rootDirectory: root }));
+        expect(failure).toContain('pnpm-workspace.yaml glob "packages/**" is unsupported');
+      }),
+    );
+  }),
+);
+
+it.live('rejects an unavailable comparison base', () =>
   Effect.gen(function* testEffect40() {
     yield* withFixture((root) =>
       Effect.gen(function* testEffect41() {
-        const plan = yield* planDeploymentImpact({
-          baseRevision: 'missing-base-revision',
-          headRevision: 'HEAD',
-          rootDirectory: root,
-        });
-        expect(plan.comparison.mode).toBe('full');
-        expect(plan.comparison.reason ?? '').toMatch(/comparison base "missing-base-revision" is unavailable/u);
+        const failure = yield* planningFailure(
+          planDeploymentImpact({
+            baseRevision: 'missing-base-revision',
+            headRevision: 'HEAD',
+            rootDirectory: root,
+          }),
+        );
+        expect(failure).toContain('comparison base "missing-base-revision" is not a commit in this checkout');
       }),
     );
   }),
 );
 
-it.live('uses a safe full deployment when the comparison base is not an ancestor', () =>
+it.live('rejects a comparison base that is not an ancestor of the head', () =>
   Effect.gen(function* testEffect42() {
     yield* withFixture((root) =>
       Effect.gen(function* testEffect43() {
@@ -543,15 +666,155 @@ it.live('uses a safe full deployment when the comparison base is not an ancestor
         runGit(root, ['add', 'rewritten-marker.txt']);
         runGit(root, ['commit', '-m', 'rewritten change']);
 
-        const plan = yield* planDeploymentImpact({
-          baseRevision: rewrittenBase,
-          headRevision: 'HEAD',
-          rootDirectory: root,
-        });
-        expect(plan.comparison.mode).toBe('full');
-        expect(plan.comparison.reason ?? '').toMatch(/is not an ancestor/u);
+        const failure = yield* planningFailure(
+          planDeploymentImpact({
+            baseRevision: rewrittenBase,
+            headRevision: 'HEAD',
+            rootDirectory: root,
+          }),
+        );
+        expect(failure).toContain(`comparison base "${rewrittenBase}" is not an ancestor of "HEAD"`);
+        expect(failure).toContain('-f full=true');
       }),
     );
+  }),
+);
+
+const deploymentSource = (
+  deployments: readonly {
+    /** `null` records a status without a log URL. */
+    readonly logPath?: string | null;
+    readonly runId: string;
+    readonly sha: string;
+    readonly states: readonly string[];
+  }[],
+): StageDeploymentSource<never, never> => ({
+  page: (page) => Effect.succeed(page === 1 ? deployments.map((deployment, id) => ({ id, sha: deployment.sha })) : []),
+  statuses: (deploymentId) => {
+    const deployment = deployments[deploymentId];
+    return Effect.succeed(
+      deployment === undefined
+        ? []
+        : deployment.states.map((state) => ({
+            logUrl:
+              deployment.logPath === null
+                ? ''
+                : `https://github.com/TechsioCZ/ontos/actions/runs/${deployment.runId}${deployment.logPath ?? '/job/1'}`,
+            state,
+          })),
+    );
+  },
+});
+
+it.live('diffs from the last successful stage deployment so failed and cancelled ranges are redeployed', () =>
+  Effect.gen(function* testEffectDeploymentBase() {
+    yield* withFixture((root) =>
+      Effect.gen(function* testEffectDeploymentBaseBody() {
+        runGit(root, ['init']);
+        runGit(root, ['add', '.']);
+        runGit(root, ['commit', '-m', 'A deployed']);
+        const deployedA = runGit(root, ['rev-parse', 'HEAD']);
+        yield* Effect.tryPromise(() => mkdir(path.join(root, 'verticals/contacts/src'), { recursive: true }));
+        yield* Effect.tryPromise(() =>
+          writeFile(path.join(root, 'verticals/contacts/src/failed.ts'), 'export {};\n', 'utf-8'),
+        );
+        runGit(root, ['add', '.']);
+        runGit(root, ['commit', '-m', 'B failed']);
+        const failedB = runGit(root, ['rev-parse', 'HEAD']);
+        yield* Effect.tryPromise(() => writeFile(path.join(root, 'cancelled-marker.txt'), 'cancelled\n', 'utf-8'));
+        runGit(root, ['add', '.']);
+        runGit(root, ['commit', '-m', 'C cancelled']);
+        const cancelledC = runGit(root, ['rev-parse', 'HEAD']);
+        yield* Effect.tryPromise(() => writeFile(path.join(root, 'head-marker.txt'), 'head\n', 'utf-8'));
+        runGit(root, ['add', '.']);
+        runGit(root, ['commit', '-m', 'D head']);
+        const headD = runGit(root, ['rev-parse', 'HEAD']);
+
+        const base = yield* resolveStageDeploymentBase(
+          deploymentSource([
+            { runId: '4', sha: headD, states: ['in_progress'] },
+            { runId: '3', sha: cancelledC, states: ['inactive', 'in_progress'] },
+            { runId: '2', sha: failedB, states: ['failure', 'in_progress'] },
+            { runId: '1', sha: deployedA, states: ['success', 'in_progress'] },
+          ]),
+          { currentRunId: '4', environment: 'stage' },
+        );
+        expect(base).toBe(deployedA);
+
+        const plan = yield* planDeploymentImpact({ baseRevision: base, headRevision: headD, rootDirectory: root });
+        expect(plan.comparison).toEqual({ baseRevision: deployedA, headRevision: headD, mode: 'diff' });
+        expect(plan.changedPaths).toContain('verticals/contacts/src/failed.ts');
+        expect(plan.units.providers).toContain('contacts');
+      }),
+    );
+  }),
+);
+
+it.live('skips a successful deployment of the current run and keeps the base GitHub marked inactive', () =>
+  Effect.gen(function* testEffectCurrentRun() {
+    const base = yield* resolveStageDeploymentBase(
+      deploymentSource([
+        { logPath: '', runId: '9', sha: 'rerun-of-current', states: ['success', 'in_progress'] },
+        { runId: '8', sha: 'previous', states: ['inactive', 'success', 'in_progress'] },
+      ]),
+      { currentRunId: '9', environment: 'stage' },
+    );
+    expect(base).toBe('previous');
+  }),
+);
+
+it.live('never takes a success whose log URL names no workflow run as the base', () =>
+  Effect.gen(function* testEffectUnknownRun() {
+    const base = yield* resolveStageDeploymentBase(
+      deploymentSource([
+        { logPath: null, runId: '9', sha: 'unknown-run', states: ['success', 'in_progress'] },
+        { runId: '8', sha: 'previous', states: ['success', 'in_progress'] },
+      ]),
+      { currentRunId: '9', environment: 'stage' },
+    );
+    expect(base).toBe('previous');
+  }),
+);
+
+it.live('takes a deployment whose older success came from another run', () =>
+  Effect.gen(function* testEffectOlderForeignSuccess() {
+    const base = yield* resolveStageDeploymentBase(
+      {
+        page: (page) => Effect.succeed(page === 1 ? [{ id: 0, sha: 'redeployed' }] : []),
+        statuses: () =>
+          Effect.succeed([
+            { logUrl: 'https://github.com/TechsioCZ/ontos/actions/runs/9/job/1', state: 'success' },
+            { logUrl: 'https://github.com/TechsioCZ/ontos/actions/runs/8/job/1', state: 'success' },
+          ]),
+      },
+      { currentRunId: '9', environment: 'stage' },
+    );
+    expect(base).toBe('redeployed');
+  }),
+);
+
+it.live('decodes deployment statuses whose log URL is null or omitted', () =>
+  Effect.gen(function* testEffectNullableLogUrl() {
+    const pages = yield* Schema.decodeUnknownEffect(StatusPagesJsonSchema)(
+      '[[{"log_url":null,"state":"success"},{"state":"in_progress"}]]',
+    );
+    expect(pages.flat().map((status) => status.state)).toEqual(['success', 'in_progress']);
+  }),
+);
+
+it.live('names the missing seed when no successful stage deployment exists', () =>
+  Effect.gen(function* testEffectNoDeployment() {
+    const failure = yield* planningFailure(
+      resolveStageDeploymentBase(
+        deploymentSource([
+          { runId: '2', sha: 'current', states: ['in_progress'] },
+          { runId: '1', sha: 'failed', states: ['failure', 'in_progress'] },
+        ]),
+        { currentRunId: '2', environment: 'stage' },
+      ),
+    );
+    expect(failure).toContain('no successful "stage" deployment exists outside run 2');
+    expect(failure).toContain('gh workflow run ultramodern-workspace-gates.yml --ref main -f full=true');
   }),
 );
 

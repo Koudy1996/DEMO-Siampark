@@ -40,9 +40,7 @@ export const executeVerifyCurrentStorefrontApplicationV1WithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: VerifyCurrentStorefrontApplicationV1AuthorizedInvocation
 ) =>
   verifyCurrentStorefrontApplicationV1Client(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.verifyCurrentStorefrontApplicationV1.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.verifyCurrentStorefrontApplicationV1.execute({ payload })),
   );
 
 export const executeVerifyCurrentStorefrontApplicationV1 = (

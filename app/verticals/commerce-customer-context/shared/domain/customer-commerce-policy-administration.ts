@@ -7,6 +7,7 @@ import { RetailCustomerProfileRefSchema } from '../resources/retail-customer-pro
 import {
   CommerceQuantityPolicyScopeSchema,
   CommerceQuantityRuleRevisionSchema,
+  CommerceQuantityRuleAudienceSchema,
   CommerceQuantityRuleValueSchema,
   CustomerCommercePolicyActionInvocationIdSchema,
   CustomerCommercePolicyActorPrincipalIdSchema,
@@ -51,7 +52,7 @@ export const CustomerCommercePolicyTrustedActionContextSchema = Schema.Struct({
   actorPrincipalId: CustomerCommercePolicyActorPrincipalIdSchema,
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
   tenantId: CustomerCommercePolicyTenantIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type CustomerCommercePolicyTrustedActionContext = typeof CustomerCommercePolicyTrustedActionContextSchema.Type;
 
 const trustedCommandFields = {
@@ -112,7 +113,8 @@ const PaymentTermPolicyRevisionPayloadSchema = makeRevisionPayloadSchema({
 const CommerceQuantityRuleRevisionPayloadSchema = makeRevisionPayloadSchema({
   field: 'COMMERCE_QUANTITY_RULE',
   scope: CommerceQuantityPolicyScopeSchema,
-  value: CommerceQuantityRuleValueSchema,
+  // New writes must declare their audience; only persisted legacy revisions may omit it.
+  value: Schema.Struct({ ...CommerceQuantityRuleValueSchema.fields, audience: CommerceQuantityRuleAudienceSchema }),
 }).check(halfOpenPayloadPeriod);
 
 const makeAdministrationPayloadSchema = <Revision extends Schema.Top>(revision: Revision) =>
@@ -140,7 +142,7 @@ const makeAdministrationPayloadSchema = <Revision extends Schema.Top>(revision: 
       replacedRevisionId: CustomerCommercePolicyRevisionIdSchema,
       replacement: revision,
     }),
-  ]).annotate({ parseOptions: { onExcessProperty: 'error' } });
+  ]);
 
 const makeAdministrationCommandSchema = <Revision extends Schema.Top>(revision: Revision) =>
   Schema.Union([
@@ -171,7 +173,7 @@ const makeAdministrationCommandSchema = <Revision extends Schema.Top>(revision: 
       replacedRevisionId: CustomerCommercePolicyRevisionIdSchema,
       replacement: revision,
     }),
-  ]).annotate({ parseOptions: { onExcessProperty: 'error' } });
+  ]);
 
 export const MarketBootstrapPolicyAdministrationPayloadSchema = makeAdministrationPayloadSchema(
   MarketBootstrapPolicyRevisionPayloadSchema,
@@ -524,26 +526,55 @@ const candidateKey = (revision: CustomerCommercePolicyRevision): string => {
       ? `${revision.value.kind}:${revision.value.paymentTermRef.resourceId}`
       : revision.value.kind;
   }
-  return revision.value.constraintMode === 'NON_RELAXABLE_CONSTRAINT'
+  return revision.value.constraintMode === 'NON_RELAXABLE_CONSTRAINT' || revision.value.audience === 'ASSIGNMENT_ONLY'
     ? `${revision.value.constraintMode}:${encodeJson(revision.value.selector)}:${revision.revisionId}`
     : `${revision.value.constraintMode}:${encodeJson(revision.value.selector)}`;
 };
 
-const periodsOverlap = (left: CustomerCommercePolicyRevision, right: CustomerCommercePolicyRevision): boolean =>
-  (left.effectiveTo === null || right.effectiveFrom < left.effectiveTo) &&
-  (right.effectiveTo === null || left.effectiveFrom < right.effectiveTo);
+/** Derive overlap from lifecycle applicability without editing immutable revision periods. */
+const revisionApplicability = (
+  state: CustomerCommercePolicySet<CustomerCommercePolicyRevision>,
+  revision: CustomerCommercePolicyRevision,
+) => {
+  let activation: string | undefined;
+  let retirement: string | undefined;
+  for (const transition of state.lifecycleTransitions ?? []) {
+    if (transition.revisionId === revision.revisionId) {
+      if (transition.lifecycle === 'ACTIVE' && (activation === undefined || transition.effectiveAt < activation)) {
+        activation = transition.effectiveAt;
+      }
+      if (transition.lifecycle === 'RETIRED' && (retirement === undefined || transition.effectiveAt < retirement)) {
+        retirement = transition.effectiveAt;
+      }
+    }
+  }
+  // An unactivated scheduled revision still reserves its declared future period.
+  const from = revision.lifecycle === 'SCHEDULED' ? (activation ?? revision.effectiveFrom) : revision.effectiveFrom;
+  if (revision.lifecycle === 'RETIRED') {
+    return { from, to: from };
+  }
+  const to =
+    retirement !== undefined && (revision.effectiveTo === null || retirement < revision.effectiveTo)
+      ? retirement
+      : revision.effectiveTo;
+  return { from, to };
+};
 
 const exactCandidateOverlaps = (
-  revisions: readonly CustomerCommercePolicyRevision[],
+  state: CustomerCommercePolicySet<CustomerCommercePolicyRevision>,
   candidate: CustomerCommercePolicyRevision,
 ): boolean =>
-  revisions.some(
-    (revision) =>
+  state.revisions.some((revision) => {
+    const interval = revisionApplicability(state, revision);
+    return (
       revision.revisionId !== candidate.revisionId &&
       scopeKey(revision) === scopeKey(candidate) &&
       candidateKey(revision) === candidateKey(candidate) &&
-      periodsOverlap(revision, candidate),
-  );
+      (interval.to === null || interval.from < interval.to) &&
+      (interval.to === null || candidate.effectiveFrom < interval.to) &&
+      (candidate.effectiveTo === null || interval.from < candidate.effectiveTo)
+    );
+  });
 
 const policyBoundaries = <Revision extends CustomerCommercePolicyRevision>(
   state: CustomerCommercePolicySet<Revision>,
@@ -628,7 +659,7 @@ const revisionMatchesTrustedScope = (
   }
   return (
     selectorTenantId === command.tenantId &&
-    revision.value.basis.targetRef.tenantId === command.tenantId &&
+    (!('targetRef' in revision.value.basis) || revision.value.basis.targetRef.tenantId === command.tenantId) &&
     revision.value.basis.unitRef.tenantId === command.tenantId
   );
 };
@@ -674,7 +705,7 @@ const createPolicyRevision = <Revision extends CustomerCommercePolicyRevision>(
   if (state.revisions.some(({ revisionId }) => revisionId === command.revision.revisionId)) {
     return { _tag: 'INVALID_LIFECYCLE_TRANSITION', reason: 'Revision identity cannot be reused' };
   }
-  if (exactCandidateOverlaps(state.revisions, command.revision)) {
+  if (exactCandidateOverlaps(state, command.revision)) {
     return { _tag: 'OVERLAPPING_CURRENT_REVISION', reason: 'An exact candidate already overlaps this period' };
   }
   return changed(state, command, { revisions: [...state.revisions, command.revision] });
@@ -721,7 +752,7 @@ const replacePolicyRevision = <Revision extends CustomerCommercePolicyRevision>(
     return { _tag: 'INVALID_LIFECYCLE_TRANSITION', reason: 'Only an active revision can be replaced' };
   }
   const withoutReplaced = state.revisions.filter(({ revisionId }) => revisionId !== replaced.revisionId);
-  if (exactCandidateOverlaps(withoutReplaced, command.replacement)) {
+  if (exactCandidateOverlaps({ ...state, revisions: withoutReplaced }, command.replacement)) {
     return { _tag: 'OVERLAPPING_CURRENT_REVISION', reason: 'Replacement overlaps another exact candidate' };
   }
   const predecessorRetirement: CustomerCommercePolicyLifecycleTransition = {
@@ -847,13 +878,13 @@ const makeCurrentPolicyCandidateSchema = <Scope extends Schema.Top, Value extend
     policyRevisionId: CustomerCommercePolicyRevisionIdSchema,
     scope,
     value,
-  }).annotate({ parseOptions: { onExcessProperty: 'error' } });
+  });
 
 const makeCurrentCandidateSetSchema = <Candidate extends Schema.Top>(candidate: Candidate) =>
   Schema.Struct({
     candidates: Schema.Array(candidate),
     completeness: Schema.toEncoded(OwnerVerifiableSetCompletenessEvidenceSchema),
-  }).annotate({ parseOptions: { onExcessProperty: 'error' } });
+  });
 
 export const CurrentPurchaseCurrencyPolicyCandidateSchema = makeCurrentPolicyCandidateSchema({
   scope: OrdinaryCustomerCommercePolicyScopeSchema,
@@ -875,7 +906,10 @@ export type CurrentPaymentTermPolicySet = typeof CurrentPaymentTermPolicySetSche
 
 export const CurrentCommerceQuantityRuleCandidateSchema = makeCurrentPolicyCandidateSchema({
   scope: CommerceQuantityPolicyScopeSchema,
-  value: CommerceQuantityRuleValueSchema,
+  value: Schema.Struct({
+    ...CommerceQuantityRuleValueSchema.fields,
+    audience: CommerceQuantityRuleAudienceSchema,
+  }),
 });
 const CurrentCommerceQuantityRuleSetSchema = makeCurrentCandidateSetSchema(CurrentCommerceQuantityRuleCandidateSchema);
 export type CurrentCommerceQuantityRuleSet = typeof CurrentCommerceQuantityRuleSetSchema.Type;
@@ -889,14 +923,14 @@ export const MarketBootstrapPolicyBatchCurrentRequestSchema = Schema.Struct({
       new Set(ids).size === ids.length ? undefined : 'Eligible Selling Legal Entity IDs must be unique',
     ),
   ),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type MarketBootstrapPolicyBatchCurrentRequest = typeof MarketBootstrapPolicyBatchCurrentRequestSchema.Type;
 
 const MarketBootstrapDefaultTupleSchema = Schema.Struct({
   channelId: CustomerCommercePolicyChannelIdSchema,
   commerceMarketId: CustomerCommercePolicyCommerceMarketIdSchema,
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const MarketBootstrapPolicyBatchCandidateSchema = Schema.Struct({
   defaultTuple: MarketBootstrapDefaultTupleSchema,
@@ -942,7 +976,7 @@ export const MarketBootstrapPolicyBatchCurrentResponseSchema = Schema.Struct({
         : 'Bootstrap response may contain only one partition per Selling Legal Entity',
     ),
   ),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type MarketBootstrapPolicyBatchCurrentResponse = typeof MarketBootstrapPolicyBatchCurrentResponseSchema.Type;
 
 export const MarketBootstrapPolicyBatchCurrentExchangeSchema = Schema.Struct({
@@ -1015,10 +1049,30 @@ export const currentPaymentTermPolicySet = (
 });
 export const currentCommerceQuantityRuleSet = (
   state: CustomerCommercePolicySet<CommerceQuantityRuleRevision>,
+  assignments: CommerceQuantityAssignmentSet,
   at: string,
 ): CurrentCommerceQuantityRuleSet => ({
-  candidates: currentPolicyRevisions(state, at).map((revision) => toCurrentPolicyCandidate(revision)),
-  completeness: completenessEvidence(state, at),
+  candidates: currentPolicyRevisions(state, at).map((revision) => ({
+    ...toCurrentPolicyCandidate(revision),
+    value: {
+      ...revision.value,
+      // Legacy qualification uses every retained assignment, not just the Current subset.
+      // The immutable revision and its original request fingerprint remain unchanged.
+      audience:
+        revision.value.audience ??
+        (assignments.assignments.some(({ ruleRevisionRef }) => ruleRevisionRef.resourceId === revision.revisionId)
+          ? 'ASSIGNMENT_ONLY'
+          : 'SHARED'),
+    },
+  })),
+  completeness: {
+    ...completenessEvidence(state, at),
+    // Legacy audience qualification depends on retained assignments, even outside their Current period.
+    // The same owner therefore binds this projection to both material collection generations.
+    ownerRevision: state.revisions.some(({ value }) => value.audience === undefined)
+      ? `COMMERCE_QUANTITY_RULE:${state.generation}:AUDIENCE_ASSIGNMENTS:${assignments.generation}`
+      : `COMMERCE_QUANTITY_RULE:${state.generation}`,
+  },
 });
 
 const CommerceQuantityAssignmentProfileSchema = Schema.Union([
@@ -1082,7 +1136,7 @@ export const CommerceQuantityAssignmentPayloadSchema = Schema.Union([
     idempotencyKey: CustomerCommercePolicyIdempotencyKeySchema,
     reason: boundedReason,
   }),
-]).annotate({ parseOptions: { onExcessProperty: 'error' } });
+]);
 export type CommerceQuantityAssignmentPayload = typeof CommerceQuantityAssignmentPayloadSchema.Type;
 
 const CommerceQuantityAssignmentCommandSchema = Schema.Union([
@@ -1099,7 +1153,7 @@ const CommerceQuantityAssignmentCommandSchema = Schema.Union([
     idempotencyKey: CustomerCommercePolicyIdempotencyKeySchema,
     reason: boundedReason,
   }),
-]).annotate({ parseOptions: { onExcessProperty: 'error' } });
+]);
 
 export const toTrustedCommerceQuantityAssignmentCommand = (
   payload: CommerceQuantityAssignmentPayload,
@@ -1121,7 +1175,9 @@ export const toTrustedCommerceQuantityAssignmentCommand = (
     Match.tag('UNASSIGN', () => base),
     Match.exhaustive,
   );
-  return Result.getOrThrow(Schema.decodeUnknownResult(CommerceQuantityAssignmentCommandSchema)(command));
+  return Result.getOrThrow(
+    Schema.decodeUnknownResult(CommerceQuantityAssignmentCommandSchema, { onExcessProperty: 'error' })(command),
+  );
 };
 
 interface CommerceQuantityRuleUnassignment {
@@ -1273,14 +1329,27 @@ const assignmentApplicabilityEnd = (
     : assignment.effectiveTo;
 };
 
-const assignmentOverlaps = (state: CommerceQuantityAssignmentSet, candidate: CommerceQuantityRuleAssignment): boolean =>
+const assignmentOverlaps = (
+  state: CommerceQuantityAssignmentSet,
+  rules: CustomerCommercePolicySet<CommerceQuantityRuleRevision>,
+  candidate: CommerceQuantityRuleAssignment,
+): boolean =>
   state.assignments.some((assignment) => {
     const applicabilityEnd = assignmentApplicabilityEnd(state, assignment);
+    const existingRule = rules.revisions.find(({ revisionId }) => revisionId === assignment.ruleRevisionRef.resourceId);
+    const candidateRule = rules.revisions.find(({ revisionId }) => revisionId === candidate.ruleRevisionRef.resourceId);
+    const sameReplacementRank =
+      existingRule !== undefined &&
+      candidateRule !== undefined &&
+      existingRule.value.constraintMode === 'REPLACEABLE_ENVELOPE' &&
+      candidateRule.value.constraintMode === 'REPLACEABLE_ENVELOPE' &&
+      scopeKey(existingRule) === scopeKey(candidateRule) &&
+      encodeJson(existingRule.value.selector) === encodeJson(candidateRule.value.selector);
     return (
       assignment.assignmentId !== candidate.assignmentId &&
       assignment.profile.kind === candidate.profile.kind &&
       assignment.profile.profileRef.resourceId === candidate.profile.profileRef.resourceId &&
-      assignment.ruleRevisionRef.resourceId === candidate.ruleRevisionRef.resourceId &&
+      (assignment.ruleRevisionRef.resourceId === candidate.ruleRevisionRef.resourceId || sameReplacementRank) &&
       (applicabilityEnd === null || candidate.effectiveFrom < applicabilityEnd) &&
       (candidate.effectiveTo === null || assignment.effectiveFrom < candidate.effectiveTo)
     );
@@ -1336,8 +1405,21 @@ const assignQuantityRule = (
       reason: 'Assignment period must be contained by its immutable Quantity Rule Revision period',
     };
   }
-  if (assignmentOverlaps(state, assignment)) {
-    return { _tag: 'OVERLAPPING_ASSIGNMENT', reason: 'The same profile and rule already overlap this period' };
+  if (
+    rule.value.audience !== 'ASSIGNMENT_ONLY' &&
+    (rule.value.audience === 'SHARED' ||
+      !state.assignments.some(({ ruleRevisionRef }) => ruleRevisionRef.resourceId === rule.revisionId))
+  ) {
+    return {
+      _tag: 'INVALID_LIFECYCLE_TRANSITION',
+      reason: 'Assignment requires an assignment-only revision; a shared rule cannot change audience implicitly',
+    };
+  }
+  if (assignmentOverlaps(state, quantityRuleState, assignment)) {
+    return {
+      _tag: 'OVERLAPPING_ASSIGNMENT',
+      reason: 'The same profile already has an overlapping rule or exact replacement rank',
+    };
   }
   return changedAssignment(state, command, { assignments: [...state.assignments, assignment] });
 };
@@ -1426,13 +1508,13 @@ export const CurrentCommerceQuantityAssignmentSchema = Schema.Struct({
   profile: CommerceQuantityAssignmentProfileSchema,
   ruleRevisionRef: CommerceQuantityRuleRefSchema,
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type CurrentCommerceQuantityAssignment = typeof CurrentCommerceQuantityAssignmentSchema.Type;
 
 const CurrentCommerceQuantityAssignmentSetSchema = Schema.Struct({
   assignments: Schema.Array(CurrentCommerceQuantityAssignmentSchema),
   completeness: Schema.toEncoded(OwnerVerifiableSetCompletenessEvidenceSchema),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type CurrentCommerceQuantityAssignmentSet = typeof CurrentCommerceQuantityAssignmentSetSchema.Type;
 
 export const currentCommerceQuantityAssignmentSet = (
@@ -1464,7 +1546,7 @@ export const currentCommerceQuantityAssignmentSet = (
 export const CurrentCommerceQuantityPolicySetSchema = Schema.Struct({
   assignmentSet: CurrentCommerceQuantityAssignmentSetSchema,
   ruleSet: CurrentCommerceQuantityRuleSetSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type CurrentCommerceQuantityPolicySet = typeof CurrentCommerceQuantityPolicySetSchema.Type;
 
 export const currentCommerceQuantityPolicySet = (
@@ -1473,7 +1555,7 @@ export const currentCommerceQuantityPolicySet = (
   at: string,
 ): CurrentCommerceQuantityPolicySet => ({
   assignmentSet: currentCommerceQuantityAssignmentSet(assignmentState, at),
-  ruleSet: currentCommerceQuantityRuleSet(ruleState, at),
+  ruleSet: currentCommerceQuantityRuleSet(ruleState, assignmentState, at),
 });
 
 export const summarizePolicyAdministrationResult = <Revision extends CustomerCommercePolicyRevision>(

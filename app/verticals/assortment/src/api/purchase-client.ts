@@ -33,7 +33,7 @@ export const executePurchaseWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: PurchaseAuthorizedInvocation
 ) =>
   purchaseClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.purchase.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.purchase.execute({ payload })),
   );
 
 export const executePurchase = (

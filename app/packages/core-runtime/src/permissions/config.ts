@@ -47,10 +47,7 @@ export interface LoadSpiceDbConfigOptions {
 
 const configFailure = (reason: string) => new SpiceDbConfigError({ reason });
 
-const configFailureWithCause = <Cause>(reason: string, cause: Cause) => {
-  const failure = new SpiceDbConfigError({ reason });
-  return Object.defineProperty(failure, 'cause', { value: cause });
-};
+const configFailureWithCause = (reason: string, cause: unknown) => new SpiceDbConfigError({ cause, reason });
 
 const isLocalhostEndpoint = (endpoint: string): boolean => {
   try {
@@ -119,7 +116,7 @@ const parseSpiceDbConfigWith = Effect.fn('Config.parseSpiceDbConfigWith')(functi
             configFailureWithCause('SPICEDB_INSECURE must be explicitly true or false', error),
           ),
         ),
-      preSharedKey: Config.redacted('SPICEDB_PRESHARED_KEY')
+      preSharedKey: Config.Redacted('SPICEDB_PRESHARED_KEY')
         .pipe(Config.map((value) => Redacted.make(Redacted.value(value).trim())))
         .parse(provider)
         .pipe(Effect.mapError((error) => configFailureWithCause('SPICEDB_PRESHARED_KEY is required', error))),

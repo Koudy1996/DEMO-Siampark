@@ -386,10 +386,7 @@ export const ${value} = HttpApi.make('${value}').add(
         ${type}UnavailableProblemSchema,
         ${type}InternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: ${type}RequestSchema,
-      query: {},
       success: ${type}ResponseSchema,
     }),
   ),
@@ -523,7 +520,7 @@ export const execute${type}WithAuthorization = (
 ) =>
   ${clientName}(Redacted.make(credential), requestCorrelation, options).pipe(
     Effect.flatMap((client) =>
-      client.${toCamelCase(name)}.execute({ headers: {}, params: {}, payload, query: {} }),
+      client.${toCamelCase(name)}.execute({ payload }),
     ),
   );
 

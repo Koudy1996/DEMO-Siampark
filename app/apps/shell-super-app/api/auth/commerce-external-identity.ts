@@ -58,7 +58,7 @@ const CommerceExternalIdentityConfigurationSchema = Schema.Struct({
   attesterPrincipalId: PrincipalIdSchema,
   authenticationNamespaceId: Schema.Literal(COMMERCE_AUTHENTICATION_NAMESPACE_ID),
   providerOrigin: HttpOriginSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 export { CommerceExternalIdentityConfigurationSchema };
 export type CommerceExternalIdentityConfiguration = typeof CommerceExternalIdentityConfigurationSchema.Type;
@@ -83,7 +83,7 @@ const decodeCommerceExternalIdentityConfiguration = (
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Deployment input is decoded at the trusted composition boundary.
   input: unknown,
 ): Effect.Effect<CommerceExternalIdentityConfiguration, CommerceExternalIdentityConfigurationError> =>
-  Schema.decodeUnknownEffect(CommerceExternalIdentityConfigurationSchema)(input).pipe(
+  Schema.decodeUnknownEffect(CommerceExternalIdentityConfigurationSchema, { onExcessProperty: 'error' })(input).pipe(
     Effect.mapError((cause) => malformedConfiguration(cause)),
   );
 
@@ -128,12 +128,11 @@ export const commerceAuthenticationNamespaceRegistryLive = (
   input: unknown,
 ) => Layer.effect(AuthenticationNamespaceRegistry, makeCommerceAuthenticationNamespaceRegistryEffect(input));
 
-const mapWorkloadAssertionFailure = (cause: unknown): CommercePortalAuthVerificationClientUnavailable => {
-  const failure = new CommercePortalAuthVerificationClientUnavailable({
+const mapWorkloadAssertionFailure = (cause: unknown): CommercePortalAuthVerificationClientUnavailable =>
+  new CommercePortalAuthVerificationClientUnavailable({
+    cause,
     reason: 'The Shell workload is not authorized to call Commerce verification',
   });
-  return Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
-};
 
 const requestContext = (): Effect.Effect<
   ExternalIdentityHttpWorkloadContextValue,

@@ -45,6 +45,8 @@ Codesmith or another approved generator must update these surfaces atomically. U
 
 Change planning must fail closed when a changed path under `apps/*`, `packages/*`, or `verticals/*` cannot be mapped to known delivery units. An unknown new vertical must never produce a no-op deploy.
 
+The stage plan diffs from the commit of the last successful `stage` deployment, not from the previous push, so a failed or cancelled deploy stays in the next plan. Planning stops when no successful deployment exists or its commit is not an ancestor of `main`; seed it once with `gh workflow run ultramodern-workspace-gates.yml --ref main -f full=true`.
+
 ### Change-impact rules
 
 The generated plan must conservatively include:
@@ -196,7 +198,7 @@ Use this sequence for a new or changed MicroVertical:
 3. **Build:** produce and verify immutable target-shaped artifacts.
 4. **Migrate:** expand PostgreSQL, refresh grants, verify schemas, then compatibly update SpiceDB and complete any required operator-controlled relationship provisioning before deploying a fail-closed consumer.
 5. **Deploy providers:** deploy affected MicroVerticals in dependency order, initially dark.
-6. **Expose providers:** verify readiness, module manifest, BFF, remote assets, and public endpoint; make endpoint provisioning idempotent by checking its final state.
+6. **Expose providers:** verify readiness, module manifest, BFF, remote assets, and public endpoint. Stage public subdomains are declared at service creation in `zerops-import.yaml`, never re-enabled per deploy.
 7. **Promote composition:** validate and explicitly promote one immutable candidate revision. A compatible MicroVertical update or installation does not redeploy Shell.
 8. **Smoke:** open a new browser document pinned to that revision and execute the authenticated distributed smoke suite.
 9. **Canary:** activate the selected module—and its explicit implementation once supported—plus affected Storefront Clients for one approved tenant/cohort.

@@ -37,7 +37,7 @@ export const executeVisibilityWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: VisibilityAuthorizedInvocation
 ) =>
   visibilityClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.visibility.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.visibility.execute({ payload })),
   );
 
 export const executeVisibility = (

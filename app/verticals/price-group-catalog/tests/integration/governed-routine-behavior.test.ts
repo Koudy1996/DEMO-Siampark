@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { scopedRoutineInvokerFromTransaction } from '@app/core-runtime';
 import { createActionCollector } from '../../../../packages/core-runtime/src/actions/collector.ts';
 import { sql } from 'drizzle-orm';
@@ -5,8 +7,8 @@ import { Effect, Result, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
-  makeTestDatabaseFromPool,
-  testDatabasePools,
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
 } from '../../../../packages/core-runtime/tests/support/database.ts';
 import type { PriceGroupDefinitionRevision } from '../../shared/domain/price-group.ts';
 import { RetirePriceGroupPayloadSchema } from '../../shared/actions/retire-price-group.ts';
@@ -77,9 +79,9 @@ interface RoutineRow extends Record<string, unknown> {
 it.live('executes the tenant-only Price Group lifecycle through the six governed routines', () =>
   Effect.scoped(
     Effect.gen(function* governedRoutineBehavior() {
-      const { admin: adminPool, runtimePool } = yield* testDatabasePools;
-      const admin = yield* makeTestDatabaseFromPool(adminPool, priceGroupCatalogRelations);
-      const runtime = yield* makeTestDatabaseFromPool(runtimePool, priceGroupCatalogRelations);
+      const { admin: adminClient, runtime: runtimeClient } = yield* testDatabaseClients;
+      const admin = yield* makeTestDatabaseFromClient(adminClient, priceGroupCatalogRelations);
+      const runtime = yield* makeTestDatabaseFromClient(runtimeClient, priceGroupCatalogRelations);
 
       const cleanup = () =>
         admin.transaction((transaction) =>
@@ -439,7 +441,7 @@ it.live('executes the tenant-only Price Group lifecycle through the six governed
           new Date('2026-09-15T00:00:00.000Z'),
         ),
       );
-      expect(supersededRevision.definition.effectivePeriod.effectiveTo).toBe('2026-09-15T00:00:00.000Z');
+      expect(supersededRevision.definition).toEqual(created);
 
       const staleRevision = yield* Effect.flip(
         inScope((invoker) =>
@@ -588,7 +590,7 @@ it.live('executes the tenant-only Price Group lifecycle through the six governed
           effectiveFrom: new Date('2026-09-21T12:00:00.000Z'),
           effectiveTo: new Date('2026-09-22T00:00:00.000Z'),
           expectedCurrent: {
-            catalogRevision: competingGroup.acceptedCatalogRevision,
+            catalogRevision: unchangedAfterShortRevision.catalogRevision,
             definitionRevisionId: competingGroup.definitionRevisionId,
             definitionRevisionNumber: competingGroup.revisionNumber,
             meaningFingerprint: competingGroup.meaningFingerprint,
@@ -879,6 +881,27 @@ it.live('executes the tenant-only Price Group lifecycle through the six governed
         reason: 'Schedule retirement concurrently with a pre-boundary revision.',
         trustedEffectiveAt: new Date('2026-09-23T00:00:00.000Z'),
       };
+      const raceRevisionInput = {
+        actingPrincipalId: principalId,
+        actionInvocationId: raceRevisionInvocationId,
+        classificationPurpose: raceGroup.classificationPurpose,
+        compatibilityContracts: [requiredContract],
+        definitionRevisionId: raceRevisionId,
+        description: 'Serialized pre-retirement revision.',
+        displayName: 'Race',
+        effectiveFrom: new Date('2026-10-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-10-10T00:00:00.000Z'),
+        expectedCurrent: raceExpectedCurrent,
+        reason: 'Revise concurrently with scheduled retirement.',
+        semanticDecision: {
+          comparedDefinitionRevisionId: raceGroup.definitionRevisionId,
+          decision: 'SAME_MEANING',
+        },
+        trustedEffectiveAt: new Date('2026-09-24T00:00:00.000Z'),
+      } as const;
+      const createRaceRevision = inScope((invoker) =>
+        priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).createDefinitionRevision(raceRevisionInput),
+      );
       const [raceRetirementResult, raceRevisionResult] = yield* Effect.all(
         [
           inScope((invoker) =>
@@ -886,54 +909,44 @@ it.live('executes the tenant-only Price Group lifecycle through the six governed
               priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).retirePriceGroup(raceRetirementInput),
             ),
           ),
-          inScope((invoker) =>
-            Effect.result(
-              priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).createDefinitionRevision({
-                actingPrincipalId: principalId,
-                actionInvocationId: raceRevisionInvocationId,
-                classificationPurpose: raceGroup.classificationPurpose,
-                compatibilityContracts: [requiredContract],
-                definitionRevisionId: raceRevisionId,
-                description: 'Serialized pre-retirement revision.',
-                displayName: 'Race',
-                effectiveFrom: new Date('2026-10-01T00:00:00.000Z'),
-                effectiveTo: new Date('2026-10-10T00:00:00.000Z'),
-                expectedCurrent: raceExpectedCurrent,
-                reason: 'Revise concurrently with scheduled retirement.',
-                semanticDecision: {
-                  comparedDefinitionRevisionId: raceGroup.definitionRevisionId,
-                  decision: 'SAME_MEANING',
-                },
-                trustedEffectiveAt: new Date('2026-09-24T00:00:00.000Z'),
-              }),
-            ),
-          ),
+          Effect.result(createRaceRevision),
         ],
         { concurrency: 'unbounded' },
       );
-      expect(Result.isSuccess(raceRevisionResult)).toBe(true);
-      const raceRevision = Result.getOrThrow(raceRevisionResult);
-      if (Result.isSuccess(raceRetirementResult)) {
-        const replayedRaceRetirement = yield* inScope((invoker) =>
-          priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).retirePriceGroup(raceRetirementInput),
-        );
-        expect(replayedRaceRetirement).toEqual(raceRetirementResult.success);
-      } else {
-        expect(Schema.is(PriceGroupExpectedCurrentConflict)(raceRetirementResult.failure)).toBe(true);
-        const retriedRaceRetirement = yield* inScope((invoker) =>
-          priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).retirePriceGroup({
-            ...raceRetirementInput,
-            expectedCurrent: {
-              catalogRevision: raceRevision.acceptedCatalogRevision,
-              definitionRevisionId: raceRevision.definitionRevisionId,
-              definitionRevisionNumber: raceRevision.revisionNumber,
-              meaningFingerprint: raceRevision.meaningFingerprint,
-              priceGroupRef: raceRevision.priceGroupRef,
-            },
-          }),
-        );
-        expect(retriedRaceRetirement.currentDefinitionRevisionId).toBe(raceRevision.definitionRevisionId);
+      // Either the bounded revision is rejected before retirement, or its expectation is
+      // stale after retirement. Neither order may silently translate an old concurrency fence.
+      expect(Result.isSuccess(raceRetirementResult)).toBe(true);
+      expect(Result.isFailure(raceRevisionResult)).toBe(true);
+      if (Result.isFailure(raceRevisionResult)) {
+        expect(
+          Schema.is(PriceGroupEffectivePeriodConflict)(raceRevisionResult.failure) ||
+            Schema.is(PriceGroupExpectedCurrentConflict)(raceRevisionResult.failure),
+        ).toBe(true);
       }
+      const freshRace = yield* inScope((invoker) =>
+        priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).readCurrentDefinition(
+          raceGroup.priceGroupRef,
+          raceRevisionInput.trustedEffectiveAt,
+        ),
+      );
+      const raceRevision = yield* inScope((invoker) =>
+        priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).createDefinitionRevision({
+          ...raceRevisionInput,
+          actionInvocationId: randomUUID(),
+          expectedCurrent: {
+            catalogRevision: freshRace.catalogRevision,
+            definitionRevisionId: freshRace.definition.definitionRevisionId,
+            definitionRevisionNumber: freshRace.definition.revisionNumber,
+            meaningFingerprint: freshRace.definition.meaningFingerprint,
+            priceGroupRef: freshRace.definition.priceGroupRef,
+          },
+        }),
+      );
+      expect(raceRevision.definitionRevisionId).toBe(raceRevisionId);
+      const replayedRaceRetirement = yield* inScope((invoker) =>
+        priceGroupCatalogPersistenceFromRoutineInvoker(invoker, scope).retirePriceGroup(raceRetirementInput),
+      );
+      expect(replayedRaceRetirement).toEqual(Result.getOrThrow(raceRetirementResult));
 
       yield* admin.transaction((transaction) =>
         Effect.gen(function* corruptHistoricalScheduleForProof() {
@@ -943,7 +956,7 @@ it.live('executes the tenant-only Price Group lifecycle through the six governed
                  where tenant_id = ${tenantId}::uuid
                    and price_group_id = ${created.priceGroupRef.resourceId}::uuid
                    and definition_revision_id = ${created.definitionRevisionId}::uuid
-                   and schedule_catalog_revision = ${retirement.acceptedCatalogRevision}`,
+                   and schedule_catalog_revision = ${created.acceptedCatalogRevision}`,
           );
         }),
       );

@@ -3,14 +3,11 @@ import { builtinModules, createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  contains as optionContains,
-  getOrElse as getOptionOrElse,
-  getOrUndefined as getOptionOrUndefined,
-} from 'effect/Option';
+import { getOrElse as getOptionOrElse, getOrUndefined as getOptionOrUndefined } from 'effect/Option';
 import { getOrThrow as getResultOrThrow, isSuccess as isResultSuccess } from 'effect/Result';
 import {
   Boolean as BooleanSchema,
+  Literal,
   Literals,
   NumberFromString,
   OptionFromUndefinedOr,
@@ -99,15 +96,6 @@ const createBuildConfigReaders = (getBuildConfigEnvironment: BuildConfigEnvironm
   return { envValue, getBuildBoolean };
 };
 
-const getCloudflareDeployEnabled = (getBuildConfigEnvironment: BuildConfigEnvironment): boolean => {
-  const cloudflareDeployMode = getResultOrThrow(
-    decodeUnknownResult(OptionFromUndefinedOr(Literals(['cloudflare', 'node'])))(
-      getBuildConfigEnvironment('MODERNJS_DEPLOY'),
-    ),
-  );
-  return optionContains(cloudflareDeployMode, 'cloudflare');
-};
-
 const getBuildPort = (
   getBuildConfigEnvironment: BuildConfigEnvironment,
   portEnvironmentVariable: string,
@@ -142,42 +130,12 @@ const getDefaultRemoteAssetPrefix = (
   return remoteAssetOrigin.length > 0 ? `${remoteAssetOrigin.replace(/\/+$/u, '')}/` : 'auto';
 };
 
-const assertCloudflarePublicUrl = ({
-  appId,
-  cloudflareDeployEnabled,
-  cloudflarePublicUrlEnvironmentVariable,
-  configuredCloudflareUrl,
-  configuredSiteUrl,
-  getBuildBoolean,
-  inferredCloudflareUrl,
-}: {
-  appId: string;
-  cloudflareDeployEnabled: boolean;
-  cloudflarePublicUrlEnvironmentVariable: string;
-  configuredCloudflareUrl: string | undefined;
-  configuredSiteUrl: string | undefined;
-  getBuildBoolean: (name: string) => boolean;
-  inferredCloudflareUrl: string | undefined;
-}): void => {
-  if (
-    cloudflareDeployEnabled &&
-    getBuildBoolean('ULTRAMODERN_CLOUDFLARE_REQUIRE_PUBLIC_URLS') &&
-    configuredCloudflareUrl === undefined &&
-    configuredSiteUrl === undefined &&
-    inferredCloudflareUrl === undefined
-  ) {
-    // oxlint-disable-next-line effect-native/no-native-error-construction -- Missing required deployment configuration is a synchronous build-time invariant at this non-Effect tooling boundary.
-    throw new Error(
-      `Cloudflare deploy for ${appId} needs ${cloudflarePublicUrlEnvironmentVariable}, MODERN_PUBLIC_SITE_URL, or ULTRAMODERN_CLOUDFLARE_WORKERS_DEV_SUBDOMAIN.`,
-    );
-  }
-};
-
 export const createModernBuildContext = ({
   appId,
   cloudflarePublicUrlEnvironmentVariable,
   cloudflareWorkerName,
   defaultPort,
+  deployTarget,
   getBuildConfigEnvironment,
   portEnvironmentVariable,
 }: {
@@ -185,11 +143,13 @@ export const createModernBuildContext = ({
   cloudflarePublicUrlEnvironmentVariable: string;
   cloudflareWorkerName: string;
   defaultPort: number;
+  /** `resolveDeployTarget().target` from `@modern-js/app-tools-extensions/config`. */
+  deployTarget: string;
   getBuildConfigEnvironment: BuildConfigEnvironment;
   portEnvironmentVariable: string;
 }): ModernBuildContext => {
   const { envValue, getBuildBoolean } = createBuildConfigReaders(getBuildConfigEnvironment);
-  const cloudflareDeployEnabled = getCloudflareDeployEnabled(getBuildConfigEnvironment);
+  const cloudflareDeployEnabled = deployTarget === 'cloudflare';
   const port = getBuildPort(getBuildConfigEnvironment, portEnvironmentVariable, defaultPort);
   const configuredSiteUrl = envValue('MODERN_PUBLIC_SITE_URL');
   const configuredCloudflareUrl = envValue(cloudflarePublicUrlEnvironmentVariable);
@@ -222,16 +182,6 @@ export const createModernBuildContext = ({
   const buildCacheDirectory = `node_modules/.cache/rspack-${appId}-${buildTarget}`;
   // oxlint-disable-next-line github/js-class-name -- This interpolated value is a filesystem directory name required by Modern.js, not a CSS class name.
   const buildTempDirectory = `node_modules/.modern-js-${appId}-${buildTarget}`;
-
-  assertCloudflarePublicUrl({
-    appId,
-    cloudflareDeployEnabled,
-    cloudflarePublicUrlEnvironmentVariable,
-    configuredCloudflareUrl,
-    configuredSiteUrl,
-    getBuildBoolean,
-    inferredCloudflareUrl,
-  });
 
   return {
     assetPrefix,
@@ -330,7 +280,6 @@ interface RspackConfiguration {
   externals?: unknown;
   node?: false | object;
   plugins: unknown[];
-  resolve: { alias?: false | object };
 }
 
 /* oxlint-disable anti-slop/no-unknown-returns -- Rspack supplies opaque plugin constructors; their instances are forwarded unchanged to its generic plugin collection and are never inspected here. */
@@ -352,12 +301,6 @@ const createCloudflareRspack = (cloudflareDeployEnabled: boolean, sourceDirector
     if (!cloudflareDeployEnabled) {
       return;
     }
-    const configuredAliases = config.resolve.alias;
-    config.resolve.alias = configuredAliases === false || configuredAliases === undefined ? {} : configuredAliases;
-    Object.assign(config.resolve.alias, {
-      'pg-pool$': createRequire(import.meta.resolve('pg/package.json')).resolve('pg-pool'),
-      'pg-protocol$': fileURLToPath(new URL('../pg-protocol/dist/index.js', import.meta.resolve('pg/package.json'))),
-    });
     const configuredExternals = config.externals;
     const nextExternals = [cloudflareRuntimeExternal];
     if (configuredExternals !== undefined) {
@@ -446,7 +389,8 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
     },
     output: {
       assetPrefix: build.assetPrefix,
-      disableTsChecker: false,
+      // `pnpm typecheck` (tsc --build over the reference graph) owns type diagnostics.
+      disableTsChecker: true,
       distPath: {
         html: './',
         root: build.buildOutputRoot,
@@ -498,18 +442,25 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
   };
 };
 
+// Zephyr uploads only for a deploy that provides ZE_CI_TOKEN; the deploy environment then sets
+// ZE_FAIL_BUILD=true so a failed upload fails the build instead of shipping without it.
+const zephyrFailBuildSchema = Literal('true').annotate({
+  message:
+    'ZE_CI_TOKEN is set but ZE_FAIL_BUILD is not "true", so a failed Zephyr upload would not fail the deploy. Set ZE_FAIL_BUILD=true in the deploy environment next to ZE_CI_TOKEN.',
+});
+
 export const createZephyrRspackPlugin = <Configuration>(options: {
   configure: () => Configuration;
-  readToken: () => string | undefined;
+  readEnvironment: (name: 'ZE_CI_TOKEN' | 'ZE_FAIL_BUILD') => string | undefined;
 }) => ({
   name: 'ultramodern-zephyr-rspack-plugin',
   pre: ['@modern-js/plugin-module-federation-config'],
   setup(api: { modifyRspackConfig: (configuration: Configuration) => void }) {
-    // Only authoritative CI deployments upload artifacts. Ordinary builds need
-    // no Zephyr account or network access; deployment upload failures stay fatal.
-    if (options.readToken() === undefined) {
+    // Ordinary builds need no Zephyr account or network access.
+    if (options.readEnvironment('ZE_CI_TOKEN') === undefined) {
       return;
     }
+    getResultOrThrow(decodeUnknownResult(zephyrFailBuildSchema)(options.readEnvironment('ZE_FAIL_BUILD')));
     api.modifyRspackConfig(options.configure());
   },
 });

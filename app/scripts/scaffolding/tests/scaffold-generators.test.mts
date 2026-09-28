@@ -249,12 +249,16 @@ const GeneratedOperationGatewayModuleSchema = Schema.Struct({
 });
 
 const StringRecordSchema = Schema.Record(Schema.String, Schema.String);
-const FixturePackageSchema = Schema.Struct({
-  dependencies: StringRecordSchema,
-  exports: StringRecordSchema,
-  modernjs: Schema.Record(Schema.String, Schema.Json),
-  scripts: StringRecordSchema,
-});
+// Fixture package documents are rewritten by the tests, so undeclared owner fields must round-trip.
+const FixturePackageSchema = Schema.StructWithRest(
+  Schema.Struct({
+    dependencies: StringRecordSchema,
+    exports: StringRecordSchema,
+    modernjs: Schema.Record(Schema.String, Schema.Json),
+    scripts: StringRecordSchema,
+  }),
+  [Schema.Record(Schema.String, Schema.Json)],
+);
 const EsbuildMetafileSchema = Schema.Struct({
   inputs: Schema.Record(
     Schema.String,
@@ -364,14 +368,15 @@ const InventoryLocaleSchema = Schema.Struct({
   }),
 });
 
-const decodeFixturePackage = (source: string) =>
-  Schema.decodeUnknownEffect(FixturePackageSchema, {
-    onExcessProperty: 'preserve',
-  })(JSON.parse(source));
-const decodeInventoryLocale = (source: string) =>
-  Schema.decodeUnknownEffect(InventoryLocaleSchema, {
-    onExcessProperty: 'preserve',
-  })(JSON.parse(source));
+const CorePackageExportsSchema = Schema.Struct({
+  exports: Schema.Record(Schema.String, Schema.String),
+  name: Schema.String,
+});
+
+const decodeCorePackageExports = (source: string) =>
+  Schema.decodeUnknownEffect(CorePackageExportsSchema)(JSON.parse(source));
+const decodeFixturePackage = (source: string) => Schema.decodeUnknownEffect(FixturePackageSchema)(JSON.parse(source));
+const decodeInventoryLocale = (source: string) => Schema.decodeUnknownEffect(InventoryLocaleSchema)(JSON.parse(source));
 
 const inventorySlug = 'inventory-stock';
 const shellAppId = 'shell-super-app';
@@ -435,6 +440,7 @@ const rootPackageFile = 'package.json';
 const coreRuntimePackageFile = 'packages/core-runtime/package.json';
 const coreRuntimePackageEntryExport = './src/index.ts';
 const coreRuntimeIndexFile = 'packages/core-runtime/src/index.ts';
+const coreRuntimeModuleEntrypointFile = 'packages/core-runtime/src/modules/module-entrypoint.ts';
 const coreActionCatalogFile = 'packages/core-runtime/src/modules/actions/catalog.ts';
 const shellSentinelFile = 'apps/shell-super-app/src/sentinel.ts';
 const shellVerticalClientsFile = 'apps/shell-super-app/src/api/vertical-clients.ts';
@@ -587,9 +593,9 @@ const createVertical = (root: string, vertical: FixtureVertical): Effect.Effect<
         name: `@app/${vertical.slug}`,
         private: true,
         scripts: {
-          build: 'modern build && MODERNJS_DEPLOY=node modern deploy --skip-build',
+          build: 'modern build --deploy-target node && modern deploy --skip-build --deploy-target node',
           'cloudflare:build':
-            'MODERNJS_DEPLOY=cloudflare modern build && MODERNJS_DEPLOY=cloudflare modern deploy --skip-build',
+            'modern build --deploy-target cloudflare && modern deploy --skip-build --deploy-target cloudflare',
           existing: preservedFixtureValue,
         },
         version: '0.1.0',
@@ -1505,16 +1511,15 @@ it.live(
         expect(searchClient).toMatch(/api: InventoryItemsSearchApi,/u);
         expect(reportClient).toMatch(/api: StockLevelsReportApi,/u);
         expect(moduleApiContract).toMatch(
-          /headers: \{\},\s+params: \{\},\s+payload: ResourceDetailRequestSchema,\s+query: \{\}/u,
+          /\],\s+payload: ResourceDetailRequestSchema,\s+success: ResourceDetailResponseSchema,/u,
         );
+        expect(moduleApiContract).not.toMatch(/(?:headers|params|query): \{\}/u);
         expect(moduleApiContract).toContain(
           'export type ResourceDetailRequest = typeof ResourceDetailRequestSchema.Type;',
         );
         expect(moduleApiContract).toContain('export const ResourceDetailResponseSchema = Schema.Struct(');
         expect(moduleApiContract).not.toMatch(/export type ResourceDetailResponse\b/u);
-        expect(moduleApiClient).toMatch(
-          /client\.resourceDetail\.execute\(\{\s+headers: \{\},\s+params: \{\},\s+payload,\s+query: \{\},?\s+\}\)/u,
-        );
+        expect(moduleApiClient).toContain('client.resourceDetail.execute({ payload })');
         expect(moduleApiContract).toMatch(/HttpApiGroup\.make\('resourceDetail'\)/u);
         expect(secondModuleApiContract).toMatch(/HttpApiGroup\.make\('resourceHistory'\)/u);
         expect(secondModuleApiClient).toMatch(/client\.resourceHistory\.execute\(/u);
@@ -2491,7 +2496,7 @@ it.live(
           '@app/core-runtime': workspaceVersion,
           '@app/gateway-principal-verifier': workspaceVersion,
           '@app/shared-contracts': workspaceVersion,
-          effect: '4.0.0-rc.112',
+          effect: '4.0.0-rc.117',
           zeta: '1.0.0',
         });
         expect(packageJson.scripts['existing']).toBe(preservedFixtureValue);
@@ -4535,7 +4540,7 @@ export default PurchaseOrdersPage;
             fixture.root,
             'verticals/inventory-stock/src/routes/[lang]/inventory-stock/purchase-orders/route.meta.ts',
           ),
-        ).toBe(`import { defineTenantModuleEntrypoint } from '@app/core-runtime';
+        ).toBe(`import { defineTenantModuleEntrypoint } from '@app/core-runtime/module-entrypoint';
 
 const routeMeta = {
   canonicalPath: '/inventory-stock/purchase-orders',
@@ -5891,11 +5896,7 @@ it.live(
               ['packages/core-runtime/src/permissions', 'packages/core-runtime/src/permissions', 'dir'],
               ['packages/core-runtime/src/auth', 'packages/core-runtime/src/auth', 'dir'],
               ['packages/core-runtime/src/authorization', 'packages/core-runtime/src/authorization', 'dir'],
-              [
-                'packages/core-runtime/src/modules/module-entrypoint.ts',
-                'packages/core-runtime/src/modules/module-entrypoint.ts',
-                'file',
-              ],
+              [coreRuntimeModuleEntrypointFile, coreRuntimeModuleEntrypointFile, 'file'],
             ] as const
           ).map(([source, target, kind]) =>
             Effect.promise(() => symlink(path.join(appRoot, source), path.join(fixture.root, target), kind)),
@@ -5924,6 +5925,17 @@ it.live(
           ),
           { concurrency: 'unbounded' },
         );
+        // Map every @app/core-runtime export exactly as the package declares it, so the fixture cannot drift.
+        const coreRuntimeDirectory = path.join(appRoot, path.dirname(path.dirname(coreRuntimeIndexFile)));
+        const corePackage = yield* decodeCorePackageExports(
+          yield* Effect.promise(() => readFile(path.join(coreRuntimeDirectory, 'package.json'), 'utf-8')),
+        );
+        const coreRuntimePaths = Object.fromEntries(
+          Object.entries(corePackage.exports).map(([subpath, target]) => [
+            path.posix.join(corePackage.name, subpath),
+            [path.join(coreRuntimeDirectory, target)],
+          ]),
+        );
         const fixtureTsconfig = path.join(fixture.root, 'tsconfig.generated.json');
         yield* Effect.promise(() =>
           writeFile(
@@ -5936,28 +5948,7 @@ it.live(
                 moduleResolution: 'Bundler',
                 noEmit: true,
                 paths: {
-                  '@app/core-runtime': [path.join(appRoot, coreRuntimeIndexFile)],
-                  '@app/core-runtime/actions/principal-context': [
-                    path.join(appRoot, 'packages/core-runtime/src/actions/principal-context.ts'),
-                  ],
-                  '@app/core-runtime/actions/runtime-wiring': [
-                    path.join(appRoot, 'packages/core-runtime/src/actions/runtime-wiring.ts'),
-                  ],
-                  '@app/core-runtime/auth/gateway-assertion-redemption': [
-                    path.join(appRoot, 'packages/core-runtime/src/auth/gateway-assertion-redemption.ts'),
-                  ],
-                  '@app/core-runtime/http/action-runner': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/http-instrumentation-seam.ts'),
-                  ],
-                  '@app/core-runtime/http/governed-read': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/governed-read.ts'),
-                  ],
-                  '@app/core-runtime/http/principal-authentication': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/principal-authentication.ts'),
-                  ],
-                  '@app/core-runtime/outbox/worker': [
-                    path.join(appRoot, 'packages/core-runtime/src/outbox/worker-entrypoint.ts'),
-                  ],
+                  ...coreRuntimePaths,
                   '@app/gateway-principal-verifier/server': [
                     path.join(appRoot, 'packages/gateway-principal-verifier/src/server.ts'),
                   ],
@@ -6234,7 +6225,7 @@ it.live(
         'const resolvedApiHandlersLive = apiHandlersLive.pipe(',
         'const resolvedApiHandlersLive = unrelatedHandlers.pipe(',
       ],
-      ["'@app/shared-contracts/server/effect-bff-runtime'", "'./counterfeit-assembler.ts'"],
+      ["'@modern-js/bff-effect/assembly'", "'./counterfeit-assembler.ts'"],
       ['handlers: resolvedApiHandlersLive,', 'handlers: unrelatedHandlers,'],
     ] as const) {
       expect(handler.includes(before)).toBeTruthy();

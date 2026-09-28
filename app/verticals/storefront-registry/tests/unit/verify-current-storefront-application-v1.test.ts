@@ -1,4 +1,4 @@
-import { ReadPermissionDenied, TrustedPrincipalContextSchema } from '@app/core-runtime';
+import { PersistenceFailure, ReadPermissionDenied, TrustedPrincipalContextSchema } from '@app/core-runtime';
 import type { OperationalScope } from '@app/core-runtime/operations/context';
 import {
   CurrentStorefrontApplicationCurrentSchema,
@@ -11,7 +11,6 @@ import type {
   CurrentStorefrontApplicationPersistence,
   CurrentStorefrontApplicationSnapshot,
 } from '../../src/persistence/current-storefront-application-persistence.ts';
-import { StorefrontRegistryPersistenceUnavailable } from '../../src/persistence/current-storefront-application-persistence.ts';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const principalId = '22222222-2222-4222-8222-222222222222';
@@ -149,13 +148,7 @@ describe('Verify Current Storefront Application v1', () => {
       expect(missing.result.state).toBe('STALE');
 
       const unavailable: CurrentStorefrontApplicationPersistence = {
-        load: () =>
-          Effect.fail(
-            new StorefrontRegistryPersistenceUnavailable({
-              code: 'storefront_registry_persistence_unavailable',
-              reason: 'fixture',
-            }),
-          ),
+        load: () => Effect.fail(new PersistenceFailure({ cause: 'fixture', reason: 'fixture' })),
       };
       const failure = yield* handleVerifyCurrentStorefrontApplicationV1(
         { observedProof: currentProof, originalRequest },

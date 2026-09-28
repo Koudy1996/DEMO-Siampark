@@ -7,7 +7,7 @@ import { ConnectionError, SqlError, UnknownError } from 'effect/unstable/sql/Sql
 import { commitActionThenReject } from '../../src/actions/context.ts';
 import type { ActionHandlerContext } from '../../src/actions/context.ts';
 import { defineAction } from '../../src/actions/definition.ts';
-import { ActionInvocationPersistenceError } from '../../src/actions/errors.ts';
+import { ActionInvocationPersistenceError, ActionPolicyDenied } from '../../src/actions/errors.ts';
 import { createDomainEventReference } from '../../src/actions/events.ts';
 import type { ActionPolicy } from '../../src/actions/policy.ts';
 import { defineGlobalPolicy, defineMicroverticalPolicy, denyPolicy } from '../../src/actions/policy.ts';
@@ -50,7 +50,8 @@ import {
 import { makeModuleContractFixture } from '../../src/testing/module-contract.ts';
 import { testOperationalScopeResolver as baseTestOperationalScopeResolver } from '../fixtures/operational-scope.ts';
 import { openActionRuntimeOptions } from '../support/action-runtime-options.ts';
-import { makeFaultInjectableCoreDatabase, TestQueryHook } from '../support/database-faults.ts';
+import { makeCoreDatabase } from '../../src/db/client.ts';
+import { injectStatementFaults } from '../support/database-faults.ts';
 import type { OperationalScopeResolverService } from '../../src/operations/context.ts';
 import { OperationAuthenticationRequired, OperationContextUnavailable } from '../../src/operations/errors.ts';
 
@@ -173,7 +174,7 @@ const withDatabase = <Value, Error, Requirements>(
   Effect.scoped(
     Effect.gen(function* databaseScope() {
       const configuration = yield* loadDatabaseConfig();
-      const database = yield* makeFaultInjectableCoreDatabase(configuration);
+      const database = yield* makeCoreDatabase(configuration);
       return yield* execute(database);
     }),
   );
@@ -242,7 +243,7 @@ const withEvidencePersistenceFailure = (
             ? 'update "core"."action_invocations" set "status" = $1, "completed_at"'
             : `insert into "core"."${table}"`;
         return transactionBody(transaction).pipe(
-          Effect.provideService(TestQueryHook, (statement) =>
+          injectStatementFaults((statement) =>
             statement.startsWith(statementPrefix)
               ? Effect.fail(
                   new SqlError({
@@ -1169,11 +1170,11 @@ const testProgram8 = () =>
         transport: transport(key),
       };
       const first = yield* Effect.exit(runtime.runAction(input));
-      const retry = yield* Effect.exit(runtime.runAction(input));
+      const retry = yield* Effect.flip(runtime.runAction(input));
       const { audits, invocation } = yield* invocationEvidence(database, key);
 
       expect(hasFailure(first, 'ActionPolicyDenied')).toBe(true);
-      expect(hasFailure(retry, 'ActionInvocationStateError')).toBe(true);
+      expect(Schema.is(ActionPolicyDenied)(retry) && retry.policyReasonCode).toBe('terminal_rejection');
       expect(evaluations).toBe(1);
       expect(handlerExecutions).toBe(0);
       expect(invocation.status).toBe('rejected');
@@ -1468,7 +1469,7 @@ const testProgram11 = () =>
             transport: transport('sequence-second', secondModule),
           })
           .pipe(
-            Effect.provideService(TestQueryHook, () => Deferred.succeed(secondInsertStarted, null).pipe(Effect.asVoid)),
+            injectStatementFaults(() => Deferred.succeed(secondInsertStarted, null).pipe(Effect.asVoid)),
             Effect.ensuring(
               Effect.sync(() => {
                 secondCompleted = true;

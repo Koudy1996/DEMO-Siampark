@@ -601,11 +601,8 @@ const requireRouteEntrypoint = (
   });
 
 const TopologyMetadataSchema = Schema.Struct({
-  topology: Schema.optionalKey(
-    Schema.Struct({
-      apps: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String, path: Schema.String }))),
-    }),
-  ),
+  shell: Schema.Struct({ id: Schema.String, path: Schema.String }),
+  verticals: Schema.Array(Schema.Struct({ id: Schema.String, path: Schema.String })),
 });
 const decodeTopologyMetadata = Schema.decodeUnknownEffect(Schema.fromJsonString(TopologyMetadataSchema));
 
@@ -619,14 +616,17 @@ const readTopologyOwners = (root: string) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const metadata = yield* fileSystem
-      .readFileString(path.join(root, '.modernjs/ultramodern.json'), 'utf-8')
+      .readFileString(path.join(root, 'topology/reference-topology.json'), 'utf-8')
       .pipe(Effect.flatMap(decodeTopologyMetadata));
-    return new Map((metadata.topology?.apps ?? []).map((app) => [app.path.replaceAll('\\', '/'), app.id]));
+    return new Map([
+      [metadata.shell.path.replaceAll('\\', '/'), metadata.shell.id],
+      ...metadata.verticals.map((app) => [app.path.replaceAll('\\', '/'), app.id] as const),
+    ]);
   });
 
 const readSourceRevision = (root: string) =>
   Effect.gen(function* readSourceRevisionEffect() {
-    const configured = yield* Config.option(Config.string('ULTRAMODERN_SOURCE_REVISION'));
+    const configured = yield* Config.option(Config.String('ULTRAMODERN_SOURCE_REVISION'));
     if (Option.isSome(configured)) {
       return configured.value;
     }
@@ -890,9 +890,12 @@ const isGeneratedActionHttpContract = (
 
 const isGeneratedDomainProblemSchema = (file: string, source: string): boolean =>
   /\/shared\/apis\/[a-z][a-z0-9-]*-domain-(?:conflict|policy|unavailable)-problem\.ts$/u.test(`/${file}`) &&
-  source.includes('Schema.TaggedError') &&
-  source.includes('HttpApiSchema.status(') &&
-  source.includes("contentType: 'application/problem+json'");
+  /^import \{ make(?:Retryable)?ProblemDetailsSchema \} from '@app\/shared-contracts\/problem-details';$/mu.test(
+    source,
+  ) &&
+  /^export const [A-Z][A-Za-z0-9]*Domain(?:Conflict|Policy|Unavailable)ProblemSchema = make(?:Retryable)?ProblemDetailsSchema\(/mu.test(
+    source,
+  );
 
 const hasGeneratedGovernedContributionHeader = (source: string): boolean =>
   ['report', SEARCH_PROVIDER_KIND].some((kind) =>
@@ -1116,39 +1119,52 @@ const validateProductionSource = (state: BoundaryCheckState, file: string, sourc
     yield* appendBusinessPermissionInventoryEntry(state, file, source);
   });
 
-const collectRouteSourceKeys = (state: BoundaryCheckState) =>
-  Effect.gen(function* collectRouteSourceKeysEffect() {
-    const routeSourceKeysByDeployment = new Map<string, Set<string>>();
+const collectRouteSourceFiles = (state: BoundaryCheckState) =>
+  Effect.gen(function* collectRouteSourceFilesEffect() {
+    const seenEntrypointKeys = new Set<string>();
+    const routeSourceFilesByDeployment = new Map<string, Set<string>>();
     for (const route of state.routeEntrypoints) {
-      const sourceKeys = routeSourceKeysByDeployment.get(route.deployment) ?? new Set<string>();
-      if (sourceKeys.has(route.entrypointKey)) {
+      if (seenEntrypointKeys.has(`${route.deployment}:${route.entrypointKey}`)) {
         yield* fail(route.file, `route entrypoint ${route.entrypointKey} is duplicated`);
       }
-      sourceKeys.add(route.entrypointKey);
-      routeSourceKeysByDeployment.set(route.deployment, sourceKeys);
+      seenEntrypointKeys.add(`${route.deployment}:${route.entrypointKey}`);
+      const sourceFiles = routeSourceFilesByDeployment.get(route.deployment) ?? new Set<string>();
+      sourceFiles.add(route.file);
+      routeSourceFilesByDeployment.set(route.deployment, sourceFiles);
     }
-    return routeSourceKeysByDeployment;
+    return routeSourceFilesByDeployment;
   });
 
-const validateManifestKeys = (state: BoundaryCheckState, normalizedFile: string, sourceKeys: ReadonlySet<string>) =>
-  Effect.gen(function* validateManifestKeysEffect() {
-    const manifestSource = sourceOrEmpty(state.sourceMap, normalizedFile);
-    const manifestKeys = readStringProperties(manifestSource, 'entrypointKey');
-    const missing = [...sourceKeys].filter((entrypointKey) => !manifestKeys.has(entrypointKey));
-    const stale = [...manifestKeys].filter((entrypointKey) => !sourceKeys.has(entrypointKey));
+// The framework manifest statically imports every route.meta.ts below its directory, so it is
+// current exactly when its relative imports name the deployment's route metadata files.
+const validateManifestImports = (
+  path: Path.Path,
+  state: BoundaryCheckState,
+  normalizedFile: string,
+  sourceFiles: ReadonlySet<string>,
+) =>
+  Effect.gen(function* validateManifestImportsEffect() {
+    const manifestDirectory = path.dirname(normalizedFile);
+    const manifestImports = new Set(
+      readImportedModuleSpecifiers(sourceOrEmpty(state.sourceMap, normalizedFile))
+        .filter((specifier) => specifier.startsWith('./'))
+        .map((specifier) => `${path.join(manifestDirectory, specifier).replaceAll('\\', '/')}.ts`),
+    );
+    const missing = [...sourceFiles].filter((file) => !manifestImports.has(file));
+    const stale = [...manifestImports].filter((file) => !sourceFiles.has(file));
     if (missing.length > 0 || stale.length > 0) {
       const missingLabel = missing.length === 0 ? 'none' : sortStrings(missing).join(', ');
       const staleLabel = stale.length === 0 ? 'none' : sortStrings(stale).join(', ');
       yield* fail(
         normalizedFile,
-        `generated route manifest is stale (missing: ${missingLabel}; orphaned: ${staleLabel}); rerun the route generator`,
+        `generated route manifest is stale (missing: ${missingLabel}; orphaned: ${staleLabel}); rerun ultramodern-create ultramodern routes-generate`,
       );
     }
   });
 
 const validateRouteManifests = (path: Path.Path, files: readonly string[], root: string, state: BoundaryCheckState) =>
   Effect.gen(function* validateRouteManifestsEffect() {
-    const routeSourceKeysByDeployment = yield* collectRouteSourceKeys(state);
+    const routeSourceFilesByDeployment = yield* collectRouteSourceFiles(state);
     const routeManifests = files.filter((file) => file.endsWith('/ultramodern-route-metadata.ts'));
     const seenManifestDeployments = new Set<string>();
     for (const manifestFile of routeManifests) {
@@ -1163,13 +1179,14 @@ const validateRouteManifests = (path: Path.Path, files: readonly string[], root:
         yield* fail(normalizedFile, `deployment ${deployment} has multiple generated route manifests`);
       }
       seenManifestDeployments.add(deployment);
-      yield* validateManifestKeys(
+      yield* validateManifestImports(
+        path,
         state,
         normalizedFile,
-        routeSourceKeysByDeployment.get(deployment) ?? new Set<string>(),
+        routeSourceFilesByDeployment.get(deployment) ?? new Set<string>(),
       );
     }
-    for (const deployment of routeSourceKeysByDeployment.keys()) {
+    for (const deployment of routeSourceFilesByDeployment.keys()) {
       if (!seenManifestDeployments.has(deployment)) {
         yield* fail('generated route manifests', `deployment ${deployment} is missing its route manifest`);
       }
@@ -1328,7 +1345,7 @@ const [, invokedPath] = process.argv;
 if (invokedPath !== undefined && invokedPath === import.meta.filename) {
   const main = Effect.gen(function* moduleEntrypointBoundaryMain() {
     const path = yield* Path.Path;
-    const root = yield* Config.string('ULTRAMODERN_WORKSPACE_ROOT').pipe(
+    const root = yield* Config.String('ULTRAMODERN_WORKSPACE_ROOT').pipe(
       Config.withDefault(path.resolve(import.meta.dirname, '..')),
     );
     yield* checkModuleEntrypointBoundariesEffect(root);

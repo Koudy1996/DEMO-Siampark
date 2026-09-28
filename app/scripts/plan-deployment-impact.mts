@@ -16,6 +16,7 @@ import {
 } from 'effect';
 import { Command, Flag } from 'effect/unstable/cli';
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process';
+import { parse as parseYaml } from 'yaml';
 
 import type { ProtectedEntrypointInventory } from './authorization/protected-entrypoint-inventory.mts';
 import type { AuthorizationRolloutContract } from './authorization/rollout-contract.mts';
@@ -116,7 +117,6 @@ export interface DeploymentImpactPlan {
     readonly baseRevision?: string;
     readonly headRevision?: string;
     readonly mode: 'diff' | 'full';
-    readonly reason?: string;
   };
   readonly phases: readonly DeploymentPhase[];
   readonly schemaVersion: 1;
@@ -288,7 +288,6 @@ const DeploymentImpactPlanSchema = Schema.Struct({
     baseRevision: Schema.optional(Schema.String),
     headRevision: Schema.optional(Schema.String),
     mode: Schema.Literals(['diff', 'full']),
-    reason: Schema.optional(Schema.String),
   }),
   phases: Schema.Array(DeploymentPhaseSchema),
   schemaVersion: Schema.Literal(1),
@@ -404,6 +403,8 @@ const INFRASTRUCTURE_PHASES = {
 } as const;
 
 const GIT_EXECUTABLE = '/usr/bin/git';
+const PACKAGE_MANIFEST = 'package.json';
+const WORKSPACE_MANIFEST = 'pnpm-workspace.yaml';
 
 const readJson = <DocumentSchema extends Schema.ConstraintDecoder<unknown>>(schema: DocumentSchema, filePath: string) =>
   Effect.gen(function* readJsonEffect() {
@@ -649,6 +650,64 @@ const buildTopologyUnits = (
   return units;
 };
 
+const WORKSPACE_GLOB_PATTERN = /^(?<directory>[\w.-]+(?:\/[\w.-]+)*)\/\*$/u;
+
+const WorkspaceManifestSchema = Schema.Struct({ packages: Schema.NonEmptyArray(Schema.String) });
+
+const parseWorkspaceGlobs = (workspaceSource: string) =>
+  Schema.decodeUnknownEffect(WorkspaceManifestSchema)(parseYaml(workspaceSource)).pipe(
+    Effect.map(({ packages }) => packages),
+    Effect.mapError(
+      () =>
+        new DeploymentImpactPlanningError({
+          message: 'Deployment impact planning failed: pnpm-workspace.yaml must declare a non-empty "packages" list',
+        }),
+    ),
+  );
+
+const listWorkspaceProjects = (rootDirectory: string, globs: readonly string[]) =>
+  Effect.gen(function* listWorkspaceProjectsEffect() {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const projects: string[] = [];
+    for (const glob of globs) {
+      const directory = WORKSPACE_GLOB_PATTERN.exec(glob)?.groups?.directory;
+      if (directory === undefined) {
+        return fail(
+          `pnpm-workspace.yaml glob "${glob}" is unsupported; declare workspace projects with "<directory>/*" globs`,
+        );
+      }
+      const absoluteDirectory = pathService.join(rootDirectory, directory);
+      if (!(yield* fileSystem.exists(absoluteDirectory))) {
+        continue;
+      }
+      for (const entry of yield* fileSystem.readDirectory(absoluteDirectory)) {
+        if (yield* fileSystem.exists(pathService.join(absoluteDirectory, entry, PACKAGE_MANIFEST))) {
+          projects.push(`${directory}/${entry}`);
+        }
+      }
+    }
+    return EffectArray.sort(projects, Order.String);
+  });
+
+const validateWorkspaceCompleteness = (
+  workspaceProjects: readonly string[],
+  units: readonly TopologyUnit[],
+  sharedPackages: readonly TopologyOwner[],
+): void => {
+  const declaredPaths = new Set([
+    ...units.map((unit) => unit.path),
+    ...sharedPackages.flatMap((sharedPackage) => (sharedPackage.path === undefined ? [] : [sharedPackage.path])),
+  ]);
+  for (const project of workspaceProjects) {
+    if (!declaredPaths.has(project)) {
+      fail(
+        `workspace project "${project}" is not declared in topology; add it to reference-topology.json sharedPackages and topology/ownership.json owners`,
+      );
+    }
+  }
+};
+
 const orderUnits = (units: readonly TopologyUnit[]): readonly TopologyUnit[] => {
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
   const ordered: TopologyUnit[] = [];
@@ -679,47 +738,36 @@ const orderUnits = (units: readonly TopologyUnit[]): readonly TopologyUnit[] => 
   return ordered;
 };
 
-const invalidBaseReason = (rootDirectory: string, baseRevision: string | undefined, headRevision: string) =>
-  Effect.gen(function* invalidBaseReasonEffect() {
-    if (baseRevision === undefined || baseRevision.length === 0 || /^0+$/u.test(baseRevision)) {
-      return 'comparison base is unavailable or all-zero';
-    }
+export const FULL_PLAN_SEED_INSTRUCTION =
+  'plan the whole topology once instead: dispatch "Ultramodern Workspace Gates and Main-to-Stage Deploy" on main with full=true (gh workflow run ultramodern-workspace-gates.yml --ref main -f full=true)';
+
+const gitSucceeds = (rootDirectory: string, args: readonly string[]) =>
+  Effect.gen(function* gitSucceedsEffect() {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const revisionExists = yield* spawner
-      .exitCode(
-        ChildProcess.make(GIT_EXECUTABLE, ['cat-file', '-e', `${baseRevision}^{commit}`], {
-          cwd: rootDirectory,
-          stderr: 'ignore',
-          stdout: 'ignore',
-        }),
-      )
+    return yield* spawner
+      .exitCode(ChildProcess.make(GIT_EXECUTABLE, args, { cwd: rootDirectory, stderr: 'ignore', stdout: 'ignore' }))
       .pipe(
         Effect.map((exitCode) => exitCode === 0),
         Effect.catch(() => Effect.succeed(false)),
       );
-    if (!revisionExists) {
-      return `comparison base "${baseRevision}" is unavailable`;
+  });
+
+const requireComparableBase = (rootDirectory: string, baseRevision: string, headRevision: string) =>
+  Effect.gen(function* requireComparableBaseEffect() {
+    if (!(yield* gitSucceeds(rootDirectory, ['cat-file', '-e', `${baseRevision}^{commit}`]))) {
+      return fail(`comparison base "${baseRevision}" is not a commit in this checkout; ${FULL_PLAN_SEED_INSTRUCTION}`);
     }
-    const isAncestor = yield* spawner
-      .exitCode(
-        ChildProcess.make(GIT_EXECUTABLE, ['merge-base', '--is-ancestor', baseRevision, headRevision], {
-          cwd: rootDirectory,
-          stderr: 'ignore',
-          stdout: 'ignore',
-        }),
-      )
-      .pipe(
-        Effect.map((exitCode) => exitCode === 0),
-        Effect.catch(() => Effect.succeed(false)),
+    if (!(yield* gitSucceeds(rootDirectory, ['merge-base', '--is-ancestor', baseRevision, headRevision]))) {
+      return fail(
+        `comparison base "${baseRevision}" is not an ancestor of "${headRevision}" (history was rewritten); ${FULL_PLAN_SEED_INSTRUCTION}`,
       );
-    if (!isAncestor) {
-      return `comparison base "${baseRevision}" is not an ancestor of "${headRevision}"`;
     }
     return yield* Effect.undefined;
   });
 
 const changedPathsFromGit = (rootDirectory: string, baseRevision: string, headRevision: string) =>
   Effect.gen(function* changedPathsFromGitEffect() {
+    yield* requireComparableBase(rootDirectory, baseRevision, headRevision);
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const output = yield* spawner.string(
       ChildProcess.make(GIT_EXECUTABLE, ['diff', '--name-only', '--no-renames', '-z', baseRevision, headRevision], {
@@ -741,7 +789,7 @@ const isMigrationChange = (changedPath: string): boolean =>
 const isPublicContractChange = (ownerPath: string, changedPath: string): boolean => {
   const relativePath = changedPath.slice(ownerPath.length + 1);
   return (
-    relativePath === 'package.json' ||
+    relativePath === PACKAGE_MANIFEST ||
     relativePath === 'vertical.manifest.ts' ||
     relativePath === 'module-federation.config.ts' ||
     relativePath === 'backend-federation.config.ts' ||
@@ -768,10 +816,11 @@ const isAuthorizationRolloutChange = (changedPath: string): boolean =>
 
 const CONSERVATIVE_FULL_DEPLOY_PATHS = new Set([
   '.mise.toml',
-  'package.json',
+  PACKAGE_MANIFEST,
   'pnpm-lock.yaml',
-  'pnpm-workspace.yaml',
+  WORKSPACE_MANIFEST,
   'scripts/install-zerops-node.sh',
+  'scripts/verify-zerops-workspace-install.mts',
   'scripts/generate-outbox-worker-deployment.mjs',
   'scripts/materialize-outbox-worker.mjs',
   'scripts/materialize-zerops-runtime.mjs',
@@ -789,22 +838,12 @@ const toPhase = (unit: TopologyUnit): DeploymentPhase => ({
 });
 
 const makeComparison = (
-  options: PlanDeploymentImpactOptions,
+  baseRevision: string | undefined,
   headRevision: string,
-  fallbackReason: string | undefined,
+  fullDeploy: boolean,
 ): DeploymentImpactPlan['comparison'] => {
-  const mode = fallbackReason === undefined ? 'diff' : 'full';
-  if (options.baseRevision === undefined) {
-    return fallbackReason === undefined ? { headRevision, mode } : { headRevision, mode, reason: fallbackReason };
-  }
-  return fallbackReason === undefined
-    ? { baseRevision: options.baseRevision, headRevision, mode }
-    : {
-        baseRevision: options.baseRevision,
-        headRevision,
-        mode,
-        reason: fallbackReason,
-      };
+  const mode = fullDeploy ? 'full' : 'diff';
+  return baseRevision === undefined ? { headRevision, mode } : { baseRevision, headRevision, mode };
 };
 
 interface DeploymentImpactState {
@@ -918,22 +957,15 @@ const deriveDeploymentImpact = (
 const deploymentComparison = (options: PlanDeploymentImpactOptions, rootDirectory: string) =>
   Effect.gen(function* deploymentComparisonEffect() {
     const headRevision = options.headRevision ?? 'HEAD';
-    const fallbackReason =
-      options.changedPaths === undefined
-        ? yield* invalidBaseReason(rootDirectory, options.baseRevision, headRevision)
-        : undefined;
-    const fullDeploy = fallbackReason !== undefined;
+    const { baseRevision } = options;
+    if (options.changedPaths === undefined && baseRevision === undefined) {
+      return { baseRevision, changedPaths: [], fullDeploy: true, headRevision };
+    }
     const comparedPaths =
       options.changedPaths ??
-      (fullDeploy
-        ? []
-        : yield* changedPathsFromGit(
-            rootDirectory,
-            requireString(options.baseRevision, 'base revision'),
-            headRevision,
-          ));
+      (yield* changedPathsFromGit(rootDirectory, requireString(baseRevision, 'base revision'), headRevision));
     const changedPaths = EffectArray.sort([...new Set(comparedPaths.map(normalizeChangedPath))], Order.String);
-    return { changedPaths, fallbackReason, fullDeploy, headRevision };
+    return { baseRevision, changedPaths, fullDeploy: false, headRevision };
   });
 
 const validateWorkerStageSetups = (
@@ -955,7 +987,7 @@ export const planDeploymentImpact = (options: PlanDeploymentImpactOptions = {}) 
         : validateAuthorizationPromotionGate(options.authorizationPromotion);
     const pathService = yield* Path.Path;
     const fileSystem = yield* FileSystem.FileSystem;
-    const rootDirectory = options.rootDirectory ?? (yield* Config.string('PWD').pipe(Effect.orElseSucceed(() => '.')));
+    const rootDirectory = options.rootDirectory ?? (yield* Config.String('PWD').pipe(Effect.orElseSucceed(() => '.')));
     const topology = yield* readJson(
       ReferenceTopologySchema,
       pathService.join(rootDirectory, 'topology/reference-topology.json'),
@@ -965,6 +997,16 @@ export const planDeploymentImpact = (options: PlanDeploymentImpactOptions = {}) 
       yield* fileSystem.readFileString(pathService.join(rootDirectory, 'zerops.yaml')),
     );
     const orderedUnits = orderUnits(buildTopologyUnits(topology, ownership, stageSetups));
+    validateWorkspaceCompleteness(
+      yield* listWorkspaceProjects(
+        rootDirectory,
+        yield* parseWorkspaceGlobs(
+          yield* fileSystem.readFileString(pathService.join(rootDirectory, WORKSPACE_MANIFEST)),
+        ),
+      ),
+      orderedUnits,
+      topology.sharedPackages ?? [],
+    );
     const workerDeliveries = yield* Effect.all(
       (topology.verticals ?? []).map((vertical) =>
         outboxWorkerDelivery(rootDirectory, {
@@ -981,7 +1023,7 @@ export const planDeploymentImpact = (options: PlanDeploymentImpactOptions = {}) 
       return fail('reference topology has no Shell delivery unit');
     }
 
-    const { changedPaths, fallbackReason, fullDeploy, headRevision } = yield* deploymentComparison(
+    const { baseRevision, changedPaths, fullDeploy, headRevision } = yield* deploymentComparison(
       options,
       rootDirectory,
     );
@@ -1017,7 +1059,7 @@ export const planDeploymentImpact = (options: PlanDeploymentImpactOptions = {}) 
     const plan: DeploymentImpactPlan = {
       any: phases.length > 0,
       changedPaths,
-      comparison: makeComparison(options, headRevision, fallbackReason),
+      comparison: makeComparison(baseRevision, headRevision, fullDeploy),
       phases,
       schemaVersion: 1,
       units: {
@@ -1095,17 +1137,17 @@ const parseAuthorizationNow = (value: string) =>
 const deploymentImpactCommand = Command.make(
   'plan-deployment-impact',
   {
-    authorizationEnvironment: Flag.choice('authorization-environment', ['development', 'production', 'stage']).pipe(
+    authorizationEnvironment: Flag.Literals('authorization-environment', ['development', 'production', 'stage']).pipe(
       Flag.optional,
     ),
-    authorizationNow: Flag.string('authorization-now').pipe(Flag.optional),
-    baseRevision: Flag.string('base').pipe(Flag.optional),
-    changedPaths: Flag.string('changed-path').pipe(Flag.atLeast(0)),
-    headRevision: Flag.string('head').pipe(Flag.optional),
+    authorizationNow: Flag.String('authorization-now').pipe(Flag.optional),
+    baseRevision: Flag.String('base').pipe(Flag.optional),
+    changedPaths: Flag.String('changed-path').pipe(Flag.atLeast(0)),
+    headRevision: Flag.String('head').pipe(Flag.optional),
   },
   ({ authorizationEnvironment, authorizationNow, baseRevision, changedPaths, headRevision }) =>
     Effect.gen(function* deploymentImpactCommandEffect() {
-      const rootDirectory = yield* Config.string('PWD').pipe(Effect.orElseSucceed(() => '.'));
+      const rootDirectory = yield* Config.String('PWD').pipe(Effect.orElseSucceed(() => '.'));
       const environment = Option.getOrUndefined(authorizationEnvironment);
       let authorizationPromotion: AuthorizationPromotionGateInput | undefined;
       if (environment !== undefined) {
@@ -1126,7 +1168,7 @@ const deploymentImpactCommand = Command.make(
           : yield* planDeploymentImpact({ ...options, authorizationPromotion });
       const planJson = yield* Schema.encodeEffect(PlanJsonSchema)(plan);
       yield* Console.log(planJson);
-      const outputPath = yield* Config.option(Config.string('GITHUB_OUTPUT'));
+      const outputPath = yield* Config.option(Config.String('GITHUB_OUTPUT'));
       if (Option.isSome(outputPath)) {
         yield* writeGitHubOutputs(plan, outputPath.value);
       }

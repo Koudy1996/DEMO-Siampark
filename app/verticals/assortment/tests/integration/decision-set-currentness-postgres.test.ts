@@ -5,8 +5,8 @@ import { DateTime, Effect, Result, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
-  makeTestDatabaseFromPool,
-  testDatabasePools,
+  makeTestDatabaseFromClient,
+  testDatabaseClients,
 } from '../../../../packages/core-runtime/tests/support/database.ts';
 import { installOperationalScope } from '../../../../packages/core-runtime/src/db/scoped-transaction.ts';
 import { coreRelations } from '../../../../packages/core-runtime/src/db/schema.ts';
@@ -82,8 +82,8 @@ const query = Schema.decodeUnknownSync(AssortmentOrdinaryCandidateQueryV1Schema)
 it.live('invalidates empty Assortment Candidate and Boundary sets when matching facts are added', () =>
   Effect.scoped(
     Effect.gen(function* decisionSetCurrentnessPostgres() {
-      const { admin: adminPool } = yield* testDatabasePools;
-      const ownerDatabase = yield* makeTestDatabaseFromPool(adminPool, coreRelations);
+      const { admin: adminClient } = yield* testDatabaseClients;
+      const ownerDatabase = yield* makeTestDatabaseFromClient(adminClient, coreRelations);
       const runScoped = <Value, Failure>(
         operation: (transaction: ScopedTransactionExecutor) => Effect.Effect<Value, Failure>,
       ) =>

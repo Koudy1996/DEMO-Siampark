@@ -11,7 +11,7 @@ import { loadOptionalCommercePortalAuthDatabaseConfig } from '../verticals/comme
 
 const appDirectory = fileURLToPath(new URL('../', import.meta.url));
 const { spawn } = process.getBuiltinModule('node:child_process');
-const migratorPort = Config.int('MIGRATOR_PORT').pipe(Config.withDefault(8080));
+const migratorPort = Config.Int('MIGRATOR_PORT').pipe(Config.withDefault(8080));
 
 class MigratorError extends Error {
   /**
@@ -157,8 +157,12 @@ const main = Effect.scoped(
     yield* migrate('verticals/party-registry', 'drizzle.contacts.config.ts');
     yield* migrate('verticals/party-registry', 'drizzle.config.ts');
     yield* migrate('verticals/payment-term-catalog', 'drizzle.config.ts');
+    yield* migrate('verticals/price-group-catalog', 'drizzle.config.ts');
     yield* migrate('verticals/commerce-customer-context', 'drizzle.config.ts');
+    yield* migrate('verticals/commerce-market-catalog', 'drizzle.config.ts');
     yield* migrate('verticals/catalog', 'drizzle.config.ts');
+    yield* migrate('verticals/pricing', 'drizzle.config.ts');
+    yield* migrate('verticals/storefront-registry', 'drizzle.config.ts');
     yield* runAppScript('scripts/postgres/bootstrap-runtime-role.mts');
     if (Option.isSome(portalAuthDatabase)) {
       yield* migrate('verticals/commerce-customer-context', 'drizzle.portal-auth.config.ts');

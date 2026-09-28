@@ -61,6 +61,7 @@ export const assortmentApi = HttpApi.make('AssortmentApi')
   .addHttpApi(RetireRuleActionApi)
   .addHttpApi(VisibilityApi)
   // </generated-governed-http-api-additions>
+  .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
   .pipe(identity);
 
 export const assortmentOperationContexts = {

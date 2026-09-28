@@ -7,13 +7,13 @@ import { MarketRefSchema } from '../resources/market.ts';
 
 export const MarketHistoryRequestSchema = Schema.Struct({
   marketRef: MarketRefSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type MarketHistoryRequest = typeof MarketHistoryRequestSchema.Type;
 export const MarketHistoryResponseSchema = Schema.Struct({
   associations: Schema.Array(StorefrontAssociationDefinitionSchema),
   definitions: Schema.Array(MarketDefinitionSchema).check(Schema.isMinLength(1)),
   marketRef: MarketRefSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export type MarketHistoryResponse = typeof MarketHistoryResponseSchema.Type;
 
 export const MarketHistoryAuthenticationProblemSchema = makeProblemDetailsSchema(
@@ -47,10 +47,7 @@ export const MarketHistoryApi = HttpApi.make('MarketHistoryApi').add(
         MarketHistoryUnavailableProblemSchema,
         MarketHistoryInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: MarketHistoryRequestSchema,
-      query: {},
       success: MarketHistoryResponseSchema,
     }),
   ),

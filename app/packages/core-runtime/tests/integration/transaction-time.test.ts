@@ -3,12 +3,12 @@ import { expect, it } from 'effect-rstest';
 
 import { coreRelations } from '../../src/db/schema.ts';
 import { trustedTransactionTime } from '../../src/operations/transaction-time.ts';
-import { makeTestDatabaseFromPool, testDatabasePools } from '../support/database.ts';
+import { makeTestDatabaseFromClient, testDatabaseClients } from '../support/database.ts';
 
 it.live('reads one PostgreSQL transaction timestamp as a stable UTC DateTime', () =>
   Effect.gen(function* transactionTimeIntegration() {
-    const { runtimePool } = yield* testDatabasePools;
-    const database = yield* makeTestDatabaseFromPool(runtimePool, coreRelations);
+    const { runtime: runtimeClient } = yield* testDatabaseClients;
+    const database = yield* makeTestDatabaseFromClient(runtimeClient, coreRelations);
     const [first, second] = yield* database.transaction((transaction) =>
       Effect.gen(function* readTransactionTimeTwice() {
         const initial = yield* trustedTransactionTime(transaction);

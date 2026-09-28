@@ -184,6 +184,8 @@ export default defineConfig({
     '.modernjs',
     '**/modern-tanstack/**',
     '**/routeTree.gen.*',
+    // Framework output of `ultramodern-create ultramodern routes-generate`; route.meta.ts files are the linted source.
+    '**/src/routes/ultramodern-route-metadata.ts',
     'tools/oxlint/anti-slop/**',
     'tools/oxlint/effect-native/tests/fixtures/**',
   ],
@@ -254,13 +256,6 @@ export default defineConfig({
       files: ['**/scripts/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}'],
       rules: {
         'no-console': 'off',
-      },
-    },
-    {
-      // Zerops runs this bootstrap before workspace dependencies exist.
-      files: ['scripts/reset-workspace-dependencies.mjs'],
-      rules: {
-        'effect-native/no-direct-node-io-in-scripts': 'off',
       },
     },
     {
@@ -336,10 +331,7 @@ export default defineConfig({
       files: [
         '**/route.meta.ts',
         'apps/shell-super-app/shared/ultramodern-build.ts',
-        'apps/shell-super-app/src/routes/ultramodern-route-metadata.ts',
-        'verticals/commerce-market-catalog/src/routes/ultramodern-route-metadata.ts',
         'verticals/party-registry/shared/ultramodern-build.ts',
-        'verticals/party-registry/src/routes/ultramodern-route-metadata.ts',
         'verticals/party-registry/vertical.manifest.ts',
       ],
       rules: {
@@ -430,13 +422,6 @@ export default defineConfig({
       ],
       rules: {
         'sonarjs/no-undefined-assignment': 'off',
-      },
-    },
-    {
-      // React component names are intentionally PascalCase, contrary to SonarJS's function-name default.
-      files: ['**/*.tsx', 'apps/shell-super-app/tests/integration/module-catalog-runtime.test.ts'],
-      rules: {
-        'sonarjs/function-name': 'off',
       },
     },
     {
@@ -864,7 +849,6 @@ export default defineConfig({
         'react-doctor/js-index-maps': 'off',
         'react-doctor/js-set-map-lookups': 'off',
         'effect-native/no-unbranded-identifier-schema': 'off',
-        'sonarjs/function-name': 'off',
         'sonarjs/no-duplicate-string': 'off',
         'sonarjs/no-identical-functions': 'off',
         'sonarjs/no-nested-assignment': 'off',
@@ -917,6 +901,9 @@ export default defineConfig({
     'sort-keys': 'off',
     // Effect error channels are intentionally explicit tagged unions; two members is not a useful ceiling.
     'sonarjs/max-union-size': 'off',
+    // Property keys name domain vocabulary, not functions: React components are PascalCase,
+    // Match.tags keys are Effect tags, and discriminator maps mirror encoded snake_case values.
+    'sonarjs/function-name': 'off',
     // Keep one authoritative rule for each concern instead of emitting duplicate diagnostics.
     'sonarjs/cognitive-complexity': 'off',
     'sonarjs/expression-complexity': 'off',

@@ -5,17 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@modern-js/app-tools';
 import { presetUltramodern, ultramodernAppTools } from '@modern-js/ultramodern-app-tools';
 import type { AppTools, AppToolsUserConfig, CliPlugin } from '@modern-js/app-tools';
-import { getBuildConfigEnvironment, withBuildConfigEnvironment } from '@modern-js/app-tools-extensions/config';
+import { getBuildConfigEnvironment, resolveDeployTarget } from '@modern-js/app-tools-extensions/config';
 import { bffPlugin } from '@modern-js/plugin-bff-build-extensions';
 import { i18nPlugin } from '@modern-js/plugin-i18n';
 import { tanstackRouterPlugin } from '@modern-js/plugin-tanstack';
 import { moduleFederationPlugin } from '@module-federation/modern-js-v3';
 import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
-import {
-  contains as optionContains,
-  getOrElse as getOptionOrElse,
-  getOrUndefined as getOptionOrUndefined,
-} from 'effect/Option';
+import { getOrElse as getOptionOrElse, getOrUndefined as getOptionOrUndefined } from 'effect/Option';
 import { getOrThrow as getResultOrThrow, isSuccess as isResultSuccess } from 'effect/Result';
 import {
   Boolean as BooleanSchema,
@@ -83,16 +79,7 @@ const getBuildBoolean = (name: string): boolean =>
     getResultOrThrow(decodeUnknownResult(OptionFromUndefinedOr(BuildBooleanSchema))(getBuildConfigEnvironment(name))),
     () => false,
   );
-const cloudflareDeployMode = getResultOrThrow(
-  decodeUnknownResult(OptionFromUndefinedOr(Literals(['cloudflare', 'node'])))(
-    getBuildConfigEnvironment('MODERNJS_DEPLOY'),
-  ),
-);
-const cloudflareDeployEnabled = optionContains(cloudflareDeployMode, 'cloudflare');
-const postgresProtocolCommonJsEntry = fileURLToPath(
-  new URL('../pg-protocol/dist/index.js', import.meta.resolve('pg/package.json')),
-);
-const postgresPoolCommonJsEntry = createRequire(import.meta.resolve('pg/package.json')).resolve('pg-pool');
+const cloudflareDeployEnabled = resolveDeployTarget().target === 'cloudflare';
 const cloudflareWorkerRemoteStubPath = fileURLToPath(
   new URL('src/api/cloudflare-worker-remote-stub.ts', import.meta.url),
 );
@@ -108,25 +95,21 @@ const cloudflareRuntimeExternal = (
 
 const zephyrRspackPlugin = (): CliPlugin<AppTools> =>
   createZephyrRspackPlugin({
-    configure: () => withBuildConfigEnvironment('ZE_FAIL_BUILD', 'true', withZephyrRspack()),
-    readToken: () => getOptionalBuildConfig('ZE_CI_TOKEN'),
+    configure: () => withZephyrRspack(),
+    readEnvironment: getOptionalBuildConfig,
   });
 
 const appId = 'shell-super-app';
 const moduleFederationConfigPath = fileURLToPath(new URL('module-federation.config.ts', import.meta.url));
 const referenceTopologyPath = fileURLToPath(new URL('../../topology/reference-topology.json', import.meta.url));
 const referenceTopology = getResultOrThrow(
-  decodeUnknownResult(fromJsonString(DeploymentAllowlistTopologySchema), {
-    onExcessProperty: 'preserve',
-  })(readFileSync(referenceTopologyPath, 'utf-8')),
+  decodeUnknownResult(fromJsonString(DeploymentAllowlistTopologySchema))(readFileSync(referenceTopologyPath, 'utf-8')),
 );
 const developmentOverlayPath = fileURLToPath(
   new URL('../../topology/local-overlays/development.json', import.meta.url),
 );
 const developmentOverlay = getResultOrThrow(
-  decodeUnknownResult(fromJsonString(DeploymentAllowlistOverlaySchema), {
-    onExcessProperty: 'preserve',
-  })(readFileSync(developmentOverlayPath, 'utf-8')),
+  decodeUnknownResult(fromJsonString(DeploymentAllowlistOverlaySchema))(readFileSync(developmentOverlayPath, 'utf-8')),
 );
 const moduleDeploymentAllowlist = createModuleDeploymentAllowlistBuildInput({
   cloudflareDeployEnabled,
@@ -174,18 +157,6 @@ const shellDevServerHeaders: NonNullable<NonNullable<NonNullable<AppToolsUserCon
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Origin': moduleFederationDevServerOrigin,
 };
-
-if (
-  cloudflareDeployEnabled &&
-  getBuildBoolean('ULTRAMODERN_CLOUDFLARE_REQUIRE_PUBLIC_URLS') &&
-  configuredCloudflareUrl === undefined &&
-  configuredSiteUrl === undefined &&
-  inferredCloudflareUrl === undefined
-) {
-  throw new Error(
-    `Cloudflare deploy for ${appId} needs ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP, MODERN_PUBLIC_SITE_URL, or ULTRAMODERN_CLOUDFLARE_WORKERS_DEV_SUBDOMAIN.`,
-  );
-}
 
 export default defineConfig(
   presetUltramodern(
@@ -286,7 +257,8 @@ export default defineConfig(
         },
         output: {
           assetPrefix,
-          disableTsChecker: false,
+          // `pnpm typecheck` (tsc --build over the reference graph) owns type diagnostics.
+          disableTsChecker: true,
           distPath: {
             html: './',
             root: buildOutputRoot,
@@ -372,13 +344,6 @@ export default defineConfig(
             if (!cloudflareDeployEnabled) {
               return;
             }
-            const configuredAliases = config.resolve.alias;
-            config.resolve.alias =
-              configuredAliases === false || configuredAliases === undefined ? {} : configuredAliases;
-            Object.assign(config.resolve.alias, {
-              'pg-pool$': postgresPoolCommonJsEntry,
-              'pg-protocol$': postgresProtocolCommonJsEntry,
-            });
             const configuredExternals = config.externals;
             config.externals = [cloudflareRuntimeExternal];
             if (configuredExternals !== undefined) {

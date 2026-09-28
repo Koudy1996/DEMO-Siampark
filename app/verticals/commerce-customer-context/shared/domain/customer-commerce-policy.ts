@@ -96,20 +96,20 @@ export const customerCommercePolicyFieldCatalog = Object.freeze([
 const SellerScopeSchema = Schema.Struct({
   kind: Schema.Literal('SELLER'),
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const ChannelSellerScopeSchema = Schema.Struct({
   channelId: CustomerCommercePolicyChannelIdSchema,
   kind: Schema.Literal('CHANNEL_SELLER'),
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const MarketChannelSellerScopeSchema = Schema.Struct({
   channelId: CustomerCommercePolicyChannelIdSchema,
   commerceMarketId: CustomerCommercePolicyCommerceMarketIdSchema,
   kind: Schema.Literal('MARKET_CHANNEL_SELLER'),
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const StorefrontMarketChannelSellerScopeSchema = Schema.Struct({
   channelId: CustomerCommercePolicyChannelIdSchema,
@@ -117,14 +117,14 @@ const StorefrontMarketChannelSellerScopeSchema = Schema.Struct({
   kind: Schema.Literal('STOREFRONT_MARKET_CHANNEL_SELLER'),
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
   storefrontId: CustomerCommercePolicyStorefrontIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const StorefrontChannelSellerScopeSchema = Schema.Struct({
   channelId: CustomerCommercePolicyChannelIdSchema,
   kind: Schema.Literal('STOREFRONT_CHANNEL_SELLER'),
   sellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
   storefrontId: CustomerCommercePolicyStorefrontIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 /** Ordinary Market-dependent replacement ranks; Storefront without Market is deliberately absent. */
 export const OrdinaryCustomerCommercePolicyScopeSchema = Schema.Union([
@@ -155,16 +155,16 @@ export const MarketBootstrapValueSchema = Schema.Struct({
   defaultCommerceMarketId: CustomerCommercePolicyCommerceMarketIdSchema,
   defaultSellingLegalEntityId: CustomerCommercePolicySellingLegalEntityIdSchema,
   kind: Schema.Literal('DEFAULT_MARKET_TUPLE'),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 export const PurchaseCurrencyConstraintValueSchema = Schema.Struct({
   currencyCode: CurrencyCodeSchema,
   kind: Schema.Literal('ALLOWED_CURRENCY_CONSTRAINT'),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const PurchaseCurrencyDefaultValueSchema = Schema.Struct({
   currencyCode: CurrencyCodeSchema,
   kind: Schema.Literal('DEFAULT_CURRENCY'),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export const PurchaseCurrencyValueSchema = Schema.Union([
   PurchaseCurrencyConstraintValueSchema,
   PurchaseCurrencyDefaultValueSchema,
@@ -175,20 +175,20 @@ const PaymentTermRefSchema = Schema.Struct({
   resourceId: CustomerCommercePolicyResourceIdSchema,
   resourceType: Schema.Literal('payment.term-catalog.payment-term'),
   tenantId: CustomerCommercePolicyTenantIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const PaymentTermConstraintValueSchema = Schema.Struct({
   kind: Schema.Literal('APPLICABLE_PAYMENT_TERM_CONSTRAINT'),
   paymentTermRef: PaymentTermRefSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const PaymentTermDefaultValueSchema = Schema.Struct({
   kind: Schema.Literal('FALLBACK_PAYMENT_TERM'),
   paymentTermRef: PaymentTermRefSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const PaymentTermExplicitChoicePolicyValueSchema = Schema.Struct({
   enabled: Schema.Boolean,
   kind: Schema.Literal('EXPLICIT_PAYMENT_TERM_CHOICE_POLICY'),
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 export const PaymentTermValueSchema = Schema.Union([
   PaymentTermConstraintValueSchema,
   PaymentTermDefaultValueSchema,
@@ -200,31 +200,25 @@ const CatalogProductRefSchema = Schema.Struct({
   resourceId: CustomerCommercePolicyResourceIdSchema,
   resourceType: Schema.Literal('commerce.catalog.product'),
   tenantId: CustomerCommercePolicyTenantIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const CatalogVariantRefSchema = Schema.Struct({
   moduleId: Schema.Literal(commerceCatalogModuleId),
   resourceId: CustomerCommercePolicyResourceIdSchema,
   resourceType: Schema.Literal('commerce.catalog.variant'),
   tenantId: CustomerCommercePolicyTenantIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const CatalogPackageOptionRefSchema = Schema.Struct({
   moduleId: Schema.Literal(commerceCatalogModuleId),
   resourceId: CustomerCommercePolicyResourceIdSchema,
   resourceType: Schema.Literal('commerce.catalog.package-definition'),
   tenantId: CustomerCommercePolicyTenantIdSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 
 const CommerceQuantitySelectorSchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal('ALL') }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
-  Schema.Struct({ kind: Schema.Literal('PRODUCT'), productRef: CatalogProductRefSchema }).annotate({
-    parseOptions: { onExcessProperty: 'error' },
-  }),
-  Schema.Struct({ kind: Schema.Literal('VARIANT'), variantRef: CatalogVariantRefSchema }).annotate({
-    parseOptions: { onExcessProperty: 'error' },
-  }),
-  Schema.Struct({ kind: Schema.Literal('PACKAGE_OPTION'), packageOptionRef: CatalogPackageOptionRefSchema }).annotate({
-    parseOptions: { onExcessProperty: 'error' },
-  }),
+  Schema.Struct({ kind: Schema.Literal('ALL') }),
+  Schema.Struct({ kind: Schema.Literal('PRODUCT'), productRef: CatalogProductRefSchema }),
+  Schema.Struct({ kind: Schema.Literal('VARIANT'), variantRef: CatalogVariantRefSchema }),
+  Schema.Struct({ kind: Schema.Literal('PACKAGE_OPTION'), packageOptionRef: CatalogPackageOptionRefSchema }),
 ]);
 export type CommerceQuantitySelector = typeof CommerceQuantitySelectorSchema.Type;
 
@@ -249,6 +243,25 @@ export const CommerceQuantityBasisSchema = Schema.Struct({
 );
 export type CommerceQuantityBasis = typeof CommerceQuantityBasisSchema.Type;
 
+/** Declarative commercial basis. Catalog retains each selection's physical revision evidence. */
+export const CommerceQuantityPurchaseUnitBasisSchema = Schema.Struct({
+  kind: Schema.Literal('PURCHASE_UNIT'),
+  unitRef: CatalogResourceRefSchema.check(
+    Schema.makeFilter((ref) =>
+      ref.moduleId === 'commerce.catalog' && ref.resourceType === 'commerce.catalog.product-unit'
+        ? undefined
+        : 'A commercial Quantity basis must reference a Catalog Unit',
+    ),
+  ),
+});
+
+/** Legacy exact basis remains readable; it must not narrow a Product/Variant selector. */
+export const CommerceQuantityPolicyBasisSchema = Schema.Union([
+  CommerceQuantityPurchaseUnitBasisSchema,
+  CommerceQuantityBasisSchema,
+]);
+export type CommerceQuantityPolicyBasis = typeof CommerceQuantityPolicyBasisSchema.Type;
+
 const compareExactPositiveQuantities = (left: string, right: string): -1 | 0 | 1 => {
   const [leftInteger = '0', leftFraction = ''] = left.split('.');
   const [rightInteger = '0', rightFraction = ''] = right.split('.');
@@ -265,38 +278,38 @@ const compareExactPositiveQuantities = (left: string, right: string): -1 | 0 | 1
 };
 
 export const QuantityEnvelopeSchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal('NO_COMMERCIAL_QUANTITY_RESTRICTION') }).annotate({
-    parseOptions: { onExcessProperty: 'error' },
-  }),
+  Schema.Struct({ kind: Schema.Literal('NO_COMMERCIAL_QUANTITY_RESTRICTION') }),
   Schema.Struct({
     kind: Schema.Literal('BOUNDED'),
     maximum: Schema.toEncoded(Schema.OptionFromNullOr(ExactPositiveCommerceQuantitySchema)),
     minimum: Schema.toEncoded(Schema.OptionFromNullOr(ExactPositiveCommerceQuantitySchema)),
     multiple: Schema.toEncoded(Schema.OptionFromNullOr(ExactPositiveCommerceQuantitySchema)),
-  })
-    .check(
-      Schema.makeFilter(({ maximum, minimum, multiple }) =>
-        maximum !== null || minimum !== null || multiple !== null
-          ? undefined
-          : 'A bounded Commerce Quantity envelope must declare a minimum, maximum, or multiple',
-      ),
-      Schema.makeFilter(({ maximum, minimum }) =>
-        minimum === null || maximum === null || compareExactPositiveQuantities(minimum, maximum) <= 0
-          ? undefined
-          : [{ issue: 'minimum must be less than or equal to maximum', path: ['minimum'] }],
-      ),
-    )
-    .annotate({ parseOptions: { onExcessProperty: 'error' } }),
+  }).check(
+    Schema.makeFilter(({ maximum, minimum, multiple }) =>
+      maximum !== null || minimum !== null || multiple !== null
+        ? undefined
+        : 'A bounded Commerce Quantity envelope must declare a minimum, maximum, or multiple',
+    ),
+    Schema.makeFilter(({ maximum, minimum }) =>
+      minimum === null || maximum === null || compareExactPositiveQuantities(minimum, maximum) <= 0
+        ? undefined
+        : [{ issue: 'minimum must be less than or equal to maximum', path: ['minimum'] }],
+    ),
+  ),
 ]);
 export type QuantityEnvelope = typeof QuantityEnvelopeSchema.Type;
 
+export const CommerceQuantityRuleAudienceSchema = Schema.Literals(['SHARED', 'ASSIGNMENT_ONLY']);
+
 export const CommerceQuantityRuleValueSchema = Schema.Struct({
-  basis: CommerceQuantityBasisSchema,
+  // Missing only on legacy revisions; Current composition resolves it from retained assignment history.
+  audience: Schema.optionalKey(CommerceQuantityRuleAudienceSchema),
+  basis: CommerceQuantityPolicyBasisSchema,
   constraintMode: Schema.Literals(['REPLACEABLE_ENVELOPE', 'NON_RELAXABLE_CONSTRAINT']),
   envelope: QuantityEnvelopeSchema,
   kind: Schema.Literal('COMMERCE_QUANTITY_RULE'),
   selector: CommerceQuantitySelectorSchema,
-}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+});
 const commonRevisionFields = {
   actionInvocationId: CustomerCommercePolicyActionInvocationIdSchema,
   actorPrincipalId: CustomerCommercePolicyActorPrincipalIdSchema,
@@ -373,7 +386,9 @@ export const CommerceQuantityRuleRevisionSchema = Schema.Struct({
     } else if (revision.value.selector.kind === 'PACKAGE_OPTION') {
       selectorTenantId = revision.value.selector.packageOptionRef.tenantId;
     }
-    return selectorTenantId === revision.tenantId && revision.value.basis.targetRef.tenantId === revision.tenantId
+    return selectorTenantId === revision.tenantId &&
+      revision.value.basis.unitRef.tenantId === revision.tenantId &&
+      (!('targetRef' in revision.value.basis) || revision.value.basis.targetRef.tenantId === revision.tenantId)
       ? undefined
       : 'Quantity selector, basis, and policy Revision must belong to the same Tenant';
   }),

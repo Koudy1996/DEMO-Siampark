@@ -40,9 +40,7 @@ export const executeRetailPurchasingSubjectCurrentV1WithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: RetailPurchasingSubjectCurrentV1AuthorizedInvocation
 ) =>
   retailPurchasingSubjectCurrentV1Client(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.retailPurchasingSubjectCurrentV1.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.retailPurchasingSubjectCurrentV1.execute({ payload })),
   );
 
 export const executeRetailPurchasingSubjectCurrentV1 = (

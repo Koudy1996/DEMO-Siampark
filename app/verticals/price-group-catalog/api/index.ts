@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ActionRuntimeLive,
   ContextAccessLive,
@@ -14,7 +15,7 @@ import {
   ModuleStateGateLive,
   OperationalScopeResolverLive,
 } from '@app/core-runtime/actions/runtime-wiring';
-import { assembleEffectBffRuntime } from '@app/shared-contracts/server/effect-bff-runtime';
+import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import { Effect, HttpApiBuilder, HttpRouter, Layer } from '@modern-js/bff-effect/effect-edge';
 import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
 import { Layer as GovernedReadLayer, Logger, References, Schema, Tracer } from 'effect';
@@ -140,7 +141,10 @@ export const makePriceGroupCatalogApiRuntime = (
     validatePriceGroupCompatibilityReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(actionPrincipalVerifierLive, gatewayAssertionRedemption)));
-  const resolvedApiHandlersLive = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  const resolvedApiHandlersLive = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+    Layer.orDie,
+  );
   const transportLive = HttpRouter.cors({
     allowedHeaders: [...priceGroupCatalogCorsAllowedHeaders],
     allowedMethods: [...priceGroupCatalogCorsAllowedMethods],

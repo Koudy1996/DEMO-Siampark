@@ -1,6 +1,6 @@
-import { Schema } from 'effect';
+import { Data } from 'effect';
 
-export class AssortmentDatabaseConnectionError extends Schema.TaggedError<AssortmentDatabaseConnectionError>()(
-  'AssortmentDatabaseConnectionError',
-  { reason: Schema.String },
-) {}
+export class AssortmentDatabaseConnectionError extends Data.TaggedError('AssortmentDatabaseConnectionError')<{
+  readonly cause?: unknown;
+  readonly reason: string;
+}> {}

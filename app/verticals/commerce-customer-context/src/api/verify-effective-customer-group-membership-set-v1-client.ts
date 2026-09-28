@@ -40,9 +40,7 @@ export const executeVerifyEffectiveCustomerGroupMembershipSetV1WithAuthorization
   ...[credential, requestCorrelation, options = {}]: VerifyEffectiveCustomerGroupMembershipSetV1AuthorizedInvocation
 ) =>
   verifyEffectiveCustomerGroupMembershipSetV1Client(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.verifyEffectiveCustomerGroupMembershipSetV1.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.verifyEffectiveCustomerGroupMembershipSetV1.execute({ payload })),
   );
 
 export const executeVerifyEffectiveCustomerGroupMembershipSetV1 = (

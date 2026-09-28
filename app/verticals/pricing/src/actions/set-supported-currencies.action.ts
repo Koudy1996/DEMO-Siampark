@@ -19,12 +19,11 @@ import type {
   CurrencySupportPersistence,
   SetCurrencySupportOutcome,
 } from '../persistence/currency-support-persistence.ts';
-import {
-  CurrencySupportPersistenceUnavailable,
-  currencySupportPersistenceForScope,
-} from '../persistence/currency-support-persistence.ts';
+import { currencySupportPersistenceForScope } from '../persistence/currency-support-persistence.ts';
+import { CurrencySupportPersistenceUnavailable } from './currency-support-persistence-unavailable.ts';
 import { SupportedCurrenciesAdministrationRejected } from './supported-currencies-administration-rejected.ts';
 
+export { CurrencySupportPersistenceUnavailable } from './currency-support-persistence-unavailable.ts';
 export { SupportedCurrenciesAdministrationRejected } from './supported-currencies-administration-rejected.ts';
 
 const boundedReason = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1000), Schema.isTrimmed());
@@ -123,7 +122,6 @@ export const applySupportedCurrencies = Effect.fn('SetSupportedCurrenciesAction.
   return yield* Match.value(outcome).pipe(
     Match.tags({
       applied: ({ result }) => Effect.succeed(result),
-      // oxlint-disable-next-line sonarjs/function-name -- Effect Match tag keys are schema-owned wire values; remove-when: the persisted outcome tags adopt camelCase.
       effective_time_conflict: () =>
         Effect.fail(
           new SupportedCurrenciesAdministrationRejected({
@@ -131,7 +129,6 @@ export const applySupportedCurrencies = Effect.fn('SetSupportedCurrenciesAction.
             reason: 'A replacement currency-support revision must start after the current revision',
           }),
         ),
-      // oxlint-disable-next-line sonarjs/function-name -- Effect Match tag keys are schema-owned wire values; remove-when: the persisted outcome tags adopt camelCase.
       revision_conflict: (revisionConflict) => Effect.fail(conflict(revisionConflict)),
       unchanged: ({ result }) => Effect.succeed(result),
     }),
@@ -152,6 +149,10 @@ export const handleSetSupportedCurrencies = Effect.fn('SetSupportedCurrenciesAct
       tenantId: context.scope.tenantId,
     },
     context.services.setCurrent,
+  ).pipe(
+    Effect.catchTag('PersistenceFailure', ({ reason }) =>
+      Effect.fail(new CurrencySupportPersistenceUnavailable({ reason })),
+    ),
   );
   yield* context.recordAuditEvidence({
     changed: result.changed,

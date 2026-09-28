@@ -40,9 +40,7 @@ export const executeAssortmentSelectionAssessmentV1WithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: AssortmentSelectionAssessmentV1AuthorizedInvocation
 ) =>
   assortmentSelectionAssessmentV1Client(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.assortmentSelectionAssessmentV1.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.assortmentSelectionAssessmentV1.execute({ payload })),
   );
 
 export const executeAssortmentSelectionAssessmentV1 = (

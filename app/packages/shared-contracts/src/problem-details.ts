@@ -50,9 +50,6 @@ const isConcreteExtensionValue = (ast: SchemaAST.AST): boolean => {
   if (SchemaAST.isNumber(ast)) {
     return hasJsonSafeNumberCheck(ast.checks);
   }
-  if (SchemaAST.isEnum(ast)) {
-    return ast.enums.every(([, value]) => Predicate.isString(value) || Number.isFinite(value));
-  }
   return true;
 };
 
@@ -249,3 +246,11 @@ export const makeRetryableProblemDetailsSchema = <
   status: Status,
   extensions?: Extensions,
 ) => makeAnnotatedProblemDetailsSchema(tag, status, { retryable: Schema.Literal(true) }, extensions);
+
+/**
+ * The 400 the HTTP edge answers when a request does not match its endpoint's codecs, such as an
+ * excess payload property under a closed composed API. It names the failing paths, never values.
+ */
+export const RequestSchemaProblemSchema = makeProblemDetailsSchema('RequestSchemaProblem', 400, {
+  paths: Schema.Array(Schema.String),
+});

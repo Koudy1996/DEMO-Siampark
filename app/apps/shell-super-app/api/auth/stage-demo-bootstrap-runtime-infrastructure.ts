@@ -23,14 +23,11 @@ import type {
 } from './stage-demo-bootstrap-contract.ts';
 
 const persistenceFailure = (cause?: unknown) =>
-  Object.defineProperty(
-    new StageDemoBootstrapError({
-      code: 'stage_demo_persistence_failed',
-      reason: 'The stage demo Better Auth user could not be reconciled',
-    }),
-    'cause',
-    { value: cause },
-  );
+  new StageDemoBootstrapError({
+    cause,
+    code: 'stage_demo_persistence_failed',
+    reason: 'The stage demo Better Auth user could not be reconciled',
+  });
 
 const bootstrapSdkTimeout = Effect.timeoutOrElse({
   duration: '30 seconds',
@@ -88,7 +85,6 @@ const ensureAuthUser = Effect.fn('StageDemoBootstrap.ensureAuthUser')(function* 
       .select({
         accountId: account.accountId,
         id: account.id,
-        issuer: account.issuer,
         password: account.password,
       })
       .from(account)
@@ -104,7 +100,6 @@ const ensureAuthUser = Effect.fn('StageDemoBootstrap.ensureAuthUser')(function* 
     }
     yield* classifyExactStageDemoRecord('Better Auth credential account', credential, {
       accountId: existingUser.id,
-      issuer: 'local:credential',
     });
     const hash = credential.password;
     const validPassword = yield* Effect.tryPromise({
@@ -160,10 +155,10 @@ const ensureAuthUser = Effect.fn('StageDemoBootstrap.ensureAuthUser')(function* 
 
 export { ensureAuthUser as ensureStageDemoAuthUser };
 
-const optionalString = (name: string) => Config.option(Config.string(name)).pipe(Config.map(Option.getOrUndefined));
+const optionalString = (name: string) => Config.option(Config.String(name)).pipe(Config.map(Option.getOrUndefined));
 
 const optionalSecret = (name: string) =>
-  Config.option(Config.redacted(name)).pipe(Config.map(Option.map(Redacted.value)), Config.map(Option.getOrUndefined));
+  Config.option(Config.Redacted(name)).pipe(Config.map(Option.map(Redacted.value)), Config.map(Option.getOrUndefined));
 
 const loadStageDemoEnvironment = Effect.fn('StageDemoBootstrapRuntimeInfrastructure.loadStageDemoEnvironment')(
   function* loadStageDemoEnvironmentEffect() {

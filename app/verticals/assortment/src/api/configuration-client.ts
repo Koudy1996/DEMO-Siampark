@@ -37,7 +37,7 @@ export const executeConfigurationWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: ConfigurationAuthorizedInvocation
 ) =>
   configurationClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.configuration.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.configuration.execute({ payload })),
   );
 
 export const executeConfiguration = (

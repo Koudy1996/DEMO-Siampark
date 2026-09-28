@@ -11,10 +11,17 @@ import {
   hasGeneratedOperationGatewayContract,
   hasGeneratedOperationPrincipalContract,
 } from './generated-module-api-boundary.mts';
-import { toCamelCase, toPascalCase, isCodePosition, maskNonCode } from './scaffolding/shared.mts';
+import {
+  GOVERNED_HTTP_API_CLOSING_ANNOTATION,
+  isCodePosition,
+  maskNonCode,
+  toCamelCase,
+  toPascalCase,
+} from './scaffolding/shared.mts';
 
 const GOVERNED_API_SLOT_END = '// </generated-governed-http-api-additions>';
 const GOVERNED_API_SLOT_START = '// <generated-governed-http-api-additions>';
+const BFF_ASSEMBLY_MODULE = '@modern-js/bff-effect/assembly';
 const GOVERNED_HTTP_RUNTIME_MODULE = '@app/shared-contracts/server/effect-bff-runtime';
 const GOVERNED_READ_HTTP_MODULE = '@app/core-runtime/http/governed-read';
 const CORE_RUNTIME_MODULE = '@app/core-runtime';
@@ -622,7 +629,7 @@ const slotIsMountedByAssembler = (
     definition.includes('...') ||
     objectPropertyValue(definition, 'api') !== expectedApi ||
     !hasExactlyOne(maskNonCode(source), /\bassembleEffectBffRuntime\(/gu) ||
-    !hasExactValueImport(source, 'assembleEffectBffRuntime', GOVERNED_HTTP_RUNTIME_MODULE)
+    !hasExactValueImport(source, 'assembleEffectBffRuntime', BFF_ASSEMBLY_MODULE)
   ) {
     return false;
   }
@@ -771,11 +778,14 @@ const governedSharedApiRoot = (source: string): SourceRange | undefined => {
   const trailing = maskComments(
     source.slice(slot.markerEnd + GOVERNED_API_SLOT_END.length, statementEnd).replace(/^;(?=\r?\n)/u, ''),
   ).trim();
+  // The composed API is closed exactly once, after every generated addition.
+  const closedTail = trailing.replaceAll(/\s+/gu, ' ');
+  const closing = GOVERNED_HTTP_API_CLOSING_ANNOTATION;
   const hasStableIdentityTail =
-    trailing === `.pipe(${GOVERNED_HTTP_API_IDENTITY_ALIAS})` &&
+    closedTail === `${closing} .pipe(${GOVERNED_HTTP_API_IDENTITY_ALIAS})` &&
     hasExactValueImport(source, `identity as ${GOVERNED_HTTP_API_IDENTITY_ALIAS}`, 'effect', true);
   return /^(?:\.addHttpApi\([A-Za-z][A-Za-z0-9]*\)\s*)*$/u.test(additions) &&
-    (trailing === '' || trailing === '.pipe(identity)' || hasStableIdentityTail)
+    (closedTail === `${closing} .pipe(identity)` || hasStableIdentityTail)
     ? apiRoot
     : undefined;
 };
@@ -1345,7 +1355,7 @@ const hasDomainMapperContract = (
     ...new Set(
       [
         ...(expression ?? '').matchAll(
-          new RegExp(`new (${escapeRegExp(schemaStem)}Domain[A-Za-z0-9]*Problem)\\(`, 'gu'),
+          new RegExp(`\\b(${escapeRegExp(schemaStem)}Domain[A-Za-z0-9]*ProblemSchema)\\.make\\(`, 'gu'),
         ),
       ]
         .map((match) => match[1])
