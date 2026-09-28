@@ -19,14 +19,14 @@ generic exemption/special-treatment flows, additional selling currencies, and ge
 Set monetary decomposition are not activated by Launch.
 _Avoid_: legacy feature breadth as Launch scope, implicit domestic fallback, future regime enabled by data presence.
 
-**Tax Decision** — Tax-owned Current purchase-scoped determination of tax applicability,
-jurisdiction, treatment, rate or exemption, and taxable-basis interpretation for exact inputs and one
-exact Tax-Relevant Time; Currentness of its material inputs is evaluated at Tax Evaluation Time. One
-successful purchase Tax Decision preserves the exact set of Taxable Supply Units and their unit-specific
-Tax meanings; equal values or rates never merge their identities. It is distinct from an Official
-Identifier, a retained previous evaluation, a Pricing Decision, or a commitment-validity proof.
-_Avoid_: VAT identifier as tax decision, B2B Channel as tax treatment, Pricing Quotation as tax guarantee,
-rate-only decision without exact subject/context, one independent Tax Decision per UI/Pricing line by default.
+**Tax Decision** — Tax-owned purchase-scoped determination of tax applicability, jurisdiction,
+treatment, rate or exemption, and taxable-basis interpretation for exact inputs and one exact
+Tax-Relevant Time. For Launch final Order commitment, TAX evaluates the exact frozen purchase once
+for its Commerce-owned Order Commitment Time; the Decision preserves the exact Taxable Supply Units
+and their unit-specific Tax meanings.
+_Avoid_: VAT identifier as tax decision, B2B Channel as tax treatment, retained preview as Accepted
+tax, Pricing Quotation as tax guarantee, rate-only decision without exact subject/context, one
+independent Tax Decision per UI/Pricing line by default.
 
 **Tax Result** — Tax-owned purchase-scoped tax amounts and decomposition for the exact inputs and
 interpretation used by one successful Tax Decision. It preserves one authoritative published Tax
