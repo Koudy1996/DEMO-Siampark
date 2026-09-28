@@ -91,10 +91,22 @@ Price mode.
 
 ## Accepted history
 
-**Accepted Tax Terms** — Tax values and safe source evidence definitively used in an Accepted Order
-or Billing Document and retained in its Snapshot. These historical values are not a fresh Tax
-Decision and are not silently rewritten by changes to Current rules or source facts.
-_Avoid_: recomputing historical tax from today's rules, treating a prospective Tax Result as Accepted.
+**Accepted Tax Terms** — Immutable Tax Decision/Tax Result meaning, exact Taxable Supply Unit
+mapping, Tax-Relevant Time, Tax Rounding policy/revision, and safe source/rule evidence definitively
+used by one exact Accepted historical handoff and retained in that owner's Snapshot. Accepted Order
+Tax Terms explain the Tax meaning used when the Order was accepted; they are historical lineage for
+later Billing or correction work, not a universal substitute for a later event's own legally
+relevant Tax determination. A Billing Document that definitively uses Tax meaning retains its own
+document Snapshot rather than sharing a mutable Tax snapshot with Order. Current rules or source facts
+never silently rewrite either historical Snapshot.
+_Legal_: for later supply timing see [ZDPH § 20a](https://www.zakonyprolidi.cz/cs/2004-235#p20a),
+[§ 21](https://www.zakonyprolidi.cz/cs/2004-235#p21), and rate timing in
+[§ 47 odst. 2](https://www.zakonyprolidi.cz/cs/2004-235#p47); for supported corrections see
+[§ 42](https://www.zakonyprolidi.cz/cs/2004-235#p42) and
+[§ 45](https://www.zakonyprolidi.cz/cs/2004-235#p45).
+_Avoid_: recomputing historical tax from today's rules, treating a prospective Tax Result as Accepted,
+blindly copying Accepted Order Tax Terms into a later Billing/supply event with its own Tax-relevant
+facts, sharing one mutable Order/Billing Tax snapshot.
 
 
 ## Czech legal reference index — Launch
@@ -123,6 +135,14 @@ domains.
   [ZDPH § 36](https://www.zakonyprolidi.cz/cs/2004-235#p36) and
   [§ 37](https://www.zakonyprolidi.cz/cs/2004-235#p37). Supporting administrative guidance:
   [Finanční správa — Výpočet DPH a zaokrouhlování od 1. 10. 2019](https://financnisprava.gov.cz/cs/financni-sprava/novinky/novinky-2019/vypocet-dph-a-zaokrouhlovani-od-1-10-2019).
-- **Tax Decision**, **Tax Evidence**, **Tax Commitment Confirmation** and **Accepted Tax Terms** are
-  OntOS domain terms without a one-to-one statutory synonym. Their statutory substance is explained
-  by the referenced applicability, supply, basis, calculation, rate and timing provisions above.
+- **Accepted Tax Terms** — OntOS historical meaning, not a statutory snapshot object. Accepted Order
+  Tax Terms do not by themselves establish a later Billing/supply event's statutory timing; see
+  [ZDPH § 20a](https://www.zakonyprolidi.cz/cs/2004-235#p20a),
+  [§ 21](https://www.zakonyprolidi.cz/cs/2004-235#p21) and
+  [§ 47 odst. 2](https://www.zakonyprolidi.cz/cs/2004-235#p47).
+  Supported correction lineage is anchored by
+  [§ 42](https://www.zakonyprolidi.cz/cs/2004-235#p42) and corrective-document data by
+  [§ 45](https://www.zakonyprolidi.cz/cs/2004-235#p45).
+- **Tax Decision**, **Tax Evidence** and **Tax Commitment Confirmation** are OntOS domain terms without
+  a one-to-one statutory synonym. Their statutory substance is explained by the referenced
+  applicability, supply, basis, calculation, rate and timing provisions above.
