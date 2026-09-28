@@ -698,6 +698,15 @@ Permission, Price, Availability or an Order.
 
 ## Purchasing limits and approval
 
+**Purchase Payable Amount** — Commerce-owned derived Monetary Amount for one exact purchase,
+composed from authoritative owner-issued monetary outputs needed to pay for that purchase. For Launch
+it combines the complete Pricing pre-Tax total, separately owner-issued commercial components not
+already included there (such as Delivery/Shipping), and the authoritative Tax Result exactly once in
+one explicit currency. It does not transfer ownership of Pricing, Delivery/Shipping or Tax, is not
+Purchase Value, and is not a Payment authorization/settlement fact.
+_Avoid_: Purchase Value including VAT, Pricing owning Tax, TAX owning the commercial total, Payment
+recalculating Price/Tax, Storefront adding Price + Shipping + Tax locally.
+
 **Purchase Value** — Non-negative Monetary Amount used only for purchasing-limit assessment. Pricing
 contributes its authoritative `pricing_net_commercial_total`, which already includes Pricing-owned
 Commercial Fees, Pricing-owned Discounts, Promotion allocations, any governed ZERO_FLOOR
