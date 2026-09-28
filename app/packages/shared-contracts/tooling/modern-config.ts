@@ -331,6 +331,7 @@ interface BundlerChain {
 /* oxlint-enable anti-slop/no-unknown-returns */
 
 export const createModernConfig = <Plugin, BuilderPlugin>({
+  apiOnly = false,
   appId,
   bffPrefix,
   build,
@@ -342,6 +343,7 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
   rsdoctorEnabled,
   uniqueName,
 }: {
+  apiOnly?: boolean;
   appId: string;
   bffPrefix: string;
   build: ModernBuildContext;
@@ -423,6 +425,10 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
       alias: {
         '@modern-js/plugin-i18n/runtime$': '@modern-js/plugin-i18n/runtime/no-react-i18next',
       },
+      // Modern.js detects API-only apps from a missing entries directory. Keep
+      // owner source under `src/`, while directing its web-entry scan to a path
+      // that does not exist for API-only MicroVerticals.
+      entriesDir: apiOnly ? '.api-only-no-web-entry' : undefined,
       globalVars: {
         ULTRAMODERN_SHELL_ORIGIN: build.moduleFederationDevServerOrigin,
         ULTRAMODERN_SITE_URL: build.siteUrl,

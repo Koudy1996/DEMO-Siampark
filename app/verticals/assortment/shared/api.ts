@@ -24,13 +24,16 @@ import { RetireRuleActionApi } from './apis/retire-rule-action.ts';
 import { VisibilityApi } from './apis/visibility.ts';
 // </generated-governed-http-api-imports>
 
-export const assortmentMarkerSchema: Schema.Codec<typeof MicroVerticalBuildMarkerSchema.Type> =
-  MicroVerticalBuildMarkerSchema;
+export const assortmentMarkerSchema = Schema.Struct({
+  ...MicroVerticalBuildMarkerSchema.fields,
+});
 
 export type AssortmentMarker = typeof assortmentMarkerSchema.Type;
 
-export const assortmentReadinessSchema: Schema.Codec<typeof MicroVerticalReadinessSchema.Type> =
-  MicroVerticalReadinessSchema;
+export const assortmentReadinessSchema = Schema.Struct({
+  ...MicroVerticalReadinessSchema.fields,
+  marker: assortmentMarkerSchema,
+});
 
 export type AssortmentReadiness = typeof assortmentReadinessSchema.Type;
 

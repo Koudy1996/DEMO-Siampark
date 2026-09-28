@@ -31,6 +31,7 @@ export default defineConfig(
   presetUltramodern(
     {
       ...createModernConfig({
+        apiOnly: true,
         appId,
         bffPrefix: '/price-group-catalog-api',
         build,
