@@ -9,6 +9,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, Schema } from '@modern-js/bff-e
 import { identity } from 'effect';
 // <generated-governed-http-api-imports>
 import { CurrentStorefrontApplicationApi } from './apis/current-storefront-application.ts';
+import { VerifyCurrentStorefrontApplicationV1Api } from './apis/verify-current-storefront-application-v1.ts';
 // </generated-governed-http-api-imports>
 
 export const storefrontRegistryMarkerSchema: Schema.Codec<typeof MicroVerticalBuildMarkerSchema.Type> =
@@ -33,6 +34,7 @@ export const storefrontRegistryApi = HttpApi.make('StorefrontRegistryApi')
   .addHttpApi(storefrontRegistryFoundationApi)
   // <generated-governed-http-api-additions>
   .addHttpApi(CurrentStorefrontApplicationApi)
+  .addHttpApi(VerifyCurrentStorefrontApplicationV1Api)
   // </generated-governed-http-api-additions>
   .pipe(identity);
 

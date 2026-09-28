@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./current-storefront-application": "./src/apis/current-storefront-application.ts",
-    "./current-storefront-application/client": "./src/api/current-storefront-application-client.ts"
+    "./current-storefront-application/client": "./src/api/current-storefront-application-client.ts",
+    "./verify-current-storefront-application-v1": "./src/apis/verify-current-storefront-application-v1.ts",
+    "./verify-current-storefront-application-v1/client": "./src/api/verify-current-storefront-application-v1-client.ts"
   },
   "scripts": {
     "test:unit": "rstest --project unit",
@@ -25,7 +27,8 @@
   "ontosContractOwner": {
     "appId": "storefront-registry",
     "moduleApis": [
-      "current-storefront-application"
+      "current-storefront-application",
+      "verify-current-storefront-application-v1"
     ],
     "moduleId": "commerce.storefront-registry",
     "packageName": "@app/storefront-registry"

@@ -168,6 +168,7 @@ import { customerProfileTradingGateReadApiLive } from './customer-profile-tradin
 import { customerRecordVisibilityReadApiLive } from './customer-record-visibility-read-server.ts';
 import { decidePurchaseApprovalRequestActionApiLive } from './decide-purchase-approval-request-action-server.ts';
 import { deliveryDestinationResolutionReadApiLive } from './delivery-destination-resolution-read-server.ts';
+import { effectiveCustomerGroupMembershipSetV1ReadApiLive } from './effective-customer-group-membership-set-v1-read-server.ts';
 import { effectiveCustomerGroupMembershipsReadApiLive } from './effective-customer-group-memberships-read-server.ts';
 import { ensureRetailCustomerProfileActionApiLive } from './ensure-retail-customer-profile-action-server.ts';
 import { grantCounterpartyCommerceAccessActionApiLive } from './grant-counterparty-commerce-access-action-server.ts';
@@ -211,6 +212,7 @@ import { retailOrderHistoryDetailReadApiLive } from './retail-order-history-deta
 import { retailOrderHistoryReadApiLive } from './retail-order-history-read-server.ts';
 import { retailPortalProfileBindingReadReadApiLive } from './retail-portal-profile-binding-read-read-server.ts';
 import { retailPrincipalResolutionReadApiLive } from './retail-principal-resolution-read-server.ts';
+import { retailPurchasingSubjectCurrentV1ReadApiLive } from './retail-purchasing-subject-current-v1-read-server.ts';
 import { revalidatePurchaseApprovalActionApiLive } from './revalidate-purchase-approval-action-server.ts';
 import { revokeCounterpartyAccessInvitationActionApiLive } from './revoke-counterparty-access-invitation-action-server.ts';
 import { revokeCounterpartyCommerceAccessActionApiLive } from './revoke-counterparty-commerce-access-action-server.ts';
@@ -227,6 +229,8 @@ import { terminatePortalEnrollmentActionApiLive } from './terminate-portal-enrol
 import { triggerPurchaseApprovalActionApiLive } from './trigger-purchase-approval-action-server.ts';
 import { updateCustomerGroupActionApiLive } from './update-customer-group-action-server.ts';
 import { updateSavedAddressActionApiLive } from './update-saved-address-action-server.ts';
+import { verifyEffectiveCustomerGroupMembershipSetV1ReadApiLive } from './verify-effective-customer-group-membership-set-v1-read-server.ts';
+import { verifyRetailPurchasingSubjectCurrentV1ReadApiLive } from './verify-retail-purchasing-subject-current-v1-read-server.ts';
 // </generated-governed-http-handler-imports>
 
 import { microVerticalOperationAttributes } from '@app/shared-contracts';
@@ -839,6 +843,7 @@ export const makeCommerceCustomerContextApiRuntime = (
     customerRecordVisibilityReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     decidePurchaseApprovalRequestActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     deliveryDestinationResolutionReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    effectiveCustomerGroupMembershipSetV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     effectiveCustomerGroupMembershipsReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     ensureRetailCustomerProfileActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     grantCounterpartyCommerceAccessActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
@@ -882,6 +887,7 @@ export const makeCommerceCustomerContextApiRuntime = (
     retailOrderHistoryReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     retailPortalProfileBindingReadReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     retailPrincipalResolutionReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    retailPurchasingSubjectCurrentV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     revalidatePurchaseApprovalActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     revokeCounterpartyAccessInvitationActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     revokeCounterpartyCommerceAccessActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
@@ -898,6 +904,8 @@ export const makeCommerceCustomerContextApiRuntime = (
     triggerPurchaseApprovalActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     updateCustomerGroupActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     updateSavedAddressActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
+    verifyEffectiveCustomerGroupMembershipSetV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    verifyRetailPurchasingSubjectCurrentV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     // </generated-governed-http-handler-layers>
   );
   const apiHandlersLive = Layer.mergeAll(

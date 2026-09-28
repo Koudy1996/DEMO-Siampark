@@ -24,6 +24,7 @@ import type {
   FlushActionSuccessInput,
   RejectPermissionDeniedInput,
 } from '../../src/actions/repository.ts';
+import { OperationContextUnavailable } from '../../src/operations/errors.ts';
 import {
   computeActionRequestHash,
   computeCanonicalValueHash,
@@ -34,7 +35,10 @@ import {
 import type { ActionRuntimeStage } from '../../src/actions/runtime.ts';
 import { ACTION_RUNTIME_STAGES, makeActionRuntime } from '../../src/actions/runtime.ts';
 import { allowOwnerAuthorizationOverlay } from '../../src/permissions/owner-authorization-overlay.ts';
-import type { OwnerAuthorizationOverlayService } from '../../src/permissions/owner-authorization-overlay.ts';
+import type {
+  OwnerAuthorizationInput,
+  OwnerAuthorizationOverlayService,
+} from '../../src/permissions/owner-authorization-overlay.ts';
 import type { PrincipalManagementRepositoryService } from '../../src/auth/principal-management.ts';
 import { PrincipalManagementRepository } from '../../src/auth/principal-management.ts';
 import { supportRecoveryPrincipalContextResolverFromRepository } from '../../src/auth/support-recovery-principal-context.ts';
@@ -116,6 +120,7 @@ const providePrincipalManagementRepository = Effect.provideService(
 
 const PermissionDecisionSchema = Schema.Literals(['allowed', 'denied', 'unavailable']);
 type PermissionDecision = typeof PermissionDecisionSchema.Type;
+const transactionOperationAt = DateTime.toDateUtc(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
 
 interface HarnessOptions {
   readonly assortmentPermissionDecision?: PermissionDecision;
@@ -124,6 +129,7 @@ interface HarnessOptions {
   readonly commit?: Effect.Effect<readonly object[], SqlError>;
   readonly commitFailureCode?: string;
   readonly createRecord?: ActionInvocationRecord;
+  readonly failTransactionTimestamp?: boolean;
   readonly legalEntityPermissionDecision?: PermissionDecision;
   readonly lockedModuleState?: 'active' | 'denied' | 'unavailable';
   readonly moduleState?: TenantModuleState | 'missing' | 'unavailable';
@@ -162,6 +168,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
   let handlerResolutionCount = 0;
   let rejectionCount = 0;
   let transitionCount = 0;
+  let transactionTimestampReadCount = 0;
   let transactionCount = 0;
   let committedTransactionCount = 0;
   let rolledBackTransactionCount = 0;
@@ -314,6 +321,15 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
           tenant_id: installedTenantId,
         },
       ];
+    }
+    if (text.includes('transaction_timestamp')) {
+      transactionTimestampReadCount += 1;
+      if (options.failTransactionTimestamp === true) {
+        return yield* new SqlError({
+          reason: new ConnectionError({ cause: new Error('transaction clock unavailable') }),
+        });
+      }
+      return [{ operation_at: transactionOperationAt }];
     }
     if (text.startsWith('select')) {
       return [{ authBindingId: principalAuthBindingId }];
@@ -492,6 +508,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
       committedTransactionCount,
       rolledBackTransactionCount,
     }),
+    transactionTimestampReads: () => transactionTimestampReadCount,
   };
 });
 
@@ -840,7 +857,7 @@ it.effect(
 it.effect(
   'runs the owner overlay inside the transaction and persists an owner denial before the handler',
   Effect.fn(function* testOwnerOverlayDenial() {
-    const ownerInputs: unknown[] = [];
+    const ownerInputs: OwnerAuthorizationInput[] = [];
     const harness = yield* makeHarness({
       ownerAuthorizationOverlay: {
         authorize: (_transaction, input) => {
@@ -860,6 +877,8 @@ it.effect(
 
     expect(Schema.is(ActionPermissionDenied)(failure)).toBe(true);
     expect(ownerInputs).toHaveLength(1);
+    expect(ownerInputs[0]?.operationAt).toEqual(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
+    expect(harness.transactionTimestampReads()).toBe(1);
     expect(harness.gateCounts().handlerResolutionCount).toBe(0);
     expect(harness.counts()).toEqual({
       createCount: 1,
@@ -868,6 +887,34 @@ it.effect(
       transitionCount: 0,
     });
     expect(harness.permissionCounts().rejectionCount).toBe(1);
+  }),
+);
+
+it.effect('fails closed before owner authorization when PostgreSQL cannot provide transaction time', () =>
+  Effect.gen(function* transactionTimeUnavailable() {
+    let overlayCalls = 0;
+    const harness = yield* makeHarness({
+      failTransactionTimestamp: true,
+      ownerAuthorizationOverlay: {
+        authorize: () => {
+          overlayCalls += 1;
+          return Effect.succeed('allowed' as const);
+        },
+      },
+    });
+    const failure = yield* Effect.flip(
+      harness.runtime.runAction({
+        payload: { amount: 3 },
+        principal,
+        registration: registration(),
+        transport: transport('clock-unavailable'),
+      }),
+    );
+
+    expect(Schema.is(OperationContextUnavailable)(failure)).toBe(true);
+    expect(overlayCalls).toBe(0);
+    expect(harness.gateCounts().handlerResolutionCount).toBe(0);
+    expect(harness.transactionTimestampReads()).toBe(1);
   }),
 );
 

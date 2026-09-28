@@ -138,19 +138,31 @@ const lock = (tx: ScopedTransaction, key: readonly [string, string, string, stri
   );
 const entryTarget = (entry: CreateClosedAssortmentBoundaryPayload['admissionSet']['entries'][number]) => {
   if (entry.kind === 'ALL') {
-    return { id: null, type: null };
+    return { id: null, moduleId: null, type: null };
   }
   if (entry.kind === 'CATEGORY') {
-    return { id: entry.categoryRef.resourceId, type: entry.categoryRef.resourceType };
+    return {
+      id: entry.categoryRef.resourceId,
+      moduleId: entry.categoryRef.moduleId,
+      type: entry.categoryRef.resourceType,
+    };
   }
   if (entry.kind === 'PRODUCT') {
-    return { id: entry.productRef.resourceId, type: entry.productRef.resourceType };
+    return {
+      id: entry.productRef.resourceId,
+      moduleId: entry.productRef.moduleId,
+      type: entry.productRef.resourceType,
+    };
   }
   if (entry.kind === 'VARIANT') {
-    return { id: entry.variantRef.resourceId, type: entry.variantRef.resourceType };
+    return {
+      id: entry.variantRef.resourceId,
+      moduleId: entry.variantRef.moduleId,
+      type: entry.variantRef.resourceType,
+    };
   }
   const ref = entry.packageOptionRef;
-  return { id: ref.resourceId, type: ref.resourceType };
+  return { id: ref.resourceId, moduleId: ref.moduleId, type: ref.resourceType };
 };
 export const matchesBoundaryCreateReplay = (
   row: Readonly<{ actor: string; provenance: string; reason: string; semanticFingerprint: string }>,
@@ -397,6 +409,7 @@ const persistCreatedBoundary = Effect.fn('BoundaryAdministrationService.persistC
               ordinal,
               provenanceRef: input.provenanceRef,
               reason: input.reason,
+              targetOwnerModuleId: target.moduleId,
               targetResourceId: target.id,
               targetResourceType: target.type,
               tenantId: input.tenantId,

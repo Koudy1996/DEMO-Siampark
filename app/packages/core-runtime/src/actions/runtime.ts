@@ -10,6 +10,7 @@ import { isDatabaseCommitAcknowledgementAmbiguous } from '../database/driver-fai
 import { findPostgresFailure } from '../database/postgres-failure.ts';
 import { CoreDatabase as CoreDatabaseService } from '../db/client.ts';
 import { installOperationalScope } from '../db/scoped-transaction.ts';
+import { trustedTransactionTime } from '../operations/transaction-time.ts';
 import type { CoreTransaction } from '../db/types.ts';
 import type { ModuleEntrypointGatewayService } from '../modules/module-entrypoint-gateway.ts';
 import { ModuleEntrypointGateway } from '../modules/module-entrypoint-gateway.ts';
@@ -602,14 +603,20 @@ const AssortmentSubjectSchema = Schema.Union([
 const AssortmentAdmissionSetSchema = Schema.Union([
   Schema.Struct({
     contentHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+    entries: Schema.Tuple([]),
     memberCount: Schema.Literal(0),
     setKind: Schema.Literal('EMPTY'),
   }),
   Schema.Struct({
     contentHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+    entries: Schema.Array(AssortmentSelectorSchema).check(Schema.isMinLength(1)),
     memberCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
     setKind: Schema.Literal('ENTRIES'),
-  }),
+  }).check(
+    Schema.makeFilter((set) =>
+      set.entries.length === set.memberCount ? undefined : 'Admission Set count must match its complete entries',
+    ),
+  ),
 ]);
 const AssortmentPermissionTargetSchema = Schema.Union([
   Schema.Struct({
@@ -1699,10 +1706,12 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
             yield* moduleStateGate.recheckWrite(drizzleTransaction, scope.tenantId, tenantEntrypoint);
           }
           notifyStage('module_state_rechecked');
+          const operationAt = yield* trustedTransactionTime(drizzleTransaction);
           const ownerAuthorizationDecision = yield* ownerAuthorizationOverlay.authorize(
             scopedTransaction,
             Object.freeze({
               operation: 'action' as const,
+              operationAt,
               operationKey: input.registration.descriptor.actionKey,
               owningModuleKey: input.registration.descriptor.owningModuleKey,
               scope,

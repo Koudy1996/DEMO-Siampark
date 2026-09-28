@@ -1,11 +1,15 @@
-import type { OperationalScope } from '@app/core-runtime';
-import { DateTime, Result, Schema } from 'effect';
+import type { AssortmentPermissionSelector, OperationalScope } from '@app/core-runtime';
+import { DateTime, Match, Result, Schema } from 'effect';
 import type {
   CreateClosedAssortmentBoundaryPayload,
   ReplaceClosedAssortmentBoundaryPayload,
 } from '../../shared/actions/boundary-administration.ts';
 import { AssortmentCollectionRevisionRefSchema } from '../../shared/actions/boundary-administration.ts';
-import type { AssortmentCommercialScope, AssortmentPurchasingSubject } from '../../shared/domain/decision-contracts.ts';
+import type {
+  AssortmentCatalogSelector,
+  AssortmentCommercialScope,
+  AssortmentPurchasingSubject,
+} from '../../shared/domain/decision-contracts.ts';
 import { AssortmentPolicyTargetInvariant } from '../../shared/domain/policy-errors.ts';
 import { assortmentMeaningFingerprint } from '../services/policy-administration.service.ts';
 
@@ -33,6 +37,43 @@ const subjectTarget = (subject: AssortmentPurchasingSubject) =>
     ? { kind: subject.kind, ref: target(subject.counterpartyRef) }
     : { kind: subject.kind, ref: target(subject.profileRef) };
 
+const allAdmissionTarget = () => ({ kind: 'ALL' as const });
+const categoryAdmissionTarget = (value: Extract<AssortmentCatalogSelector, { readonly kind: 'CATEGORY' }>) => ({
+  kind: 'CATEGORY' as const,
+  target: target(value.categoryRef),
+});
+const packageAdmissionTarget = (value: Extract<AssortmentCatalogSelector, { readonly kind: 'PACKAGE_OPTION' }>) => ({
+  kind: 'PACKAGE_OPTION' as const,
+  target: target(value.packageOptionRef),
+});
+const productAdmissionTarget = (value: Extract<AssortmentCatalogSelector, { readonly kind: 'PRODUCT' }>) => ({
+  kind: 'PRODUCT' as const,
+  target: target(value.productRef),
+});
+const variantAdmissionTarget = (value: Extract<AssortmentCatalogSelector, { readonly kind: 'VARIANT' }>) => ({
+  kind: 'VARIANT' as const,
+  target: target(value.variantRef),
+});
+
+const admissionSelectorTarget = (selector: AssortmentCatalogSelector): AssortmentPermissionSelector =>
+  Match.value(selector).pipe(
+    Match.discriminatorsExhaustive('kind')({
+      ALL: allAdmissionTarget,
+      CATEGORY: categoryAdmissionTarget,
+      PACKAGE_OPTION: packageAdmissionTarget,
+      PRODUCT: productAdmissionTarget,
+      VARIANT: variantAdmissionTarget,
+    }),
+  );
+
+const admissionTargetKey = (selector: ReturnType<typeof admissionSelectorTarget>): string =>
+  [
+    selector.kind,
+    selector.target?.moduleId ?? '',
+    selector.target?.resourceType ?? '',
+    selector.target?.resourceId ?? '',
+  ].join('\u0000');
+
 const assertRefs = (scope: OperationalScope, refs: readonly TenantRef[], sellingLegalEntityRef?: TenantRef) => {
   if (refs.some((ref) => ref.tenantId !== scope.tenantId)) {
     throw new AssortmentPolicyTargetInvariant({ reason: 'Assortment boundary target tenant mismatch' });
@@ -54,6 +95,28 @@ const refsForScope = (value: AssortmentCommercialScope): TenantRef[] => [
 ];
 const refsForSubject = (value: AssortmentPurchasingSubject): TenantRef[] =>
   value.kind === 'COUNTERPARTY' ? [value.counterpartyRef] : [value.profileRef];
+type AdmissionEntry = CreateClosedAssortmentBoundaryPayload['admissionSet']['entries'][number];
+const allAdmissionEntryRef = () => null;
+const categoryAdmissionEntryRef = (entry: Extract<AdmissionEntry, { readonly kind: 'CATEGORY' }>) => entry.categoryRef;
+const packageAdmissionEntryRef = (entry: Extract<AdmissionEntry, { readonly kind: 'PACKAGE_OPTION' }>) =>
+  entry.packageOptionRef;
+const productAdmissionEntryRef = (entry: Extract<AdmissionEntry, { readonly kind: 'PRODUCT' }>) => entry.productRef;
+const variantAdmissionEntryRef = (entry: Extract<AdmissionEntry, { readonly kind: 'VARIANT' }>) => entry.variantRef;
+const admissionEntryRef = (entry: AdmissionEntry) =>
+  Match.value(entry).pipe(
+    Match.discriminatorsExhaustive('kind')({
+      ALL: allAdmissionEntryRef,
+      CATEGORY: categoryAdmissionEntryRef,
+      PACKAGE_OPTION: packageAdmissionEntryRef,
+      PRODUCT: productAdmissionEntryRef,
+      VARIANT: variantAdmissionEntryRef,
+    }),
+  );
+const refsForAdmissionSet = (value: CreateClosedAssortmentBoundaryPayload['admissionSet']): TenantRef[] =>
+  value.entries.flatMap((entry) => {
+    const reference = admissionEntryRef(entry);
+    return reference === null ? [] : [reference];
+  });
 
 export const boundaryAdmissionEvidence = (payload: CreateClosedAssortmentBoundaryPayload) => {
   const contentHash = assortmentMeaningFingerprint({ entries: payload.admissionSet.entries });
@@ -82,19 +145,28 @@ export const createBoundaryPermissionTarget = (
 ) => {
   assertRefs(
     scope,
-    [...refsForScope(payload.commercialScope), ...refsForSubject(payload.subject)],
+    [
+      ...refsForScope(payload.commercialScope),
+      ...refsForSubject(payload.subject),
+      ...refsForAdmissionSet(payload.admissionSet),
+    ],
     payload.commercialScope.sellingLegalEntityRef,
   );
   const evidence = boundaryAdmissionEvidence(payload);
+  const entries = payload.admissionSet.entries
+    .map(admissionSelectorTarget)
+    .toSorted((left, right) => admissionTargetKey(left).localeCompare(admissionTargetKey(right), 'en'));
   const admissionSet =
     evidence.setKind === 'EMPTY'
       ? {
           contentHash: evidence.contentHash,
+          entries: [] as const,
           memberCount: 0 as const,
           setKind: 'EMPTY' as const,
         }
       : {
           contentHash: evidence.contentHash,
+          entries,
           memberCount: payload.admissionSet.entries.length,
           setKind: 'ENTRIES' as const,
         };

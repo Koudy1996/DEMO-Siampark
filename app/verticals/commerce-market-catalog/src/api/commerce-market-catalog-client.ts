@@ -86,6 +86,15 @@ export type {
   ResolveCommerceMarketResponse,
 } from '../../shared/apis/resolve-commerce-market.ts';
 export {
+  VerifyMarketEligibilityV1Api,
+  VerifyMarketEligibilityV1RequestSchema,
+  VerifyMarketEligibilityV1ResponseSchema,
+} from '../../shared/apis/verify-market-eligibility-v1.ts';
+export type {
+  VerifyMarketEligibilityV1Request,
+  VerifyMarketEligibilityV1Response,
+} from '../../shared/apis/verify-market-eligibility-v1.ts';
+export {
   executeCurrentMarketCatalog,
   executeCurrentMarketCatalogWithAuthorization,
 } from './current-market-catalog-client.ts';
@@ -102,6 +111,11 @@ export {
   executeResolveCommerceMarketWithAuthorization,
 } from './resolve-commerce-market-client.ts';
 export type { ResolveCommerceMarketClientOptions } from './resolve-commerce-market-client.ts';
+export {
+  executeVerifyMarketEligibilityV1,
+  executeVerifyMarketEligibilityV1WithAuthorization,
+} from './verify-market-eligibility-v1-client.ts';
+export type { VerifyMarketEligibilityV1ClientOptions } from './verify-market-eligibility-v1-client.ts';
 
 type CommerceMarketCatalogApiGroups =
   typeof commerceMarketCatalogApi extends HttpApi.HttpApi<infer _ApiId, infer Groups> ? Groups : never;

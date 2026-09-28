@@ -96,6 +96,21 @@ export * from './set-variant-attribute-override-action-client.ts';
 export * from './set-variant-localized-facts-action-client.ts';
 export * from './update-product-action-client.ts';
 // </generated-action-http-client-exports>
+export {
+  executeAssortmentProductClassificationV1,
+  executeAssortmentProductClassificationV1WithAuthorization,
+} from './assortment-product-classification-v1-client.ts';
+export type { AssortmentProductClassificationV1ClientOptions } from './assortment-product-classification-v1-client.ts';
+export {
+  executeAssortmentSelectionAssessmentV1,
+  executeAssortmentSelectionAssessmentV1WithAuthorization,
+} from './assortment-selection-assessment-v1-client.ts';
+export type { AssortmentSelectionAssessmentV1ClientOptions } from './assortment-selection-assessment-v1-client.ts';
+export {
+  executeAssortmentSetCompositionV1,
+  executeAssortmentSetCompositionV1WithAuthorization,
+} from './assortment-set-composition-v1-client.ts';
+export type { AssortmentSetCompositionV1ClientOptions } from './assortment-set-composition-v1-client.ts';
 export { executeProductDetail, executeProductDetailWithAuthorization } from './product-detail-client.ts';
 export type { ProductDetailClientOptions } from './product-detail-client.ts';
 export { executeProductHistory, executeProductHistoryWithAuthorization } from './product-history-client.ts';

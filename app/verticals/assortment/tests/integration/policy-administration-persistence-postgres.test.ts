@@ -154,7 +154,15 @@ it.live(
           provenanceRef: 'acceptance:create-rule',
           purpose: 'PURCHASE',
           reason: 'Create the acceptance policy rule',
-          selector: { kind: 'ALL' },
+          selector: {
+            kind: 'PRODUCT',
+            productRef: {
+              moduleId: 'commerce.catalog',
+              resourceId: 'catalog-product-1',
+              resourceType: 'catalog.product',
+              tenantId,
+            },
+          },
           stableCode,
         });
         const createInvocation = randomUUID();
@@ -170,6 +178,14 @@ it.live(
         );
         expect(createdRule.created).toBe(true);
         expect(createdRule.initialRevisionNumber).toBe(1);
+        const storedSelectorOwner = yield* runScoped(ownerDatabase, (transaction) =>
+          transaction
+            .select({ ownerModuleId: ruleRevisions.selectorTargetOwnerModuleId })
+            .from(ruleRevisions)
+            .where(eq(ruleRevisions.ruleRevisionId, createdRule.initialRuleRevisionId))
+            .limit(1),
+        );
+        expect(storedSelectorOwner[0]?.ownerModuleId).toBe('commerce.catalog');
 
         const replayedRule = Schema.decodeUnknownSync(CreateRulePersistenceSuccessSchema)(
           yield* runScoped(ownerDatabase, (transaction) =>

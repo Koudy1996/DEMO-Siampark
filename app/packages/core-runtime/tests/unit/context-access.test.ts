@@ -292,6 +292,7 @@ it.effect('keeps complete Admission Set digest semantics exact and distinguishes
           resourceType: 'catalog.collection-revision',
         },
         contentHash: 'a'.repeat(64),
+        entries: [],
         memberCount: 0,
         setKind: 'EMPTY' as const,
       },
@@ -317,10 +318,63 @@ it.effect('keeps complete Admission Set digest semantics exact and distinguishes
     const sameMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, target);
     const changedMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
       ...target,
-      admissionSet: { ...target.admissionSet, contentHash: 'b'.repeat(64), memberCount: 1, setKind: 'ENTRIES' },
+      admissionSet: {
+        contentHash: 'a'.repeat(64),
+        entries: [
+          {
+            kind: 'PRODUCT',
+            target: { moduleId: 'commerce.catalog', resourceId: 'product-a', resourceType: 'commerce.catalog.product' },
+          },
+        ],
+        memberCount: 1,
+        setKind: 'ENTRIES',
+      },
+    });
+    const categoryMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
+      ...target,
+      admissionSet: {
+        contentHash: 'a'.repeat(64),
+        entries: [
+          {
+            kind: 'CATEGORY',
+            target: {
+              moduleId: 'commerce.catalog',
+              resourceId: 'category-c',
+              resourceType: 'commerce.catalog.product-category',
+            },
+          },
+        ],
+        memberCount: 1,
+        setKind: 'ENTRIES',
+      },
+    });
+    const allMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
+      ...target,
+      admissionSet: { contentHash: 'a'.repeat(64), entries: [{ kind: 'ALL' }], memberCount: 1, setKind: 'ENTRIES' },
+    });
+    const otherProductMeaning = toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
+      ...target,
+      admissionSet: {
+        contentHash: 'a'.repeat(64),
+        entries: [
+          {
+            kind: 'PRODUCT',
+            target: { moduleId: 'commerce.catalog', resourceId: 'product-b', resourceType: 'commerce.catalog.product' },
+          },
+        ],
+        memberCount: 1,
+        setKind: 'ENTRIES',
+      },
     });
     expect(sameMeaning).toBeDefined();
     expect(sameMeaning).not.toBe(changedMeaning);
+    expect(new Set([sameMeaning, changedMeaning, categoryMeaning, allMeaning, otherProductMeaning]).size).toBe(5);
+    expect(
+      toAssortmentPermissionAccessObjectId(tenantId, legalEntityId, {
+        ...target,
+        admissionSet: { contentHash: 'a'.repeat(64), entries: [], memberCount: 1, setKind: 'ENTRIES' },
+      }),
+    ).toBeUndefined();
     expect(requests[0]?.items[0]?.resource?.objectId).not.toContain('a'.repeat(64));
   }),
 );

@@ -28,6 +28,7 @@
     "./ports/owner-evidence": "./shared/domain/ports/owner-evidence.ts",
     "./resources/applicability-binding": "./shared/resources/applicability-binding.ts",
     "./resources/closed-assortment-boundary": "./shared/resources/closed-assortment-boundary.ts",
+    "./resources/decision-set-proof": "./shared/resources/decision-set-proof.ts",
     "./resources/rule-revision": "./shared/resources/rule-revision.ts",
     "./resources/stable-rule": "./shared/resources/stable-rule.ts",
     "./Route": "./src/federation-entry.tsx"

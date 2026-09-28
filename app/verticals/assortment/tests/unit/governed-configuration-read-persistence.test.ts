@@ -126,6 +126,42 @@ it.effect('loads each exact configuration resource and only its lifecycle eviden
   }),
 );
 
+it.effect('preserves the stored selector owner and fails closed for unresolved legacy owners', () =>
+  Effect.gen(function* selectorOwnerEvidence() {
+    const catalogRevision = {
+      ...revisionRow,
+      selectorKind: 'PRODUCT',
+      selectorTargetOwnerModuleId: 'commerce.catalog',
+      selectorTargetResourceId: 'product-1',
+      selectorTargetResourceType: 'catalog.product',
+    };
+    const catalogConfiguration = yield* assortmentConfigurationReadSourceForScope(
+      transaction([[catalogRevision]]),
+      scope,
+    ).resolve(resource('commerce.assortment.rule-revision', 'rule-revision-1'), scope);
+    expect(catalogConfiguration.configuration.kind).toBe('REVISION');
+    if (catalogConfiguration.configuration.kind === 'REVISION') {
+      expect(catalogConfiguration.configuration.value.selector).toEqual({
+        kind: 'PRODUCT',
+        productRef: {
+          moduleId: 'commerce.catalog',
+          resourceId: 'product-1',
+          resourceType: 'catalog.product',
+          tenantId,
+        },
+      });
+    }
+
+    const unresolved = yield* Effect.flip(
+      assortmentConfigurationReadSourceForScope(
+        transaction([[{ ...catalogRevision, selectorTargetOwnerModuleId: null }]]),
+        scope,
+      ).resolve(resource('commerce.assortment.rule-revision', 'legacy-revision'), scope),
+    );
+    expect(Schema.is(AssortmentPolicyPersistenceUnavailable)(unresolved)).toBe(true);
+  }),
+);
+
 it.effect('fails closed for wrong tenant, missing resource, legal-entity mismatch, and database failure', () =>
   Effect.gen(function* failClosed() {
     const unavailable = assortmentConfigurationReadService(

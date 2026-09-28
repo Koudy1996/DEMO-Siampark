@@ -148,8 +148,17 @@ const makeSetPurchaseFixture = () => {
     },
     role: 'REQUIRED_COMPONENT' as const,
   };
+  const secondComponent = {
+    catalogSelection: {
+      configuration: { kind: 'NONE' as const },
+      productRef: ref('catalog.owner', 'catalog.product', 'component-2'),
+      variantKind: 'ATOMIC' as const,
+      variantRef: ref('catalog.owner', 'catalog.variant', 'component-variant-2'),
+    },
+    role: 'REQUIRED_COMPONENT' as const,
+  };
   const decodedSetComposition = Schema.decodeUnknownSync(AssortmentSetPurchaseCompositionSchema)({
-    requiredComponents: [component],
+    requiredComponents: [component, secondComponent],
     setCompositionRevision,
   });
   const setSelection = {
@@ -176,6 +185,20 @@ const makeSetPurchaseFixture = () => {
     internalRequest,
     wireRequest,
   };
+};
+
+type SetPurchaseConstituent = ReturnType<typeof makeSetPurchaseFixture>['constituents'][number];
+const reverseConstituents = (
+  constituents: ReturnType<typeof makeSetPurchaseFixture>['constituents'],
+): SetPurchaseConstituent[] => {
+  const reversed: SetPurchaseConstituent[] = [];
+  for (let index = constituents.length - 1; index >= 0; index -= 1) {
+    const constituent = constituents[index];
+    if (constituent !== undefined) {
+      reversed.push(constituent);
+    }
+  }
+  return reversed;
 };
 
 const indeterminateDecision = () =>
@@ -398,7 +421,47 @@ it.effect('requires and persists every pinned Set constituent before positive PU
     );
     const result = yield* evaluation.evaluatePurchase(wireRequest, scope);
     expect(result.decision).toEqual({ outcome: 'ELIGIBLE', retryable: false });
-    expect(result.consumerEvidence?.evaluatedConstituents).toHaveLength(2);
+    expect(result.consumerEvidence?.evaluatedConstituents).toHaveLength(3);
+    expect(persisted).toEqual(['set-variant', 'component-variant-1', 'component-variant-2']);
+  }),
+);
+
+it.effect('accepts an authoritative Set deny prefix without fabricating sibling outcomes', () =>
+  Effect.gen(function* earlySetDeny() {
+    const { constituents, internalRequest, wireRequest } = makeSetPurchaseFixture();
+    const prefix = constituents.slice(0, 2);
+    const denied = decisionFor(internalRequest, 'INELIGIBLE');
+    const source: AssortmentDecisionSourcePort = {
+      resolvePurchase: () =>
+        Effect.succeed({
+          constituents: prefix.map((constituent, index) => ({
+            constituent,
+            decision: decisionFor(internalRequest, index === 0 ? 'ELIGIBLE' : 'INELIGIBLE', constituent),
+            request: internalRequest,
+          })),
+          decision: denied,
+          request: internalRequest,
+          safeReasonCode: 'RULE_DENIED',
+        }),
+      resolveVisibility: () => Effect.fail(dependencyFailure()),
+    };
+    const persisted: string[] = [];
+    const evaluation = makeAssortmentDecisionEvaluation(
+      dependenciesFor(source, (input) => {
+        const id = 'constituent' in input ? input.constituent.catalogSelection.variantRef.resourceId : 'visibility';
+        persisted.push(id);
+        return Effect.succeed(evidenceReference(`early-deny-${id}`));
+      }),
+    );
+
+    const result = yield* evaluation.evaluatePurchase(wireRequest, scope);
+    expect(result.decision).toEqual({
+      outcome: 'INELIGIBLE',
+      retryable: false,
+      safeReasonCode: 'RULE_DENIED',
+    });
+    expect(result.consumerEvidence?.composedOutcome).toBe('INELIGIBLE');
+    expect(result.consumerEvidence?.evaluatedConstituents.map((item) => item.constituent)).toEqual(prefix);
     expect(persisted).toEqual(['set-variant', 'component-variant-1']);
   }),
 );
@@ -410,10 +473,20 @@ it.effect('fails closed when injected Set constituents or composed PURCHASE outc
       ...constituents[1]?.catalogSelection,
       productRef: ref('catalog.owner', 'catalog.product', 'tampered-component'),
     });
-    const source = (componentDecision: 'valid' | 'outcome-drift'): AssortmentDecisionSourcePort => ({
+    const source = (
+      componentDecision: 'valid' | 'outcome-drift' | 'omitted' | 'reordered',
+    ): AssortmentDecisionSourcePort => ({
       resolvePurchase: () =>
         Effect.succeed({
-          constituents: constituents.map((constituent, index) => ({
+          constituents: (() => {
+            if (componentDecision === 'omitted') {
+              return constituents.slice(0, -1);
+            }
+            if (componentDecision === 'reordered') {
+              return reverseConstituents(constituents);
+            }
+            return constituents;
+          })().map((constituent, index) => ({
             constituent:
               index === 1 && componentDecision === 'valid'
                 ? { ...constituent, catalogSelection: tamperedSelection }
@@ -431,7 +504,7 @@ it.effect('fails closed when injected Set constituents or composed PURCHASE outc
       resolveVisibility: () => Effect.fail(dependencyFailure()),
     });
 
-    for (const componentDecision of ['valid', 'outcome-drift'] as const) {
+    for (const componentDecision of ['valid', 'outcome-drift', 'omitted', 'reordered'] as const) {
       const result = yield* makeAssortmentDecisionEvaluation(
         dependenciesFor(source(componentDecision)),
       ).evaluatePurchase(wireRequest, scope);

@@ -11,6 +11,7 @@ import {
 } from '../../../../packages/core-runtime/tests/support/database.ts';
 import type { TestDatabaseFromPool } from '../../../../packages/core-runtime/tests/support/database.ts';
 import { EligibleMarketTuplesRequestSchema } from '../../shared/apis/eligible-market-tuples.ts';
+import type { MarketSubjectRestrictionSnapshot } from '../../src/integrations/market-subject-restrictions.ts';
 import {
   commerceMarketCatalogRelations,
   marketCatalogCompletenessGenerations,
@@ -73,7 +74,11 @@ const requestAt = (effectiveAt: string) =>
 
 type MarketCatalogTestDatabase = TestDatabaseFromPool<typeof commerceMarketCatalogRelations>;
 
-const readSnapshot = (runtime: MarketCatalogTestDatabase, effectiveAt: string) =>
+const readSnapshot = (
+  runtime: MarketCatalogTestDatabase,
+  effectiveAt: string,
+  subjectRestrictions?: MarketSubjectRestrictionSnapshot,
+) =>
   runtime.transaction((transaction) =>
     Effect.gen(function* readEligibilitySnapshot() {
       yield* transaction.execute(
@@ -90,7 +95,7 @@ const readSnapshot = (runtime: MarketCatalogTestDatabase, effectiveAt: string) =
         routineInvoker,
         scope,
       );
-      return yield* persistence.load(requestAt(effectiveAt));
+      return yield* persistence.load(requestAt(effectiveAt), subjectRestrictions);
     }),
   );
 
@@ -319,6 +324,33 @@ it.live('returns complete exact-predicate Market eligibility snapshots from Post
       expect(afterMaterialInsert.completenessEvidence.ownerRevision).not.toBe(
         afterApplicability.completenessEvidence.ownerRevision,
       );
+
+      const restrictionBase: MarketSubjectRestrictionSnapshot = {
+        allowedChannels: ['B2C'],
+        allowedMarketIds: [marketId],
+        allowedSellerIds: [sellerId],
+        decision: 'ALLOWED',
+        evidenceRefs: ['ccc:market-restrictions:fixture'],
+        observedAt: DateTime.makeUnsafe('2035-07-01T00:00:00.000Z'),
+        ownerRevision: 'same-subject-owner-revision',
+        profileState: 'ACTIVE',
+        subjectIdentityRef: 'subject-profile-one',
+        subjectKind: 'COUNTERPARTY',
+      };
+      const baselineSubject = yield* readSnapshot(runtime, '2035-07-01T00:00:00.000Z', restrictionBase);
+      for (const changedRestriction of [
+        { ...restrictionBase, allowedChannels: ['B2B'] as const },
+        { ...restrictionBase, allowedMarketIds: [unrelatedMarketId] },
+        { ...restrictionBase, allowedSellerIds: [unrelatedSellerId] },
+        { ...restrictionBase, decision: 'DENIED' as const },
+        { ...restrictionBase, subjectIdentityRef: 'subject-profile-two' },
+        { ...restrictionBase, subjectKind: 'RETAIL_PROFILE' as const },
+      ]) {
+        const changedSubjectSnapshot = yield* readSnapshot(runtime, '2035-07-01T00:00:00.000Z', changedRestriction);
+        expect(changedSubjectSnapshot.completenessEvidence.ownerRevision).not.toBe(
+          baselineSubject.completenessEvidence.ownerRevision,
+        );
+      }
 
       yield* admin.insert(storefrontAssociationRevisions).values({
         actingPrincipalId: principalId,

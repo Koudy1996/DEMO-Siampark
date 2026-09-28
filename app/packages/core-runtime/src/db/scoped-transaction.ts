@@ -17,6 +17,8 @@ type ScopedRoutineRawRow = Record<string, never>;
 export interface ScopedTransactionExecutor extends ScopedRoutineInvoker {
   readonly delete: CoreTransaction['delete'];
   readonly insert: CoreTransaction['insert'];
+  /** Core-installed scope snapshot; owner readers bind their predicates to this transaction. */
+  readonly scope: Readonly<Pick<OperationalScope, 'tenantId' | 'legalEntityId'>>;
   readonly [scopedTransaction]: true;
   readonly select: CoreTransaction['select'];
   readonly update: CoreTransaction['update'];
@@ -107,6 +109,11 @@ export const installOperationalScopeFromTransactionService = Effect.fn('installO
       delete: transaction.delete.bind(transaction),
       insert: transaction.insert.bind(transaction),
       invoke: routineInvoker.invoke,
+      scope: Object.freeze(
+        scope.legalEntityId === undefined
+          ? { tenantId: scope.tenantId }
+          : { legalEntityId: scope.legalEntityId, tenantId: scope.tenantId },
+      ),
       [scopedTransaction]: true as const,
       select: transaction.select.bind(transaction),
       update: transaction.update.bind(transaction),

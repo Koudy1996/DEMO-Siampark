@@ -223,29 +223,33 @@ const mutation = <Value>(
     ),
   );
 
-const selectorTargetAll = () => ({ id: null, type: null });
+const selectorTargetAll = () => ({ id: null, ownerModuleId: null, type: null });
 const selectorTargetCategory = ({
   categoryRef,
 }: Extract<CreateRulePayload['selector'], { readonly kind: 'CATEGORY' }>) => ({
   id: categoryRef.resourceId,
+  ownerModuleId: categoryRef.moduleId,
   type: categoryRef.resourceType,
 });
 const selectorTargetPackageOption = ({
   packageOptionRef,
 }: Extract<CreateRulePayload['selector'], { readonly kind: 'PACKAGE_OPTION' }>) => ({
   id: packageOptionRef.resourceId,
+  ownerModuleId: packageOptionRef.moduleId,
   type: packageOptionRef.resourceType,
 });
 const selectorTargetProduct = ({
   productRef,
 }: Extract<CreateRulePayload['selector'], { readonly kind: 'PRODUCT' }>) => ({
   id: productRef.resourceId,
+  ownerModuleId: productRef.moduleId,
   type: productRef.resourceType,
 });
 const selectorTargetVariant = ({
   variantRef,
 }: Extract<CreateRulePayload['selector'], { readonly kind: 'VARIANT' }>) => ({
   id: variantRef.resourceId,
+  ownerModuleId: variantRef.moduleId,
   type: variantRef.resourceType,
 });
 const selectorTarget = (selector: CreateRulePayload['selector']) =>
@@ -663,6 +667,7 @@ export const assortmentPolicyPersistenceForScope = (
           reason: input.reason,
           revisionNumber: 1,
           selectorKind: input.selector.kind,
+          selectorTargetOwnerModuleId: target.ownerModuleId,
           selectorTargetResourceId: target.id,
           selectorTargetResourceType: target.type,
           semanticFingerprint: meaningFingerprint,
@@ -782,6 +787,7 @@ export const assortmentPolicyPersistenceForScope = (
           reason: input.reason,
           revisionNumber: latestNumber + 1,
           selectorKind: input.selector.kind,
+          selectorTargetOwnerModuleId: target.ownerModuleId,
           selectorTargetResourceId: target.id,
           selectorTargetResourceType: target.type,
           semanticFingerprint: meaningFingerprint,

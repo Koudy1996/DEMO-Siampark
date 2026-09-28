@@ -44,6 +44,9 @@ import { assignCatalogMediaActionApiLive } from './assign-catalog-media-action-s
 import { assignCatalogMediaRecoveryReadApiLive } from './assign-catalog-media-recovery-read-server.ts';
 import { assignSkuActionApiLive } from './assign-sku-action-server.ts';
 import { assignSkuRecoveryReadApiLive } from './assign-sku-recovery-read-server.ts';
+import { assortmentProductClassificationV1ReadApiLive } from './assortment-product-classification-v1-read-server.ts';
+import { assortmentSelectionAssessmentV1ReadApiLive } from './assortment-selection-assessment-v1-read-server.ts';
+import { assortmentSetCompositionV1ReadApiLive } from './assortment-set-composition-v1-read-server.ts';
 import { brandCurrentReadApiLive } from './brand-current-read-server.ts';
 import { brandHistoryReadApiLive } from './brand-history-read-server.ts';
 import { catalogDocumentCurrentReadApiLive } from './catalog-document-current-read-server.ts';
@@ -347,6 +350,9 @@ export const makeCatalogApiRuntime = (
     assignCatalogMediaRecoveryReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     assignSkuActionApiLive.pipe(GovernedReadLayer.provide(governedActionRuntimeLive)),
     assignSkuRecoveryReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    assortmentProductClassificationV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    assortmentSelectionAssessmentV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    assortmentSetCompositionV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     brandCurrentReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     brandHistoryReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     catalogDocumentCurrentReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),

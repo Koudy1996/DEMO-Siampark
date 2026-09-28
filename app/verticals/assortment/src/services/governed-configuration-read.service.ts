@@ -4,9 +4,14 @@
  */
 // oxlint-disable anti-slop/no-conditional-empty-object-spread, sonarjs/no-duplicate-string -- owner DB adapter normalization; expires: 2027-09-23.
 import type { AssortmentPermissionAccessTarget, OperationalScope, ScopedTransactionExecutor } from '@app/core-runtime';
-import { DateTime, Effect, Schema } from 'effect';
+import { DateTime, Effect, Match, Schema } from 'effect';
 import { and, eq } from 'drizzle-orm';
 import { AssortmentConfigurationResponseSchema } from '../../shared/domain/governed-read-contracts.ts';
+import type { AssortmentCatalogSelectorKind } from '../../shared/domain/decision-contracts.ts';
+import {
+  AssortmentCatalogSelectorKindSchema,
+  AssortmentCatalogSelectorSchema,
+} from '../../shared/domain/decision-contracts.ts';
 import type {
   AssortmentConfigurationRequest,
   AssortmentConfigurationResponse,
@@ -63,7 +68,16 @@ const resourceTypes = {
   revision: 'commerce.assortment.rule-revision',
   stableRule: 'commerce.assortment.stable-rule',
 } as const;
-const selectorKindSchema = Schema.Literals(['CATEGORY', 'PACKAGE_OPTION', 'PRODUCT', 'VARIANT']);
+
+const selectorForKind = (kind: AssortmentCatalogSelectorKind, target: ReturnType<typeof ref>) =>
+  Match.value(kind).pipe(
+    Match.when('CATEGORY', () => ({ categoryRef: target, kind: 'CATEGORY' as const })),
+    Match.when('PACKAGE_OPTION', () => ({ kind: 'PACKAGE_OPTION' as const, packageOptionRef: target })),
+    Match.when('PRODUCT', () => ({ kind: 'PRODUCT' as const, productRef: target })),
+    Match.when('VARIANT', () => ({ kind: 'VARIANT' as const, variantRef: target })),
+    Match.when('ALL', () => ({ kind: 'ALL' as const })),
+    Match.exhaustive,
+  );
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Schema is the owner adapter's I/O boundary.
 const decodeConfiguration = (value: unknown): Effect.Effect<AssortmentConfigurationResponse, Failure> =>
@@ -123,21 +137,28 @@ const configurationSourceForScope = (
         if (row === undefined) {
           return yield* unavailable();
         }
-        if (row.selectorKind !== 'ALL' && !Schema.is(selectorKindSchema)(row.selectorKind)) {
-          return yield* unavailable();
+        const selectorKind: AssortmentCatalogSelectorKind = yield* Schema.decodeUnknownEffect(
+          AssortmentCatalogSelectorKindSchema,
+        )(row.selectorKind).pipe(Effect.mapError(unavailable));
+        let selectorValue: ReturnType<typeof selectorForKind> | Readonly<{ readonly kind: 'ALL' }>;
+        if (selectorKind === 'ALL') {
+          selectorValue = { kind: 'ALL' };
+        } else {
+          // Reconcile legacy rows only from authoritative Catalog owner evidence; never guess the module ID.
+          if (row.selectorTargetOwnerModuleId === null || row.selectorTargetOwnerModuleId.trim().length === 0) {
+            return yield* unavailable();
+          }
+          const target = ref(
+            row.selectorTargetResourceType ?? '',
+            row.selectorTargetResourceId ?? '',
+            tenant,
+            row.selectorTargetOwnerModuleId,
+          );
+          selectorValue = selectorForKind(selectorKind, target);
         }
-        const selector =
-          row.selectorKind === 'ALL'
-            ? { kind: 'ALL' as const }
-            : {
-                kind: row.selectorKind,
-                target: ref(
-                  row.selectorTargetResourceType ?? '',
-                  row.selectorTargetResourceId ?? '',
-                  tenant,
-                  'catalog.owner',
-                ),
-              };
+        const selector = yield* Schema.decodeEffect(AssortmentCatalogSelectorSchema)(selectorValue).pipe(
+          Effect.mapError(unavailable),
+        );
         return yield* decodeConfiguration({
           configuration: {
             kind: 'REVISION',

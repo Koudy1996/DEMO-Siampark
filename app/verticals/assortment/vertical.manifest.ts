@@ -28,6 +28,7 @@ import { createClosedAssortmentBoundaryAction } from './src/actions/create-close
 import { createRuleAction } from './src/actions/create-rule.action.ts';
 import { createRuleRevisionAction } from './src/actions/create-rule-revision.action.ts';
 import { DecisionExplanationApi } from './shared/apis/decision-explanation.ts';
+import { decisionSetProofResourceDescriptor } from './shared/resources/decision-set-proof.ts';
 import { endApplicabilityBindingAction } from './src/actions/end-applicability-binding.action.ts';
 import { endClosedAssortmentBoundaryAction } from './src/actions/end-closed-assortment-boundary.action.ts';
 import { issueAssortmentCommitmentConfirmationAction } from './src/actions/issue-assortment-commitment-confirmation.action.ts';
@@ -120,6 +121,7 @@ export const assortmentManifest = defineOntosModuleManifest({
       // <generated-module-manifest-resources>
       applicabilityBindingResourceDescriptor,
       closedAssortmentBoundaryResourceDescriptor,
+      decisionSetProofResourceDescriptor,
       ruleRevisionResourceDescriptor,
       stableRuleResourceDescriptor,
       // </generated-module-manifest-resources>

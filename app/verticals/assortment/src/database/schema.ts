@@ -1,7 +1,19 @@
 /* oxlint-disable perfectionist/sort-objects -- Drizzle declaration order is the physical schema contract; expires: 2027-03-31. */
 import { tenantLegalEntityRlsPolicies, tenantRlsPolicies } from '@app/core-runtime';
 import { defineRelations, sql } from 'drizzle-orm';
-import { check, foreignKey, index, integer, jsonb, pgSchema, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  foreignKey,
+  index,
+  integer,
+  jsonb,
+  pgPolicy,
+  pgSchema,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 /** Private persistence schema. Other owners use generated Assortment contracts. */
@@ -18,8 +30,22 @@ export const ASSORTMENT_TABLE_INVENTORY = [
   'assortment_admission_sets',
   'assortment_admission_set_entries',
   'assortment_collection_revisions',
+  'assortment_decision_set_fences',
   'assortment_decision_evidence',
   'assortment_commitment_confirmations',
+] as const;
+
+export const DECISION_SET_FENCE_SOURCE_TABLES = [
+  'assortment_stable_rules',
+  'assortment_rule_revisions',
+  'assortment_rule_retirement_facts',
+  'assortment_applicability_bindings',
+  'assortment_applicability_binding_end_facts',
+  'assortment_closed_boundaries',
+  'assortment_closed_boundary_end_facts',
+  'assortment_admission_sets',
+  'assortment_admission_set_entries',
+  'assortment_collection_revisions',
 ] as const;
 
 export const assortmentSchema = pgSchema(ASSORTMENT_SCHEMA_NAME);
@@ -89,6 +115,7 @@ export const ruleRevisions = assortmentSchema.table.withRLS(
     purpose: text('purpose').notNull(),
     effect: text('effect').notNull(),
     selectorKind: text('selector_kind').notNull(),
+    selectorTargetOwnerModuleId: text('selector_target_owner_module_id'),
     selectorTargetResourceId: text('selector_target_resource_id'),
     selectorTargetResourceType: text('selector_target_resource_type'),
     semanticFingerprint: text('semantic_fingerprint').notNull(),
@@ -109,7 +136,7 @@ export const ruleRevisions = assortmentSchema.table.withRLS(
     check('assortment_rule_revisions_effect_ck', sql`${table.effect} in ('ALLOW', 'DENY')`),
     check(
       'assortment_rule_revisions_selector_ck',
-      sql`${table.selectorKind} in ('ALL', 'CATEGORY', 'PRODUCT', 'VARIANT', 'PACKAGE_OPTION') and ((${table.selectorKind} = 'ALL' and ${table.selectorTargetResourceId} is null and ${table.selectorTargetResourceType} is null) or (${table.selectorKind} <> 'ALL' and ${table.selectorTargetResourceId} is not null and ${table.selectorTargetResourceType} is not null))`,
+      sql`${table.selectorKind} in ('ALL', 'CATEGORY', 'PRODUCT', 'VARIANT', 'PACKAGE_OPTION') and ((${table.selectorKind} = 'ALL' and ${table.selectorTargetOwnerModuleId} is null and ${table.selectorTargetResourceId} is null and ${table.selectorTargetResourceType} is null) or (${table.selectorKind} <> 'ALL' and ${table.selectorTargetResourceId} is not null and ${table.selectorTargetResourceType} is not null and (${table.selectorTargetOwnerModuleId} is null or ${table.selectorTargetOwnerModuleId} ~ '^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$')))`,
     ),
     check(
       'assortment_rule_revisions_purpose_selector_ck',
@@ -375,6 +402,7 @@ export const admissionSetEntries = assortmentSchema.table.withRLS(
     ...scopeColumns(),
     admissionSetId: uuid('admission_set_id').notNull(),
     coverageKind: text('coverage_kind').notNull(),
+    targetOwnerModuleId: text('target_owner_module_id'),
     targetResourceId: text('target_resource_id'),
     targetResourceType: text('target_resource_type'),
     ordinal: integer('ordinal').notNull(),
@@ -407,10 +435,33 @@ export const admissionSetEntries = assortmentSchema.table.withRLS(
     check('assortment_admission_entries_ordinal_ck', sql`${table.ordinal} >= 0`),
     check(
       'assortment_admission_entries_target_ck',
-      sql`(${table.coverageKind} = 'ALL' and ${table.targetResourceId} is null and ${table.targetResourceType} is null) or (${table.coverageKind} <> 'ALL' and ${table.targetResourceId} is not null and ${table.targetResourceType} is not null)`,
+      sql`(${table.coverageKind} = 'ALL' and ${table.targetOwnerModuleId} is null and ${table.targetResourceId} is null and ${table.targetResourceType} is null) or (${table.coverageKind} <> 'ALL' and ${table.targetResourceId} is not null and ${table.targetResourceType} is not null and (${table.targetOwnerModuleId} is null or ${table.targetOwnerModuleId} ~ '^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$'))`,
     ),
     ...scopedPolicies('assortment_admission_entries_scope', table),
   ],
+);
+
+/** Tenant-wide mutation fence used to invalidate complete Assortment query proofs. */
+export const decisionSetFences = assortmentSchema.table.withRLS(
+  'assortment_decision_set_fences',
+  {
+    generation: uuid('generation').defaultRandom().notNull(),
+    tenantId: uuid('tenant_id').primaryKey(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    const predicate = sql`${table.tenantId} = nullif(current_setting('ontos.tenant_id', true), '')::uuid`;
+    return [
+      ...tenantPolicies('assortment_decision_set_fences_scope', table),
+      // SECURITY DEFINER fence routines remain tenant-scoped under FORCE RLS; runtime has no raw table grants.
+      pgPolicy('assortment_decision_set_fences_owner_routine', {
+        for: 'all',
+        to: 'public',
+        using: predicate,
+        withCheck: predicate,
+      }),
+    ];
+  },
 );
 
 /** Immutable owner-local Decision Evidence; explanation reads bind by request fingerprint. */
@@ -503,6 +554,7 @@ const databaseSchema = {
   closedBoundaryEndFacts,
   collectionRevisions,
   commitmentConfirmations,
+  decisionSetFences,
   decisionEvidence,
   ruleRetirementFacts,
   ruleRevisions,
@@ -520,6 +572,7 @@ export const ASSORTMENT_TABLES = [
   admissionSets,
   admissionSetEntries,
   collectionRevisions,
+  decisionSetFences,
   decisionEvidence,
   commitmentConfirmations,
 ] as const;

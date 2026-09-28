@@ -8,6 +8,7 @@ import {
   isTrustedSupportRecoveryPrincipalContext,
 } from '../auth/system-principal-context-provenance.ts';
 import { CoreDatabase } from '../db/client.ts';
+import { trustedTransactionTime } from '../operations/transaction-time.ts';
 import { installOperationalScope } from '../db/scoped-transaction.ts';
 import type { CoreTransaction } from '../db/types.ts';
 import type { ModuleEntrypointGatewayService } from '../modules/module-entrypoint-gateway.ts';
@@ -228,8 +229,10 @@ const assortmentBoundaryTargetIsValid = (
   const admissionSetValid =
     ((target.admissionSet.setKind === 'EMPTY' && target.admissionSet.memberCount === 0) ||
       (target.admissionSet.setKind === 'ENTRIES' && target.admissionSet.memberCount > 0)) &&
+    target.admissionSet.memberCount === target.admissionSet.entries.length &&
     target.admissionSet.contentHash.length === 64 &&
-    /^[0-9a-f]{64}$/u.test(target.admissionSet.contentHash);
+    /^[0-9a-f]{64}$/u.test(target.admissionSet.contentHash) &&
+    target.admissionSet.entries.every((entry) => assortmentSelectorIsValid(entry, target.purpose));
   return (
     target.permission === 'assortment.boundary.create' &&
     assortmentSubjectIsValid(target.subject) &&
@@ -1368,10 +1371,12 @@ const readRuntimeFromDependencies = <
         Effect.fn('ReadRuntime.readTransactionBody')(function* readTransactionBody(transaction: CoreTransaction) {
           const scoped = yield* installOperationalScope(transaction, scope);
           stage('scope_installed');
+          const operationAt = yield* trustedTransactionTime(transaction);
           const ownerAuthorizationDecision = yield* ownerAuthorizationOverlay.authorize(
             scoped,
             Object.freeze({
               operation: 'read' as const,
+              operationAt,
               operationKey: input.registration.descriptor.readKey,
               owningModuleKey: input.registration.descriptor.owningModuleKey,
               scope,

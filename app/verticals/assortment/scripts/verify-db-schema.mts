@@ -4,7 +4,12 @@ import { sql } from 'drizzle-orm';
 import { Array as EffectArray, Effect, Layer, Order, Schema } from 'effect';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { AssortmentDatabase, AssortmentDatabaseLive } from '../src/database/client.ts';
-import { ASSORTMENT_SCHEMA_NAME, ASSORTMENT_TABLES, ASSORTMENT_TABLE_INVENTORY } from '../src/database/schema.ts';
+import {
+  ASSORTMENT_SCHEMA_NAME,
+  ASSORTMENT_TABLES,
+  ASSORTMENT_TABLE_INVENTORY,
+  DECISION_SET_FENCE_SOURCE_TABLES,
+} from '../src/database/schema.ts';
 
 class AssortmentVerificationError extends Schema.TaggedError<AssortmentVerificationError>()(
   'AssortmentVerificationError',
@@ -85,12 +90,23 @@ const verification = Effect.gen(function* verifyAssortmentDatabase() {
     .pipe(
       Effect.mapError(() => new AssortmentVerificationError({ reason: 'Unable to verify Assortment RLS and grants' })),
     );
+  const fenceTriggers = yield* database.executor
+    .execute<Readonly<Record<string, number>> & { readonly trigger_count: number }>(
+      sql`select count(*)::integer as trigger_count from pg_catalog.pg_trigger where tgname like 'assortment_decision_set_fence_%' and not tgisinternal`,
+      'objects',
+    )
+    .pipe(
+      Effect.mapError(
+        () => new AssortmentVerificationError({ reason: 'Unable to verify Decision Set fence triggers' }),
+      ),
+    );
   if (
     infrastructure === undefined ||
     infrastructure.table_count !== ASSORTMENT_TABLES.length ||
     infrastructure.force_rls_count !== ASSORTMENT_TABLES.length ||
-    infrastructure.policy_count !== ASSORTMENT_TABLES.length * 4 ||
-    infrastructure.append_only_trigger_count !== ASSORTMENT_TABLES.length ||
+    infrastructure.policy_count !== ASSORTMENT_TABLES.length * 4 + 1 ||
+    infrastructure.append_only_trigger_count !== ASSORTMENT_TABLES.length - 1 ||
+    fenceTriggers[0]?.trigger_count !== DECISION_SET_FENCE_SOURCE_TABLES.length ||
     infrastructure.journal_count !== 1 ||
     infrastructure.runtime_create ||
     infrastructure.runtime_select ||

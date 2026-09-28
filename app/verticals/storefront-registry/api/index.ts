@@ -25,6 +25,7 @@ import { GatewayAssertionRedemptionLive as GovernedGatewayAssertionRedemptionLiv
 // </generated-governed-http-handler-support-imports>
 // <generated-governed-http-handler-imports>
 import { currentStorefrontApplicationReadApiLive } from './current-storefront-application-read-server.ts';
+import { verifyCurrentStorefrontApplicationV1ReadApiLive } from './verify-current-storefront-application-v1-read-server.ts';
 // </generated-governed-http-handler-imports>
 import {
   resolveStorefrontRegistryShellOrigin,
@@ -100,6 +101,7 @@ export const makeStorefrontRegistryApiRuntime = (
     storefrontRegistryReadinessLayer,
     // <generated-governed-http-handler-layers>
     currentStorefrontApplicationReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    verifyCurrentStorefrontApplicationV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(GovernedActionPrincipalVerifierLive, gatewayAssertionRedemption)));
   const resolvedApiHandlersLive = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);

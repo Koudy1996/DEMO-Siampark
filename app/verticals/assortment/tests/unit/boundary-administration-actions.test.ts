@@ -219,6 +219,7 @@ it('derives EMPTY distinctly and canonicalizes admission evidence', () => {
   expect(empty.setKind).toStrictEqual('EMPTY');
   expect(empty.memberCount).toStrictEqual(0);
   expect(createBoundaryPermissionTarget(payload, scope).admissionSet.setKind).toStrictEqual('EMPTY');
+  expect(createBoundaryPermissionTarget(payload, scope).admissionSet.entries).toEqual([]);
   const foreignLegalEntityPayload = Schema.decodeUnknownSync(CreateClosedAssortmentBoundaryPayloadSchema)({
     admissionSet: payload.admissionSet,
     commercialScope: {
@@ -247,6 +248,41 @@ it('derives EMPTY distinctly and canonicalizes admission evidence', () => {
   expect(all.setKind).toStrictEqual('ENTRIES');
   expect(all.memberCount).toStrictEqual(1);
   expect(all.contentHash).not.toStrictEqual(empty.contentHash);
+  expect(createBoundaryPermissionTarget(allPayload, scope).admissionSet.entries).toEqual([{ kind: 'ALL' }]);
+  const productRef = ref('commerce.catalog', 'commerce.catalog.product', 'product-a');
+  const categoryRef = ref('commerce.catalog', 'commerce.catalog.product-category', 'category-c');
+  const exactPayload = Schema.decodeUnknownSync(CreateClosedAssortmentBoundaryPayloadSchema)({
+    ...payload,
+    admissionSet: {
+      entries: [
+        { kind: 'PRODUCT', productRef },
+        { categoryRef, kind: 'CATEGORY' },
+      ],
+    },
+    effectiveFrom: '2026-09-22T10:00:00.000Z',
+  });
+  expect(createBoundaryPermissionTarget(exactPayload, scope).admissionSet.entries).toEqual([
+    {
+      kind: 'CATEGORY',
+      target: {
+        moduleId: 'commerce.catalog',
+        resourceId: 'category-c',
+        resourceType: 'commerce.catalog.product-category',
+      },
+    },
+    {
+      kind: 'PRODUCT',
+      target: { moduleId: 'commerce.catalog', resourceId: 'product-a', resourceType: 'commerce.catalog.product' },
+    },
+  ]);
+  const foreignCatalogPayload = Schema.decodeUnknownSync(CreateClosedAssortmentBoundaryPayloadSchema)({
+    ...payload,
+    admissionSet: {
+      entries: [{ kind: 'PRODUCT', productRef: { ...productRef, tenantId: '10000000-0000-4000-8000-000000000002' } }],
+    },
+    effectiveFrom: '2026-09-22T10:00:00.000Z',
+  });
+  expect(() => createBoundaryPermissionTarget(foreignCatalogPayload, scope)).toThrow(AssortmentPolicyTargetInvariant);
 });
 it('emits ordered end then create targets for replacement', () => {
   const existingBoundaryRef = ref(

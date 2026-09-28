@@ -22,6 +22,9 @@ import { AssignCatalogMediaActionApi } from './apis/assign-catalog-media-action.
 import { AssignCatalogMediaRecoveryApi } from './apis/assign-catalog-media-recovery.ts';
 import { AssignSkuActionApi } from './apis/assign-sku-action.ts';
 import { AssignSkuRecoveryApi } from './apis/assign-sku-recovery.ts';
+import { AssortmentProductClassificationV1Api } from './apis/assortment-product-classification-v1.ts';
+import { AssortmentSelectionAssessmentV1Api } from './apis/assortment-selection-assessment-v1.ts';
+import { AssortmentSetCompositionV1Api } from './apis/assortment-set-composition-v1.ts';
 import { BrandCurrentApi } from './apis/brand-current.ts';
 import { BrandHistoryApi } from './apis/brand-history.ts';
 import { CatalogDocumentCurrentApi } from './apis/catalog-document-current.ts';
@@ -242,6 +245,9 @@ type CatalogApiGroups = GroupsOf<
   | typeof AssignCatalogMediaRecoveryApi
   | typeof AssignSkuActionApi
   | typeof AssignSkuRecoveryApi
+  | typeof AssortmentProductClassificationV1Api
+  | typeof AssortmentSelectionAssessmentV1Api
+  | typeof AssortmentSetCompositionV1Api
   | typeof BrandCurrentApi
   | typeof BrandHistoryApi
   | typeof CatalogDocumentCurrentApi
@@ -444,6 +450,9 @@ export const catalogApi: CatalogApi = HttpApi.make('CatalogApi')
   .addHttpApi(AssignCatalogMediaRecoveryApi)
   .addHttpApi(AssignSkuActionApi)
   .addHttpApi(AssignSkuRecoveryApi)
+  .addHttpApi(AssortmentProductClassificationV1Api)
+  .addHttpApi(AssortmentSelectionAssessmentV1Api)
+  .addHttpApi(AssortmentSetCompositionV1Api)
   .addHttpApi(BrandCurrentApi)
   .addHttpApi(BrandHistoryApi)
   .addHttpApi(CatalogDocumentCurrentApi)
@@ -754,6 +763,30 @@ export const catalogPublicOperationContracts = {
     authorityBundle: 'CATALOG_READER',
     businessTarget: 'variant',
     permission: 'commerce.catalog.read.assign-sku-recovery',
+    permissionKind: 'context_permission',
+    scope: 'tenant',
+    version: '1',
+  },
+  'commerce.catalog.api.assortment-product-classification-v1': {
+    authorityBundle: 'CATALOG_READER',
+    businessTarget: productCategoryBusinessTarget,
+    permission: 'commerce.catalog.read.assortment-product-classification-v1',
+    permissionKind: 'context_permission',
+    scope: 'tenant',
+    version: '1',
+  },
+  'commerce.catalog.api.assortment-selection-assessment-v1': {
+    authorityBundle: 'CATALOG_READER',
+    businessTarget: 'selection-evidence',
+    permission: 'commerce.catalog.read.assortment-selection-assessment-v1',
+    permissionKind: 'context_permission',
+    scope: 'tenant',
+    version: '1',
+  },
+  'commerce.catalog.api.assortment-set-composition-v1': {
+    authorityBundle: 'CATALOG_READER',
+    businessTarget: setCompositionBusinessTarget,
+    permission: 'commerce.catalog.read.assortment-set-composition-v1',
     permissionKind: 'context_permission',
     scope: 'tenant',
     version: '1',
@@ -2319,6 +2352,9 @@ export const catalogAuthorityBundles = {
     'commerce.catalog.read.catalog-source-resolution',
     'commerce.catalog.read.external-target-resolution',
     'commerce.catalog.read.selection-evidence',
+    'commerce.catalog.read.assortment-selection-assessment-v1',
+    'commerce.catalog.read.assortment-set-composition-v1',
+    'commerce.catalog.read.assortment-product-classification-v1',
     'commerce.catalog.read.decide-product-type-unnecessary-recovery',
     'commerce.catalog.read.correct-sku-recovery',
     'commerce.catalog.read.correct-product-recovery',

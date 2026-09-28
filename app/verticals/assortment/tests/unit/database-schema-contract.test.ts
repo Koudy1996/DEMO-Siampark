@@ -7,12 +7,14 @@ import {
   ASSORTMENT_SCHEMA_NAME,
   ASSORTMENT_TABLE_INVENTORY,
   ASSORTMENT_TABLES,
+  DECISION_SET_FENCE_SOURCE_TABLES,
   admissionSetEntries,
   admissionSets,
   closedBoundaries,
   collectionRevisions,
   commitmentConfirmations,
   decisionEvidence,
+  decisionSetFences,
   ruleRevisions,
   stableRules,
 } from '../../src/database/schema.ts';
@@ -43,9 +45,15 @@ it('owns only the private, tenant/legal-entity-scoped Assortment policy catalog'
     expect(config.enableRLS, `${config.name} enables RLS`).toBe(true);
     expect(config.columns.some(({ name, notNull }) => name === 'tenant_id' && notNull)).toBe(true);
     const isTenantOwned =
-      config.name.startsWith('assortment_stable_rules') || config.name.startsWith('assortment_rule_');
+      config.name.startsWith('assortment_stable_rules') ||
+      config.name.startsWith('assortment_rule_') ||
+      config.name === 'assortment_decision_set_fences';
     expect(config.columns.some(({ name, notNull }) => name === 'legal_entity_id' && notNull)).toBe(!isTenantOwned);
-    expect(config.policies.map((policy) => policy.for)).toEqual(['select', 'insert', 'update', 'delete']);
+    expect(config.policies.map((policy) => policy.for)).toEqual(
+      config.name === 'assortment_decision_set_fences'
+        ? ['select', 'insert', 'update', 'delete', 'all']
+        : ['select', 'insert', 'update', 'delete'],
+    );
   }
 });
 
@@ -113,9 +121,66 @@ it('models immutable lifecycle facts and collection provenance', () => {
   expect(sql).not.toContain('"assortment_closed_boundaries"."admission_set_id"');
 });
 
+it('uses a tenant fence whose database triggers invalidate exact sets atomically', () => {
+  const fence = getTableConfig(decisionSetFences);
+  expect(fence.columns.map(({ name }) => name)).toEqual(['generation', 'tenant_id', 'updated_at']);
+  expect(fence.enableRLS).toBe(true);
+  expect(fence.policies.map((policy) => policy.for)).toEqual(['select', 'insert', 'update', 'delete', 'all']);
+  expect(fence.policies.map((policy) => policy.to)).toEqual([
+    'ontos_runtime',
+    'ontos_runtime',
+    'ontos_runtime',
+    'ontos_runtime',
+    'public',
+  ]);
+  const sql = migrations();
+  expect(sql).toContain('CREATE FUNCTION "assortment"."advance_decision_set_fence"()');
+  expect(sql).toContain('CREATE FUNCTION "assortment"."lock_decision_set_fence"(p_tenant_id uuid)');
+  expect(sql).toContain('SECURITY DEFINER');
+  expect(sql).toContain('SET search_path = pg_catalog, assortment, pg_temp');
+  expect(sql).toContain("current_setting('ontos.tenant_id', true) IS DISTINCT FROM p_tenant_id::text");
+  expect(sql).toContain('FOR SHARE');
+  expect(sql).toContain('GRANT EXECUTE ON FUNCTION "assortment"."lock_decision_set_fence"(uuid) TO "ontos_runtime"');
+  expect(sql).toContain('GRANT USAGE ON SCHEMA "assortment" TO "ontos_runtime"');
+  expect(sql).not.toContain('GRANT SELECT ON TABLE "assortment"."assortment_decision_set_fences" TO "ontos_runtime"');
+  expect(sql).not.toContain('GRANT EXECUTE ON FUNCTION "assortment"."advance_decision_set_fence"() TO "ontos_runtime"');
+  expect(sql).toContain('CREATE POLICY "assortment_decision_set_fences_owner_routine"');
+  expect(sql).toContain('INSERT INTO "assortment"."assortment_decision_set_fences" (tenant_id)');
+  expect(sql).toContain('ON CONFLICT (tenant_id) DO NOTHING');
+  expect(sql).toContain('ON CONFLICT (tenant_id) DO UPDATE');
+  expect(sql).toContain('SET generation = gen_random_uuid(), updated_at = now()');
+  expect(sql).toContain('LOCK TABLE\n  "assortment"."assortment_decision_set_fences"');
+  const fenceBackfillStart = sql.indexOf('INSERT INTO "assortment"."assortment_decision_set_fences" (tenant_id)');
+  const fenceRelaxation = sql.indexOf(
+    'ALTER TABLE "assortment"."assortment_decision_set_fences" NO FORCE ROW LEVEL SECURITY',
+  );
+  const fenceRestoration = sql.indexOf(
+    'ALTER TABLE "assortment"."assortment_decision_set_fences" FORCE ROW LEVEL SECURITY',
+    fenceBackfillStart,
+  );
+  expect(fenceRelaxation).toBeGreaterThan(-1);
+  expect(fenceRestoration).toBeGreaterThan(fenceBackfillStart);
+  expect(sql.indexOf('ALTER TABLE "assortment"."assortment_stable_rules" NO FORCE ROW LEVEL SECURITY')).toBeGreaterThan(
+    -1,
+  );
+  expect(
+    sql.indexOf('ALTER TABLE "assortment"."assortment_stable_rules" FORCE ROW LEVEL SECURITY', fenceBackfillStart),
+  ).toBeGreaterThan(fenceBackfillStart);
+  for (const table of DECISION_SET_FENCE_SOURCE_TABLES) {
+    expect(sql).toContain(`assortment_decision_set_fence_${table.replace('assortment_', '')}`);
+  }
+});
+
 it('keeps the tenant-owned Rule lineage reusable across Selling Legal Entities', () => {
   for (const table of [getTableConfig(stableRules), getTableConfig(ruleRevisions)]) {
     expect(table.columns.some(({ name }) => name === 'legal_entity_id')).toBe(false);
     expect(table.policies.every((policy) => policy.to === 'ontos_runtime')).toBe(true);
   }
+  const selectorOwner = getTableConfig(ruleRevisions).columns.find(
+    ({ name }) => name === 'selector_target_owner_module_id',
+  );
+  expect(selectorOwner?.notNull).toBe(false);
+  const migration = migrations();
+  expect(migration).toContain('ADD COLUMN "selector_target_owner_module_id" text');
+  expect(migration).not.toMatch(/UPDATE\s+"assortment"\."assortment_rule_revisions"/u);
 });

@@ -320,7 +320,16 @@ const purchaseOwnedOutputMatches = (
   if (owned.decision.outcome === 'INDETERMINATE' && owned.constituents.length === 0) {
     return true;
   }
-  if (owned.constituents.length !== expectedConstituents.length) {
+  const endedWithAuthoritativeDeny =
+    owned.decision.outcome === 'INELIGIBLE' &&
+    owned.constituents.at(-1)?.decision.outcome === 'INELIGIBLE' &&
+    owned.constituents.slice(0, -1).every((item) => item.decision.outcome !== 'INELIGIBLE');
+  if (
+    (endedWithAuthoritativeDeny
+      ? owned.constituents.length > expectedConstituents.length
+      : owned.constituents.length !== expectedConstituents.length) ||
+    owned.constituents.length === 0
+  ) {
     return false;
   }
   if (
@@ -328,6 +337,9 @@ const purchaseOwnedOutputMatches = (
       const expected = expectedConstituents[index];
       return (
         expected === undefined ||
+        (endedWithAuthoritativeDeny &&
+          item.decision.outcome === 'INELIGIBLE' &&
+          index !== owned.constituents.length - 1) ||
         !Schema.is(AssortmentPurchaseRequestSchema)(item.request) ||
         !requestEquivalence(item.request, owned.request) ||
         !constituentEquivalence(item.constituent, expected) ||

@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from 'effect';
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from 'effect';
 /* oxlint-disable sonarjs/use-type-alias, typescript/no-unsafe-type-assertion -- Existing compatibility boundary; expires: 2026-12-31. */
 import { expect, it } from 'effect-rstest';
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
@@ -48,6 +48,7 @@ const scope: OperationalScope = Object.freeze({
   }),
   correlationId: 'correlation-1',
 });
+const transactionOperationAt = DateTime.toDateUtc(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
 const pricingCatalogId = '50000000-0000-4000-8000-000000000001';
 const priceGroupId = '60000000-0000-4000-8000-000000000001';
 const otherPriceGroupId = '60000000-0000-4000-8000-000000000002';
@@ -77,6 +78,7 @@ const makeHarness = Effect.fn(function* makeHarness(
     readonly businessPermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly contextPermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly failEvidence?: boolean;
+    readonly failTransactionTimestamp?: boolean;
     readonly modulePermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly omitOwnerAuthorizationOverlay?: boolean;
     readonly onBusinessPermissionTarget?: (target: BusinessPermissionAccessTarget) => void;
@@ -108,12 +110,22 @@ const makeHarness = Effect.fn(function* makeHarness(
   const assortmentPermissionChecks: unknown[] = [];
   let contextPermissionChecks = 0;
   let evidence = 0;
+  let transactionTimestampReadCount = 0;
   let resourcePermissionChecks = 0;
   let tenantPermissionChecks = 0;
   const evidenceRows: EvidenceRow[] = [];
   const evidenceParameterRows: unknown[][] = [];
   const query = (text: string, values: readonly unknown[]) =>
     Effect.gen(function* executeReadQuery() {
+      if (text.includes('transaction_timestamp')) {
+        transactionTimestampReadCount += 1;
+        if (options.failTransactionTimestamp === true) {
+          return yield* new SqlError({
+            reason: new ConnectionError({ cause: new Error('transaction clock unavailable') }),
+          });
+        }
+        return [{ operation_at: transactionOperationAt }];
+      }
       if (text.includes('data_access_events')) {
         if (options.failEvidence === true) {
           return yield* new SqlError({
@@ -277,6 +289,7 @@ const makeHarness = Effect.fn(function* makeHarness(
     }),
     runtime,
     stages,
+    transactionTimestampReads: () => transactionTimestampReadCount,
   };
 });
 const registration = (items: readonly string[] = []) =>
@@ -579,9 +592,51 @@ it.effect('runs the owner authorization overlay inside the transaction before th
     expect(Predicate.isTagged(error, 'ReadPermissionDenied')).toBe(true);
     expect(ownerInputs).toHaveLength(1);
     expect(ownerInputs[0]?.operation).toBe('read');
+    expect(ownerInputs[0]?.operationAt).toEqual(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
+    expect(harness.transactionTimestampReads()).toBe(1);
     expect(ownerInputs[0]?.targets).toEqual([{ kind: 'module', moduleId: 'core.shell' }]);
     expect(handlerCalls).toBe(0);
     expect(harness.evidence()).toBe(1);
+  }),
+);
+
+it.effect('fails closed before owner authorization when PostgreSQL cannot provide transaction time', () =>
+  Effect.gen(function* transactionTimeUnavailable() {
+    let overlayCalls = 0;
+    let handlerCalls = 0;
+    const harness = yield* makeHarness({
+      contextPermissionDecision: 'allowed',
+      failTransactionTimestamp: true,
+      ownerAuthorizationOverlay: {
+        authorize: () => {
+          overlayCalls += 1;
+          return Effect.succeed('allowed' as const);
+        },
+      },
+      permissionDecision: 'allowed',
+    });
+    const testRegistration = defineRead(
+      registration().descriptor,
+      () => {
+        handlerCalls += 1;
+        return Effect.succeed({ evidence: { resultCount: 0 }, result: [] });
+      },
+      () => Effect.succeed({}),
+      () => ({ kind: 'module', moduleId: 'core.shell' }),
+    );
+    const failure = yield* Effect.flip(
+      harness.runtime.runRead({
+        input: {},
+        principal: scope,
+        registration: testRegistration,
+        transport: { correlationId: scope.correlationId },
+      }),
+    );
+
+    expect(Schema.is(OperationContextUnavailable)(failure)).toBe(true);
+    expect(overlayCalls).toBe(0);
+    expect(handlerCalls).toBe(0);
+    expect(harness.transactionTimestampReads()).toBe(1);
   }),
 );
 

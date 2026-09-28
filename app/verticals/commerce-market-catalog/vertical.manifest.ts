@@ -20,6 +20,7 @@ import { reviseMarketDefinitionAction } from './src/actions/revise-market-defini
 import { reviseStorefrontAssociationAction } from './src/actions/revise-storefront-association.action.ts';
 import { storefrontAssociationResourceDescriptor } from './shared/resources/storefront-association.ts';
 import { suspendMarketAction } from './src/actions/suspend-market.action.ts';
+import { VerifyMarketEligibilityV1Api } from './shared/apis/verify-market-eligibility-v1.ts';
 // </generated-module-manifest-imports>
 
 export const commerceMarketCatalogManifest: OntosModuleManifestInput = defineOntosModuleManifest({
@@ -55,6 +56,7 @@ export const commerceMarketCatalogManifest: OntosModuleManifestInput = defineOnt
       'eligible-market-tuples': EligibleMarketTuplesApi,
       'market-history': MarketHistoryApi,
       'resolve-commerce-market': ResolveCommerceMarketApi,
+      'verify-market-eligibility-v1': VerifyMarketEligibilityV1Api,
       // </generated-module-manifest-apis>
     },
     businessPermissions: [

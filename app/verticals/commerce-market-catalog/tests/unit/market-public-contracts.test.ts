@@ -346,6 +346,7 @@ describe('Commerce Market public contracts', () => {
       'eligible-market-tuples',
       'market-history',
       'resolve-commerce-market',
+      'verify-market-eligibility-v1',
     ]);
     expect(commerceMarketCatalogManifest.publicSurface.businessPermissions).toEqual([]);
     expect(

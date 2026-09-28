@@ -5,7 +5,10 @@ import { storefrontRegistryRegistration } from '../../vertical.registration.ts';
 describe('Storefront Registry module contract', () => {
   it('is headless and exposes its governed owner read and administration actions', () => {
     expect(storefrontRegistryManifest.module.id).toBe('commerce.storefront-registry');
-    expect(Object.keys(storefrontRegistryManifest.publicSurface.api)).toEqual(['current-storefront-application']);
+    expect(Object.keys(storefrontRegistryManifest.publicSurface.api)).toEqual([
+      'current-storefront-application',
+      'verify-current-storefront-application-v1',
+    ]);
     expect(storefrontRegistryManifest.publicSurface.actions.map(({ descriptor }) => descriptor.actionKey)).toEqual([
       'commerce.storefront-registry.register-storefront-application',
       'commerce.storefront-registry.revise-storefront-application',

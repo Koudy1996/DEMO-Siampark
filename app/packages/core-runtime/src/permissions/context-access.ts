@@ -91,11 +91,13 @@ export type AssortmentPermissionSubject =
 export type AssortmentPermissionAdmissionSet =
   | Readonly<{
       readonly contentHash: string;
+      readonly entries: readonly [];
       readonly memberCount: 0;
       readonly setKind: 'EMPTY';
     }>
   | Readonly<{
       readonly contentHash: string;
+      readonly entries: readonly AssortmentPermissionSelector[];
       readonly memberCount: number;
       readonly setKind: 'ENTRIES';
     }>;
@@ -204,13 +206,36 @@ const assortmentConfigurationResourceScope = (
   );
 };
 
+const assortmentRefParts = (ref: ResourceAccessTarget): readonly string[] => [
+  ref.moduleId,
+  ref.resourceType,
+  ref.resourceId,
+];
+
 /**
  * Configuration targets are restricted to the four canonical Assortment
  * resources. Scope is derived from that trusted resource type, never from a
  * caller-supplied discriminator.
  */
 export const isAssortmentPermissionTargetValid = (target: AssortmentPermissionAccessTarget): boolean =>
-  target.kind !== 'assortment_configuration' || assortmentConfigurationResourceScope(target.resource) !== undefined;
+  target.kind === 'assortment_configuration'
+    ? assortmentConfigurationResourceScope(target.resource) !== undefined
+    : target.kind !== 'assortment_boundary' ||
+      target.mode !== 'create' ||
+      (Array.isArray(target.admissionSet.entries) &&
+        Number.isInteger(target.admissionSet.memberCount) &&
+        /^[0-9a-f]{64}$/u.test(target.admissionSet.contentHash) &&
+        target.admissionSet.memberCount === target.admissionSet.entries.length &&
+        (target.admissionSet.setKind === 'EMPTY') === (target.admissionSet.entries.length === 0) &&
+        (target.purpose !== 'VISIBILITY' ||
+          target.admissionSet.entries.every(
+            (entry: AssortmentPermissionSelector) => entry.kind !== 'VARIANT' && entry.kind !== 'PACKAGE_OPTION',
+          )) &&
+        target.admissionSet.entries.every((entry: AssortmentPermissionSelector) =>
+          entry.kind === 'ALL'
+            ? entry.target === undefined
+            : entry.target !== undefined && assortmentRefParts(entry.target).every((part) => part.length > 0),
+        ));
 
 /** Rule lineage and Rule Revisions are tenant-owned; other config is Legal Entity-owned. */
 export const assortmentPermissionTargetRequiresLegalEntity = (target: AssortmentPermissionAccessTarget): boolean => {
@@ -435,12 +460,6 @@ export const toBusinessPermissionAccessObjectId = (
 export const toBusinessPermissionAccessKey = ({ permission, target }: BusinessPermissionAccessTarget): string =>
   [permission, ...businessTargetParts(target)].join(':');
 
-const assortmentRefParts = (ref: ResourceAccessTarget): readonly string[] => [
-  ref.moduleId,
-  ref.resourceType,
-  ref.resourceId,
-];
-
 const assortmentScopeParts = (scope: AssortmentPermissionCommercialScope): readonly string[] => [
   'channel',
   ...assortmentRefParts(scope.channel),
@@ -520,6 +539,7 @@ const assortmentTargetParts = (target: AssortmentPermissionAccessTarget): readon
     target.admissionSet.setKind,
     String(target.admissionSet.memberCount),
     target.admissionSet.contentHash,
+    ...target.admissionSet.entries.flatMap(assortmentSelectorParts),
   ];
 };
 
