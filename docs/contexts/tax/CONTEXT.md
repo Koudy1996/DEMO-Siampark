@@ -12,6 +12,13 @@ Order and Billing Documents Snapshots without owning Pricing, shared Party ident
 Order, or Billing Document lifecycle.
 _Avoid_: Pricing-owned tax calculation, Core tax policy, Tax as invoice owner.
 
+**Launch Tax Coverage** — Closed-world activated Tax capability for ordinary domestic Czech taxable
+B2C/B2B purchases in CZK with a Current Czech VAT-registered Selling Legal Entity and explicit
+supported domestic Tax Classifications/Tax Rules. OSS, reverse charge, export, foreign VAT regimes,
+generic exemption/special-treatment flows, additional selling currencies, and generic multi-supply
+Set monetary decomposition are not activated by Launch.
+_Avoid_: legacy feature breadth as Launch scope, implicit domestic fallback, future regime enabled by data presence.
+
 **Tax Decision** — Tax-owned Current purchase-scoped determination of tax applicability,
 jurisdiction, treatment, rate or exemption, and taxable-basis interpretation for exact inputs and one
 exact Tax-Relevant Time; Currentness of its material inputs is evaluated at Tax Evaluation Time. One
@@ -68,6 +75,11 @@ business value and is distinct from an Integration Route or provider credential.
 _Avoid_: ERP/VIES/ARES as global Tax authority, authority inferred from transport route, manual
 override of a source-owned fact through the authority contract.
 
+**Tax Source Assertion** — One immutable source statement about one exact Tax fact subject, scope and
+business-validity meaning, retained with provenance independently from the external source record and
+from the canonical Tax business fact it may support.
+_Avoid_: provider payload as canonical Tax profile, arrival order as Currentness, source record ID as Tax fact identity.
+
 **Selling Legal Entity VAT Registration** — Tax-relevant business fact that one exact Selling Legal
 Entity is VAT-registered for one jurisdiction and business-valid period under its declared System of
 Record. It is distinct from the Selling Legal Entity identity and from Official Identifiers such as DIČ.
@@ -90,6 +102,11 @@ _Avoid_: Tax Evaluation Time as Tax-Relevant Time, client/request timestamp as a
 fact is usable as Current at a stated Tax Evaluation Time under its owner contract. A retained
 assertion, latest timestamp, cache freshness, or event silence is not this evidence by itself.
 _Avoid_: latest row as Currentness proof, retained positive assertion as perpetual Current fact.
+
+**Tax Materiality** — Tax-owned determination of whether a change can alter the exact Tax business
+meaning for a declared purchase/use. Matching amount, rate, IDs or hashes do not prove equivalence;
+preserved meaning is non-material only when TAX can support that conclusion with owner-qualified evidence.
+_Avoid_: consumer-inferred Tax equivalence, same total as non-materiality proof, every context field as Tax-material.
 
 **Taxable Supply Unit** — Tax-owned legal/business interpretation of one exact taxable-supply meaning
 inside a supported purchase. It is traceable to the relevant Purchase Demand Occurrence(s), Catalog
