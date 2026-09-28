@@ -63,6 +63,7 @@ const sameRef = (left: ProductRef | VariantRef, right: ProductRef | VariantRef):
   left.tenantId === right.tenantId && left.resourceId === right.resourceId;
 const catalogModuleId = 'commerce.catalog';
 const definitionResourceType = 'commerce.catalog.attribute-definition';
+const variantResourceType = 'commerce.catalog.variant';
 
 const countsAsEffectiveValue = (
   values: readonly AttributeValue[],
@@ -177,7 +178,7 @@ const snapshotProblem = ({
       (variant) =>
         variant.tenantId !== source.productRef.tenantId ||
         variant.moduleId !== catalogModuleId ||
-        variant.resourceType !== 'commerce.catalog.variant',
+        variant.resourceType !== variantResourceType,
     )
   ) {
     return 'Current Variant inventory contains a foreign Variant';
@@ -190,7 +191,7 @@ const snapshotProblem = ({
       (variant) =>
         variant.variantRef.tenantId !== source.productRef.tenantId ||
         variant.variantRef.moduleId !== catalogModuleId ||
-        variant.variantRef.resourceType !== 'commerce.catalog.variant' ||
+        variant.variantRef.resourceType !== variantResourceType ||
         !variantIds.has(variant.variantRef.resourceId),
     ) ||
     new Set(variants.map((variant) => variant.variantRef.resourceId)).size !== variants.length
@@ -245,9 +246,15 @@ const evaluateUntypedReadiness = (snapshot: ProductTypeReadinessSnapshot): Produ
   return { decisionRevision: revision, rules, status: 'CONFIRMED_UNTYPED_MINIMUM' };
 };
 
+const attestedVariant = (snapshot: ProductTypeReadinessSnapshot, variantRef: VariantRef): boolean =>
+  variantRef.moduleId === catalogModuleId &&
+  variantRef.resourceType === variantResourceType &&
+  snapshot.variantRefs.some((ref) => sameRef(ref, variantRef));
+
 /** #424 partial minimum only; no result here asserts overall #414 Catalog readiness. */
 export const evaluateCurrentProductTypeReadiness = (
   snapshot: ProductTypeReadinessSnapshot,
+  selectedVariantRef?: VariantRef,
 ): ProductTypeReadinessEvaluation => {
   const { productValues, productValueSource, source, variants } = snapshot;
   const problem = snapshotProblem(snapshot);
@@ -256,6 +263,9 @@ export const evaluateCurrentProductTypeReadiness = (
   }
   if (productValueSource === undefined) {
     return { reason: 'Current Product value source is unavailable', status: 'INDETERMINATE' };
+  }
+  if (selectedVariantRef !== undefined && !attestedVariant(snapshot, selectedVariantRef)) {
+    return { reason: 'Selected Variant is outside the owner-attested inventory', status: 'INDETERMINATE' };
   }
   if (source.status === 'UNTYPED') {
     return evaluateUntypedReadiness(snapshot);
@@ -271,7 +281,13 @@ export const evaluateCurrentProductTypeReadiness = (
     variantRevision?: number | undefined;
   }[] = [];
   const variantValues = [];
-  for (const variant of variants) {
+  // Product-wide diagnostics remain complete. Exact-selection readiness uses only that
+  // Variant's facts; shared Product requirements and combination checks stay authoritative.
+  const selectedVariants =
+    selectedVariantRef === undefined
+      ? variants
+      : variants.filter(({ variantRef }) => sameRef(variantRef, selectedVariantRef));
+  for (const variant of selectedVariants) {
     const values: ProductTypeCurrentValue[] = disallowedVariantValues(variant.currentAttributeDefinitionIds, source);
     const seen = new Set<string>();
     for (const value of variant.effectiveValues) {
