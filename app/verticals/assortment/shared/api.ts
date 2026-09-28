@@ -1,5 +1,4 @@
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from '@modern-js/bff-effect/effect-client';
-import type { Schema } from '@modern-js/bff-effect/effect-client';
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, Schema } from '@modern-js/bff-effect/effect-client';
 import { identity } from 'effect';
 import {
   MicroVerticalBuildMarkerSchema,

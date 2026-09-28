@@ -430,7 +430,7 @@ export const AuthenticatedDashboardLayout = (props: AuthenticatedDashboardLayout
     <div className="shell:flex shell:min-h-screen shell:min-w-0 shell:flex-col shell:overflow-x-hidden shell:bg-(--color-page-bg) shell:text-(--color-page-fg) shell:md:flex-row">
       <aside
         aria-label={t('shell.dashboard.sidebar.label')}
-        className="shell:flex shell:max-h-96 shell:w-full shell:shrink-0 shell:flex-col shell:gap-6 shell:overflow-y-auto shell:bg-(--color-surface) shell:p-4 shell:md:max-h-none shell:md:w-64 shell:md:overflow-visible"
+        className="shell:flex shell:max-h-[65vh] shell:w-full shell:shrink-0 shell:flex-col shell:gap-3 shell:overflow-y-auto shell:bg-(--color-surface) shell:p-4 shell:md:max-h-none shell:md:w-64 shell:md:gap-6 shell:md:overflow-visible"
       >
         <p>{t('shell.dashboard.brand')}</p>
         <DashboardTenantSelector
