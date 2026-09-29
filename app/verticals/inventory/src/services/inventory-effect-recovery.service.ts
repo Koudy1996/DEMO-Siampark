@@ -27,6 +27,10 @@ import type {
 import { CommitmentProtectionSchema } from '../../shared/domain/commitment-protection.ts';
 import type { CommitmentProtectionPersistence } from '../../shared/domain/commitment-protection.ts';
 import {
+  ProvisionalInventoryReservationSchema,
+  RuntimeCommittedInventoryObligationSchema,
+} from '../../shared/domain/inventory-obligation.ts';
+import {
   EstablishedReservationCreateEffectSchema,
   ReservationCreateEffectSchema,
   ResolvedNoReservationCreateEffectSchema,
@@ -38,8 +42,15 @@ import {
   ReservationReleaseEffectSchema,
 } from '../../shared/domain/inventory-reservation-release.ts';
 import type { ReservationReleaseEffect } from '../../shared/domain/inventory-reservation-release.ts';
+import {
+  PhysicalStockEffectRecordSchema,
+  RequestedPhysicalStockEffectSchema,
+} from '../../shared/domain/physical-stock-effect.ts';
+import type { PhysicalStockEffectRecord } from '../../shared/domain/physical-stock-effect.ts';
 import type { InventoryEffectLedgerRejected } from '../../shared/domain/inventory-effect-ledger-rejected.ts';
 import type { InventoryEffectLedgerUnavailable } from '../../shared/domain/inventory-effect-ledger-unavailable.ts';
+import type { InventoryObligationPersistence } from '../persistence/inventory-obligation-repository.ts';
+import type { PhysicalStockEffectPersistence } from '../persistence/physical-stock-effect-repository.ts';
 import type { InventoryEffectRecoveryAuthority } from './inventory-effect-recovery-authority.ts';
 import type { InventoryEffectLedgerService } from './inventory-effect-ledger.service.ts';
 import type { ReservationCreateEffectPersistence } from './inventory-reservation-create.service.ts';
@@ -85,6 +96,8 @@ const ownerFailure = (
 };
 
 const canonicalCreateEffect = Schema.fromJsonString(ReservationCreateEffectSchema);
+const canonicalObligation = Schema.fromJsonString(ProvisionalInventoryReservationSchema);
+const canonicalPhysicalEffect = Schema.fromJsonString(PhysicalStockEffectRecordSchema);
 const canonicalReleaseEffect = Schema.fromJsonString(ReservationReleaseEffectSchema);
 const canonicalProtection = Schema.fromJsonString(CommitmentProtectionSchema);
 const instantMillis = (value: string): number => DateTime.toEpochMillis(DateTime.makeUnsafe(value));
@@ -92,14 +105,63 @@ const occursBefore = (earlier: string, later: string): boolean => instantMillis(
 const sameEncoded = <Value>(schema: Schema.Codec<Value, string>, left: Value, right: Value) =>
   Result.getOrThrow(Schema.encodeResult(schema)(left)) === Result.getOrThrow(Schema.encodeResult(schema)(right));
 
+const sameReservationFoundation = (
+  current: typeof ProvisionalInventoryReservationSchema.Type | typeof RuntimeCommittedInventoryObligationSchema.Type,
+  reservation: typeof ProvisionalInventoryReservationSchema.Type,
+) =>
+  sameEncoded(
+    canonicalObligation,
+    Schema.is(RuntimeCommittedInventoryObligationSchema)(current)
+      ? {
+          authority: current.authority,
+          establishedAt: current.establishedAt,
+          lifecycleMeaning: 'PROVISIONAL_RESERVATION' as const,
+          origin: current.origin,
+          ref: current.ref,
+          requirements: current.requirements,
+        }
+      : current,
+    reservation,
+  );
+
 const requireOwnerEffect = <Value>(
   effectId: InventoryEffectRecoveryRequest['effectId'],
   current: OptionType.Option<Value>,
 ) =>
   Effect.fromOption(current).pipe(Effect.mapError((cause) => ownerFailure(effectId, 'OWNER_EFFECT_NOT_FOUND', cause)));
 
+const ensureReservationObligation = Effect.fn('InventoryEffectRecovery.ensureReservationObligation')(
+  function* ensureReservationObligation(
+    persistence: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'>,
+    recoveryEffectId: InventoryEffectRecoveryRequest['effectId'],
+    reservation: typeof ProvisionalInventoryReservationSchema.Type,
+  ) {
+    const current = yield* persistence
+      .read(reservation.ref)
+      .pipe(Effect.mapError((cause) => ownerFailure(recoveryEffectId, 'OWNER_PERSISTENCE_UNAVAILABLE', cause)));
+    if (Option.isSome(current)) {
+      if (
+        (!Schema.is(ProvisionalInventoryReservationSchema)(current.value) &&
+          !Schema.is(RuntimeCommittedInventoryObligationSchema)(current.value)) ||
+        !sameReservationFoundation(current.value, reservation)
+      ) {
+        return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+      }
+      return yield* Effect.void;
+    }
+    const established = yield* persistence
+      .establishReservation(reservation)
+      .pipe(Effect.mapError((cause) => ownerFailure(recoveryEffectId, 'OWNER_PERSISTENCE_UNAVAILABLE', cause)));
+    if (!sameEncoded(canonicalObligation, established.obligation, reservation)) {
+      return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+    }
+    return yield* Effect.void;
+  },
+);
+
 const applyCreateResolution = Effect.fn('InventoryEffectRecovery.applyCreateResolution')(function* applyCreate(
   persistence: Pick<ReservationCreateEffectPersistence, 'read' | 'save'>,
+  obligations: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'>,
   recoveryEffectId: InventoryEffectRecoveryRequest['effectId'],
   effect: Exclude<ReservationCreateEffect, { readonly _tag: 'REQUESTED' }>,
 ) {
@@ -108,6 +170,9 @@ const applyCreateResolution = Effect.fn('InventoryEffectRecovery.applyCreateReso
     Effect.flatMap((stored) => requireOwnerEffect(recoveryEffectId, stored)),
   );
   if (Schema.is(ReservationCreateEffectSchema)(current) && sameEncoded(canonicalCreateEffect, current, effect)) {
+    if (Schema.is(EstablishedReservationCreateEffectSchema)(effect)) {
+      yield* ensureReservationObligation(obligations, recoveryEffectId, effect.reservation);
+    }
     return yield* Effect.void;
   }
   if (
@@ -115,6 +180,9 @@ const applyCreateResolution = Effect.fn('InventoryEffectRecovery.applyCreateReso
     Schema.is(ResolvedNoReservationCreateEffectSchema)(current)
   ) {
     return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+  }
+  if (Schema.is(EstablishedReservationCreateEffectSchema)(effect)) {
+    yield* ensureReservationObligation(obligations, recoveryEffectId, effect.reservation);
   }
   const saved = yield* persistence
     .save(current, effect)
@@ -165,8 +233,40 @@ const applyProtectionResolution = Effect.fn('InventoryEffectRecovery.applyProtec
   },
 );
 
+const applyPhysicalResolution = Effect.fn('InventoryEffectRecovery.applyPhysicalResolution')(
+  function* applyPhysicalResolution(
+    persistence: Pick<PhysicalStockEffectPersistence, 'read' | 'saveTerminal'>,
+    recoveryEffectId: InventoryEffectRecoveryRequest['effectId'],
+    effect: Exclude<PhysicalStockEffectRecord, { readonly _tag: 'REQUESTED' | 'INDETERMINATE' }>,
+  ) {
+    const current = yield* persistence.read(effect.request.effectId).pipe(
+      Effect.mapError((cause) => ownerFailure(recoveryEffectId, 'OWNER_PERSISTENCE_UNAVAILABLE', cause)),
+      Effect.flatMap((stored) => requireOwnerEffect(recoveryEffectId, stored)),
+    );
+    if (sameEncoded(canonicalPhysicalEffect, current, effect)) {
+      return yield* Effect.void;
+    }
+    if (!Schema.is(RequestedPhysicalStockEffectSchema)(current)) {
+      return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+    }
+    const expected = { _tag: 'REQUESTED' as const, request: effect.request };
+    if (!sameEncoded(canonicalPhysicalEffect, current, expected)) {
+      return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+    }
+    const saved = yield* persistence
+      .saveTerminal(current.request, effect)
+      .pipe(Effect.mapError((cause) => ownerFailure(recoveryEffectId, 'OWNER_PERSISTENCE_UNAVAILABLE', cause)));
+    if (!sameEncoded(canonicalPhysicalEffect, saved, effect)) {
+      return yield* ownerFailure(recoveryEffectId, 'OWNER_STATE_CONFLICT');
+    }
+    return yield* Effect.void;
+  },
+);
+
 export const makeInventoryEffectRecoveryOwnerPersistence = (dependencies: {
   readonly creates: Pick<ReservationCreateEffectPersistence, 'read' | 'save'>;
+  readonly obligations: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'>;
+  readonly physicalEffects: Pick<PhysicalStockEffectPersistence, 'read' | 'saveTerminal'>;
   readonly protections: Pick<CommitmentProtectionPersistence, 'createOrRead'>;
   readonly releases: Pick<ReservationReleaseEffectPersistence, 'read' | 'save'>;
 }): InventoryEffectRecoveryOwnerPersistence => ({
@@ -175,7 +275,7 @@ export const makeInventoryEffectRecoveryOwnerPersistence = (dependencies: {
       Match.tag('RESERVATION_CREATE', ({ effect }) =>
         Schema.is(EstablishedReservationCreateEffectSchema)(effect) ||
         Schema.is(ResolvedNoReservationCreateEffectSchema)(effect)
-          ? applyCreateResolution(dependencies.creates, original.effectId, effect)
+          ? applyCreateResolution(dependencies.creates, dependencies.obligations, original.effectId, effect)
           : Effect.fail(ownerFailure(original.effectId, 'INVALID_AUTHORITY_OUTCOME')),
       ),
       Match.tag('RESERVATION_RELEASE', ({ effect }) =>
@@ -192,7 +292,14 @@ export const makeInventoryEffectRecoveryOwnerPersistence = (dependencies: {
           Match.exhaustive,
         ),
       ),
-      Match.tag('PHYSICAL_RECEIPT', 'PHYSICAL_ISSUE', () => Effect.void),
+      Match.tag('PHYSICAL_RECEIPT', 'PHYSICAL_ISSUE', ({ effect }) =>
+        Match.value(effect).pipe(
+          Match.tag('APPLIED', 'REJECTED', (terminalEffect) =>
+            applyPhysicalResolution(dependencies.physicalEffects, original.effectId, terminalEffect),
+          ),
+          Match.orElse(() => Effect.fail(ownerFailure(original.effectId, 'INVALID_AUTHORITY_OUTCOME'))),
+        ),
+      ),
       Match.exhaustive,
     );
   }),

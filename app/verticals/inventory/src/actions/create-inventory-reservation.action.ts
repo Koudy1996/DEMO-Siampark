@@ -106,7 +106,7 @@ export const createInventoryReservationAction = defineAction(
       captureMode: 'metadata_only',
       policyKey: `${ACTION_KEY}.access.v1`,
     },
-    actionKey: ACTION_KEY,
+    actionKey: 'commerce.inventory.create-inventory-reservation',
     auditProfile: 'standard',
     businessPermission: defineActionBusinessPermission<CreateInventoryReservationPayload>((payload) => ({
       permission: 'inventory.reservation.establish',
@@ -125,13 +125,13 @@ export const createInventoryReservationAction = defineAction(
     entrypoint: defineTenantModuleEntrypoint({
       access: 'write',
       authorization: { kind: 'action_execution', provisioning: 'tenant_membership_default' },
-      entrypointKey: ACTION_KEY,
-      moduleKey: MODULE_KEY,
+      entrypointKey: 'commerce.inventory.create-inventory-reservation',
+      moduleKey: 'commerce.inventory',
       role: 'action',
     }),
     idempotency: 'required',
     legalEntityScope: 'required',
-    owningModuleKey: MODULE_KEY,
+    owningModuleKey: 'commerce.inventory',
     payloadSchema: CreateInventoryReservationPayloadSchema,
     policies: [],
     resourcePermission: defineActionResourcePermission<CreateInventoryReservationPayload>((payload) => ({
@@ -183,8 +183,13 @@ export const createInventoryReservationAction = defineAction(
 
 // <generated-outbox-message-exports>
 export { createCreateInventoryReservationCommerceInventoryInventoryReservationCreateRequestedV1OutboxMessage } from './create-inventory-reservation-commerce-inventory-inventory-reservation-create-requested-v1.outbox-message.ts';
+export { createCreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxMessage } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
 export { CreateInventoryReservationCommerceInventoryInventoryReservationCreateRequestedV1OutboxPayloadSchema } from './create-inventory-reservation-commerce-inventory-inventory-reservation-create-requested-v1.outbox-message.ts';
 export { CreateInventoryReservationCommerceInventoryInventoryReservationCreateRequestedV1OutboxProducerModuleKey } from './create-inventory-reservation-commerce-inventory-inventory-reservation-create-requested-v1.outbox-message.ts';
 export { CreateInventoryReservationCommerceInventoryInventoryReservationCreateRequestedV1OutboxTopic } from './create-inventory-reservation-commerce-inventory-inventory-reservation-create-requested-v1.outbox-message.ts';
+export { CreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxPayloadSchema } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
+export { CreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxProducerModuleKey } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
+export { CreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxTopic } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
 export type { CreateInventoryReservationCommerceInventoryInventoryReservationCreateRequestedV1OutboxPayload } from './create-inventory-reservation-commerce-inventory-inventory-reservation-create-requested-v1.outbox-message.ts';
+export type { CreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxPayload } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
 // </generated-outbox-message-exports>

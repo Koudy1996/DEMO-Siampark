@@ -1,5 +1,6 @@
 import { trustVerifiedGatewayPrincipalContext } from '@app/core-runtime';
-import { Effect, Schema } from 'effect';
+import { CatalogSelectionSchema } from '@app/catalog/domain/catalog-selection-evidence';
+import { Effect, Match, Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 
 import { createActionCollector } from '../../../../packages/core-runtime/src/actions/collector.ts';
@@ -10,6 +11,15 @@ import {
   RecoverInventoryEffectPayloadSchema,
 } from '../../shared/actions/recover-inventory-effect.ts';
 import { InventoryEffectLedgerRecordSchema } from '../../shared/domain/inventory-effect-ledger.ts';
+import { InventoryBackendConfigurationSchema } from '../../shared/domain/inventory-backend-configuration.ts';
+import { ProvisionalInventoryReservationSchema } from '../../shared/domain/inventory-obligation.ts';
+import {
+  EstablishedReservationCreateEffectSchema,
+  InventoryReservationCreateMutationIdSchema,
+  InventoryReservationCreateRequestSchema,
+} from '../../shared/domain/inventory-reservation-create.ts';
+import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservation-issuer-failure-fields.ts';
+import { StockItemSchema } from '../../shared/domain/stock-item.ts';
 import type { InventoryEffectRecoveryService } from '../../src/services/inventory-effect-recovery.service.ts';
 import {
   handleRecoverInventoryEffect,
@@ -92,6 +102,143 @@ const actionScope = trustVerifiedGatewayPrincipalContext({
   principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   tenantId,
 });
+
+const recoveredReservationRecord = () => {
+  const selection = Schema.decodeUnknownSync(CatalogSelectionSchema)({
+    productRef: {
+      moduleId: 'commerce.catalog',
+      resourceId: '14141414-1414-4414-8414-141414141414',
+      resourceType: 'commerce.catalog.product',
+      tenantId,
+    },
+    variantRef: {
+      moduleId: 'commerce.catalog',
+      resourceId: '15151515-1515-4515-8515-151515151515',
+      resourceType: 'commerce.catalog.variant',
+      tenantId,
+    },
+  });
+  const unitRef = {
+    moduleId: 'commerce.catalog' as const,
+    resourceId: '55555555-5555-4555-8555-555555555555',
+    resourceType: 'commerce.catalog.product-unit' as const,
+    tenantId,
+  };
+  const stockItemRef = {
+    moduleId: 'commerce.inventory' as const,
+    resourceId: '66666666-6666-4666-8666-666666666666',
+    resourceType: 'commerce.inventory.stock-item' as const,
+    tenantId,
+  };
+  const reservationRef = {
+    moduleId: 'commerce.inventory' as const,
+    resourceId: '99999999-9999-4999-8999-999999999999',
+    resourceType: 'commerce.inventory.inventory-reservation' as const,
+    tenantId,
+  };
+  const requestedAt = '2026-09-25T08:01:00.000Z';
+  const configuration = Schema.decodeUnknownSync(InventoryBackendConfigurationSchema)({
+    configurationId: '77777777-7777-4777-8777-777777777777',
+    customerConfigurationId: 'customer:primary',
+    revision: 1,
+    selectedAt: requestedAt,
+    selection: {
+      backend: 'external_business_system',
+      backendId: 'erp-primary',
+      exactReservationCapability: 'SUPPORTED',
+      stockCorrectionCapability: 'SUPPORTED',
+    },
+    tenantId,
+  });
+  const stockItem = Schema.decodeUnknownSync(StockItemSchema)({
+    createdAt: requestedAt,
+    exactSelectionMeaning: { id: 'catalog-owner:selection-meaning-1', kind: 'PRODUCT_VARIANT' },
+    lifecycle: 'CURRENT',
+    retiredAt: null,
+    revision: 1,
+    stockItemRef,
+    unitRef,
+  });
+  const reservation = Schema.decodeUnknownSync(ProvisionalInventoryReservationSchema)({
+    authority: configuration,
+    establishedAt: requestedAt,
+    lifecycleMeaning: 'PROVISIONAL_RESERVATION',
+    origin: { attemptId: 'attempt-checkout-1', kind: 'ORDER_COMMITMENT_ATTEMPT' },
+    ref: reservationRef,
+    requirements: [
+      {
+        allocations: [
+          {
+            allocationId: 'allocation-1',
+            positionRef,
+            quantity: { amount: '2', unitRef },
+            stockItemRef,
+          },
+        ],
+        bindingRef: {
+          moduleId: 'commerce.inventory',
+          resourceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          resourceType: 'commerce.inventory.catalog-to-stock-binding',
+          tenantId,
+        },
+        catalogSelection: selection,
+        exactSelectionMeaning: stockItem.exactSelectionMeaning,
+        purchaseDemandOccurrenceId: 'demand-1',
+        quantity: '2',
+        stockItem,
+        unitRef,
+      },
+    ],
+  });
+  const request = Schema.decodeUnknownSync(InventoryReservationCreateRequestSchema)({
+    authority: configuration,
+    commerceContext: {
+      channel: 'B2C',
+      commerceMarketRef: {
+        moduleId: 'commerce.market-catalog',
+        resourceId: 'market-primary',
+        resourceType: 'commerce.market-catalog.market',
+        tenantId,
+      },
+      customerConfigurationId: configuration.customerConfigurationId,
+      evidenceRef: 'commerce-context:1',
+      observedAt: requestedAt,
+      sellingLegalEntityRef: {
+        moduleId: 'core.identity',
+        resourceId: legalEntityId,
+        resourceType: 'core.identity.legal-entity',
+        tenantId,
+      },
+      status: 'CURRENT_OWNER_VERIFIED',
+      storefrontRef: { appId: 'storefront-primary', tenantId },
+      tenantId,
+    },
+    effectId: Schema.decodeUnknownSync(ReservationAuthorityEffectIdSchema)('create:attempt-checkout-1'),
+    legalEntityId,
+    mutationId: Schema.decodeUnknownSync(InventoryReservationCreateMutationIdSchema)(
+      '12121212-1212-4212-8212-121212121212',
+    ),
+    requestedAt,
+    reservation: { origin: reservation.origin, ref: reservation.ref, requirements: reservation.requirements },
+    sourceActionInvocationId: '13131313-1313-4313-8313-131313131313',
+  });
+  const effect = Schema.decodeUnknownSync(EstablishedReservationCreateEffectSchema)({
+    _tag: 'ESTABLISHED',
+    ownerEvidenceRef: 'erp:create:1',
+    request,
+    reservation,
+  });
+  return Schema.decodeUnknownSync(InventoryEffectLedgerRecordSchema)({
+    currentState: 'SUCCEEDED',
+    effectId: request.effectId,
+    intent: { _tag: 'RESERVATION_CREATE', request },
+    requestedAt,
+    resolution: { _tag: 'RESERVATION_CREATE', effect },
+    revision: 3,
+    tenantId,
+    updatedAt: requestedAt,
+  });
+};
 
 describe('Recover Inventory Effect Action', () => {
   it('declares explicit execution and exact Inventory Resource business permission gates', () => {
@@ -196,6 +343,70 @@ describe('Recover Inventory Effect Action', () => {
           targetResourceType: positionRef.resourceType,
         }),
       ]);
+    }),
+  );
+
+  it.effect('repairs a missing Confirmation request for an exactly replayed established Reservation', () =>
+    Effect.gen(function* repairConfirmationRequest() {
+      const record = recoveredReservationRecord();
+      const establishedEffect = yield* Match.value(record.resolution).pipe(
+        Match.when(null, () => Effect.die('expected Reservation create resolution')),
+        Match.tag('RESERVATION_CREATE', ({ effect }) =>
+          Schema.is(EstablishedReservationCreateEffectSchema)(effect)
+            ? Effect.succeed(effect)
+            : Effect.die('expected established Reservation create effect'),
+        ),
+        Match.orElse(() => Effect.die('expected Reservation create resolution')),
+      );
+      const reservationPayload = Schema.decodeUnknownSync(RecoverInventoryEffectPayloadSchema)({
+        effectId: record.effectId,
+        expectedKind: 'RESERVATION_CREATE',
+        targetRef: establishedEffect.request.reservation.ref,
+      });
+      const service = makeRecoverInventoryEffectActionService({
+        records: { read: () => Effect.succeedSome(record) },
+        recovery: {
+          recover: () => Effect.succeed({ _tag: 'ALREADY_TERMINAL', effectId: record.effectId, record }),
+        },
+      });
+      const executeReplay = () => {
+        const collector = createActionCollector(
+          recoverInventoryEffectAction.descriptor.domainEvents,
+          'commerce.inventory',
+          recoverInventoryEffectAction.descriptor.accessEvidencePolicy,
+          recoverInventoryEffectAction.descriptor.auditEvidenceSchema,
+        );
+        return handleRecoverInventoryEffect(reservationPayload, {
+          actionInvocationId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+          addDomainEvent: collector.addDomainEvent,
+          addOutboxMessage: collector.addOutboxMessage,
+          recordAuditEvidence: collector.recordAuditEvidence,
+          recordDataAccess: collector.recordDataAccess,
+          scope: actionScope,
+          services: service,
+        }).pipe(Effect.as(collector));
+      };
+
+      const first = yield* executeReplay();
+      const replay = yield* executeReplay();
+      const firstSnapshot = first.snapshot();
+      const replaySnapshot = replay.snapshot();
+
+      expect(firstSnapshot.domainEvents).toHaveLength(1);
+      expect(firstSnapshot.outboxMessages).toHaveLength(1);
+      expect(firstSnapshot.outboxMessages[0]?.message).toMatchObject({
+        payloadJson: {
+          request: {
+            legalEntityId,
+            mutationId: establishedEffect.request.mutationId,
+            reservation: establishedEffect.reservation,
+            sourceActionInvocationId: establishedEffect.request.sourceActionInvocationId,
+          },
+        },
+        producerModuleKey: 'commerce.inventory',
+        topic: 'commerce.inventory.reservation-confirmation-issuance-requested.v1',
+      });
+      expect(replaySnapshot.outboxMessages).toEqual(firstSnapshot.outboxMessages);
     }),
   );
 

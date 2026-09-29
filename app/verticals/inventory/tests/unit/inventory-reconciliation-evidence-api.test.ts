@@ -1,6 +1,6 @@
 import { ReadPermissionDenied, allowOwnerAuthorizationOverlay, toBusinessPermissionAccessKey } from '@app/core-runtime';
 import { expect, it } from 'effect-rstest';
-import { Effect, Option, Predicate, Schema } from 'effect';
+import { Effect, Match, Option, Predicate, Schema } from 'effect';
 
 import {
   InventoryReconciliationEvidenceDomainPolicyProblemSchema,
@@ -9,6 +9,8 @@ import {
   InventoryReconciliationEvidenceRequestSchema,
   InventoryReconciliationEvidenceResponseSchema,
 } from '../../shared/apis/inventory-reconciliation-evidence.ts';
+import { ExternalStockCorrelationSchema } from '../../shared/domain/external-stock-correlation.ts';
+import { inventoryPrivacyOwnerScopeParts } from '../../shared/inventory-privacy-owner-contract.ts';
 import { makeInventoryReconciliationEvidenceService } from '../../src/services/inventory-reconciliation-evidence.service.ts';
 import { InventoryReconciliationEvidenceRejected } from '../../shared/domain/inventory-reconciliation-evidence-rejected.ts';
 import { InventoryReconciliationEvidenceUnavailable } from '../../shared/domain/inventory-reconciliation-evidence-unavailable.ts';
@@ -54,7 +56,7 @@ const input = Schema.decodeSync(InventoryReconciliationEvidenceRequestSchema)({
   },
 });
 
-it('defines only the seven explicit owner evidence lookup kinds', () => {
+it('defines the existing owner evidence lookups plus repository-backed privacy owner coverage', () => {
   const lookupKinds = [
     'BINDING_HISTORY',
     'ENDED_CORRELATION',
@@ -63,6 +65,7 @@ it('defines only the seven explicit owner evidence lookup kinds', () => {
     'PROTECTION_HISTORY',
     'EFFECT_OUTCOME',
     'SOURCE_CONFLICT_DETAIL',
+    'PRIVACY_OWNER_COVERAGE',
   ] as const;
 
   const requestContract = JSON.stringify(InventoryReconciliationEvidenceRequestSchema.ast);
@@ -71,6 +74,7 @@ it('defines only the seven explicit owner evidence lookup kinds', () => {
     expect(requestContract).toContain(kind);
     expect(responseContract).toContain(kind);
   }
+  expect(requestContract).not.toContain('observations');
   expect(requestContract).not.toContain('sql');
 });
 
@@ -173,6 +177,7 @@ it.effect('dispatches only the seven bounded owner evidence lookups and preserve
       conflicts: { findLatest: () => missing('SOURCE_CONFLICT_DETAIL') },
       correlations: { findByRef: () => missing('ENDED_CORRELATION') },
       effects: { read: () => missing('EFFECT_OUTCOME') },
+      obligations: { read: () => missing('RESERVATION_OBLIGATION') },
       protections: { readHistory: () => missingHistory('PROTECTION_HISTORY') },
       sharing: { readHistory: () => missingHistory('SHARING_HISTORY') },
     });
@@ -258,6 +263,140 @@ it.effect('dispatches only the seven bounded owner evidence lookups and preserve
       'SOURCE_CONFLICT_DETAIL',
     ]);
   }),
+);
+
+it.effect(
+  'derives privacy coverage from owner repositories and preserves historical evidence when Current is absent',
+  () =>
+    Effect.gen(function* derivePrivacyCoverageFromOwnerRepositories() {
+      const reservationId = '66666666-6666-4666-8666-666666666666';
+      const correlationId = '77777777-7777-4777-8777-777777777777';
+      const lookupCalls: string[] = [];
+      const ownerRef = {
+        moduleId: 'commerce.inventory' as const,
+        resourceId: reservationId,
+        resourceType: 'commerce.inventory.inventory-reservation' as const,
+        tenantId,
+      };
+      const correlationRef = {
+        moduleId: 'commerce.inventory' as const,
+        resourceId: correlationId,
+        resourceType: 'commerce.inventory.external-stock-correlation' as const,
+        tenantId,
+      };
+      const correlation = Schema.decodeUnknownSync(ExternalStockCorrelationSchema)({
+        confirmedAt: '2026-09-28T11:00:00.000Z',
+        correlationRef,
+        effectivePeriod: { from: '2026-09-27T10:00:00.000Z', to: '2026-09-28T10:00:00.000Z' },
+        externalKey: {
+          customerConfigurationId: 'customer-configuration-primary',
+          externalScope: 'warehouse-primary',
+          externalValue: 'external-item-858',
+          identifierKind: 'ITEM',
+          issuer: { backendId: 'erp-primary', backendKind: 'external_business_system' },
+          namespace: 'erp-item',
+          tenantId,
+        },
+        lifecycle: 'ENDED',
+        ownerEvidenceRef: 'inventory-correlation-evidence:858',
+        revision: 2,
+        target: {
+          _tag: 'STOCK_ITEM',
+          ref: {
+            moduleId: 'commerce.inventory',
+            resourceId: '88888888-8888-4888-8888-888888888888',
+            resourceType: 'commerce.inventory.stock-item',
+            tenantId,
+          },
+        },
+      });
+      const trustedLookups = [
+        { _tag: 'RESERVATION_OBLIGATION' as const, lookupRef: 'inventory-obligation:858' },
+        {
+          _tag: 'EXTERNAL_CORRELATION' as const,
+          correlationRef,
+          lookupRef: 'inventory-external-correlation:858',
+        },
+      ];
+      const privacyRequest = Schema.decodeSync(InventoryReconciliationEvidenceQuerySchema)({
+        _tag: 'PRIVACY_OWNER_COVERAGE',
+        ownerRef,
+        scope: {
+          controllerRef: `legal-entity:${legalEntityId}`,
+          dsrControllerObligationRef: 'privacy:dsr-obligation-858',
+          ownerCapability: 'commerce.inventory',
+          requestedScopePartRefs: inventoryPrivacyOwnerScopeParts.map(
+            (scopePart) => `commerce.inventory/privacy-owner-scope/${scopePart}`,
+          ),
+          requestedScopeRef: 'privacy-owner-scope:inventory/858',
+          subject: { _tag: 'RESOLVED_DATA_SUBJECT', subjectRef: 'privacy-subject:858' },
+          tenantId,
+          trustedLookupRefs: trustedLookups.map(({ lookupRef }) => lookupRef),
+        },
+        trustedLookups,
+      });
+      const service = makeInventoryReconciliationEvidenceService({
+        bindings: { readHistory: () => Effect.succeed([]) },
+        confirmations: { readHistory: () => Effect.succeed([]) },
+        conflicts: { findLatest: () => Effect.succeedNone },
+        correlations: {
+          findByRef: () => {
+            lookupCalls.push('EXTERNAL_CORRELATION');
+            return Effect.succeedSome(correlation);
+          },
+        },
+        effects: { read: () => Effect.succeedNone },
+        obligations: {
+          read: () => {
+            lookupCalls.push('RESERVATION_OBLIGATION');
+            return Effect.succeedNone;
+          },
+        },
+        protections: { readHistory: () => Effect.succeed([]) },
+        sharing: { readHistory: () => Effect.succeed([]) },
+      });
+
+      const result = yield* service.read(privacyRequest, { legalEntityId, tenantId });
+
+      expect(Option.isSome(result)).toBe(true);
+      const privacyResult = Option.isSome(result)
+        ? Match.value(result.value).pipe(
+            Match.tag('PRIVACY_OWNER_COVERAGE', (value) => value),
+            Match.orElse(() => null),
+          )
+        : null;
+      expect(privacyResult).not.toBeNull();
+      if (privacyResult !== null) {
+        expect(privacyResult.coverage.contentStatus).toBe('FOUND');
+        expect(privacyResult.coverage.coverageStatus).toBe('INDETERMINATE');
+        expect(
+          privacyResult.coverage.coverageParts.find(({ scopeRef }) =>
+            scopeRef.endsWith('/CURRENT_RESERVATION_CORRELATIONS'),
+          ),
+        ).toMatchObject({ coverageStatus: 'COMPLETE', foundContentRefs: [] });
+        expect(
+          privacyResult.coverage.coverageParts.find(({ scopeRef }) =>
+            scopeRef.endsWith('/EXTERNAL_SOURCE_ASSERTION_COVERAGE_AND_CORRELATION_HISTORY'),
+          ),
+        ).toMatchObject({
+          coverageStatus: 'PARTIAL',
+          evidenceRefs: ['inventory-correlation-evidence:858'],
+          foundContentRefs: ['inventory-external-correlation:858'],
+        });
+        expect(
+          privacyResult.coverage.coverageParts.find(({ scopeRef }) =>
+            scopeRef.endsWith('/IMPORT_REPLAY_PROJECTION_AND_BACKUP_RESPONSIBILITIES'),
+          ),
+        ).toMatchObject({
+          coverageStatus: 'INDETERMINATE',
+          foundContentRefs: [],
+        });
+        expect(() =>
+          Schema.decodeUnknownSync(InventoryReconciliationEvidenceResponseSchema)(privacyResult),
+        ).not.toThrow();
+      }
+      expect(lookupCalls).toEqual(['RESERVATION_OBLIGATION', 'EXTERNAL_CORRELATION']);
+    }),
 );
 
 it('maps semantic evidence rejection to typed 422 and owner unavailability to sanitized typed 503', () => {

@@ -18,8 +18,26 @@ import type {
   InventoryEffectLedgerResolution,
 } from '../../shared/domain/inventory-effect-ledger.ts';
 import { InventoryEffectLedgerEffectIdSchema } from '../../shared/domain/inventory-effect-ledger.ts';
+import {
+  AlreadyTerminalInventoryEffectResultSchema,
+  InventoryEffectRecoveryRejected,
+  RecoveredInventoryEffectResultSchema,
+} from '../../shared/domain/inventory-effect-recovery.ts';
 import { InventoryBackendConfigurationSchema } from '../../shared/domain/inventory-backend-configuration.ts';
-import { ProvisionalInventoryReservationSchema } from '../../shared/domain/inventory-obligation.ts';
+import type { InventoryObligation } from '../../shared/domain/inventory-obligation.ts';
+import {
+  ProvisionalInventoryReservationSchema,
+  RuntimeCommittedInventoryObligationSchema,
+} from '../../shared/domain/inventory-obligation.ts';
+import type { PhysicalStockEffectRecord } from '../../shared/domain/physical-stock-effect.ts';
+import {
+  AppliedPhysicalStockEffectSchema,
+  PhysicalStockEffectIdSchema,
+  PhysicalStockEffectRecordSchema,
+  PhysicalStockEffectRequestSchema,
+  PhysicalStockEffectUnavailable,
+  RequestedPhysicalStockEffectSchema,
+} from '../../shared/domain/physical-stock-effect.ts';
 import type { ReservationCreateEffect } from '../../shared/domain/inventory-reservation-create.ts';
 import {
   EstablishedReservationCreateEffectSchema,
@@ -39,6 +57,8 @@ import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservat
 import { StockItemSchema } from '../../shared/domain/stock-item.ts';
 import { CommitmentProtectionRefSchema } from '../../shared/resources/commitment-protection.ts';
 import { ReservationConfirmationRefSchema } from '../../shared/resources/reservation-confirmation.ts';
+import type { InventoryObligationPersistence } from '../../src/persistence/inventory-obligation-repository.ts';
+import type { PhysicalStockEffectPersistence } from '../../src/persistence/physical-stock-effect-repository.ts';
 import type { InventoryEffectRecoveryAuthority } from '../../src/services/inventory-effect-recovery-authority.ts';
 import {
   makeInventoryEffectRecoveryOwnerPersistence,
@@ -49,6 +69,8 @@ import {
   commitmentProtectionLedgerIntent,
   commitmentProtectionLedgerResolution,
   makeInventoryEffectLedgerService,
+  physicalStockLedgerIntent,
+  physicalStockLedgerResolution,
   reservationCreateLedgerIntent,
   reservationCreateLedgerResolution,
   reservationReleaseLedgerIntent,
@@ -163,7 +185,10 @@ const reservation = Schema.decodeUnknownSync(ProvisionalInventoryReservationSche
   ],
 });
 
-const makeLedgerHarness = (intent: InventoryEffectLedgerIntent) =>
+const makeLedgerHarness = (
+  intent: InventoryEffectLedgerIntent,
+  beforeLedgerTerminal: (record: InventoryEffectLedgerRecord) => Effect.Effect<void> = () => Effect.void,
+) =>
   Effect.gen(function* ledgerHarness() {
     const current = yield* Ref.make<Option.Option<InventoryEffectLedgerRecord>>(Option.none());
     const persistence: InventoryEffectLedgerPersistence = {
@@ -178,15 +203,17 @@ const makeLedgerHarness = (intent: InventoryEffectLedgerIntent) =>
         }),
       read: () => Ref.get(current),
       save: (expected, next) =>
-        Ref.modify(current, (stored) =>
-          Option.match(stored, {
-            onNone: () => [Option.none<InventoryEffectLedgerRecord>(), stored] as const,
-            onSome: (record) =>
-              record.revision === expected.revision
-                ? ([Option.some(next), Option.some(next)] as const)
-                : ([Option.none<InventoryEffectLedgerRecord>(), stored] as const),
-          }),
-        ),
+        Effect.gen(function* saveLedger() {
+          const stored = yield* Ref.get(current);
+          if (Option.isNone(stored) || stored.value.revision !== expected.revision) {
+            return Option.none<InventoryEffectLedgerRecord>();
+          }
+          if (next.currentState === 'SUCCEEDED' || next.currentState === 'REJECTED') {
+            yield* beforeLedgerTerminal(next);
+          }
+          yield* Ref.set(current, Option.some(next));
+          return Option.some(next);
+        }),
     };
     const ledger = makeInventoryEffectLedgerService(persistence, Effect.succeed(learnedAt));
     const effectId = InventoryEffectLedgerEffectIdSchema.make(intent.request.effectId);
@@ -214,14 +241,17 @@ const terminalAuthority = (
     }),
 });
 
-const makeCreatePersistence = (initial: ReservationCreateEffect) =>
+const makeCreatePersistence = (
+  initial: ReservationCreateEffect,
+  beforeSave: (next: ReservationCreateEffect) => Effect.Effect<void> = () => Effect.void,
+) =>
   Effect.gen(function* createPersistence() {
     const current = yield* Ref.make(initial);
     const persistence: ReservationCreateEffectPersistence = {
       createOrRead: () => Effect.die('not used'),
       findByAttempt: () => Ref.get(current).pipe(Effect.map(Option.some)),
       read: () => Ref.get(current).pipe(Effect.map(Option.some)),
-      save: (_expected, next) => Ref.set(current, next).pipe(Effect.as(next)),
+      save: (_expected, next) => beforeSave(next).pipe(Effect.andThen(Ref.set(current, next)), Effect.as(next)),
     };
     return { current, persistence };
   });
@@ -259,6 +289,58 @@ const makeProtectionPersistence = () =>
     return { current, persistence };
   });
 
+const makePhysicalPersistence = (initial: PhysicalStockEffectRecord, options: { readonly failSave?: boolean } = {}) =>
+  Effect.gen(function* physicalPersistence() {
+    const current = yield* Ref.make(initial);
+    const saveCalls = yield* Ref.make(0);
+    const persistence: PhysicalStockEffectPersistence = {
+      createOrRead: () => Effect.die('not used'),
+      read: () => Ref.get(current).pipe(Effect.map(Option.some)),
+      saveTerminal: (expected, terminal) =>
+        Effect.gen(function* saveTerminal() {
+          yield* Ref.update(saveCalls, (count) => count + 1);
+          if (options.failSave === true) {
+            return yield* new PhysicalStockEffectUnavailable({
+              code: 'physical_stock_effect_unavailable',
+              effectId: expected.effectId,
+              reason: 'Physical stock effect persistence is temporarily unavailable',
+              retryable: true,
+            });
+          }
+          yield* Ref.set(current, terminal);
+          return terminal;
+        }),
+    };
+    return { current, persistence, saveCalls };
+  });
+
+const makeObligationPersistence = (
+  beforeEstablish: (candidate: typeof reservation) => Effect.Effect<void> = () => Effect.void,
+  initial: Option.Option<InventoryObligation> = Option.none(),
+) =>
+  Effect.gen(function* obligationPersistence() {
+    const current = yield* Ref.make(initial);
+    const establishCalls = yield* Ref.make(0);
+    const persistence: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'> = {
+      establishReservation: (candidate) =>
+        Effect.gen(function* establishReservation() {
+          const existing = yield* Ref.get(current);
+          yield* Ref.update(establishCalls, (count) => count + 1);
+          yield* beforeEstablish(candidate);
+          if (Option.isSome(existing)) {
+            if (!Schema.is(ProvisionalInventoryReservationSchema)(existing.value)) {
+              return yield* Effect.die('unexpected descendant establishment');
+            }
+            return { obligation: existing.value, outcome: 'EXACT_REPLAY' as const };
+          }
+          yield* Ref.set(current, Option.some(candidate));
+          return { obligation: candidate, outcome: 'ESTABLISHED' as const };
+        }),
+      read: () => Ref.get(current),
+    };
+    return { current, establishCalls, persistence };
+  });
+
 const unusedCreatePersistence: Pick<ReservationCreateEffectPersistence, 'read' | 'save'> = {
   read: () => Effect.die('unexpected create recovery'),
   save: () => Effect.die('unexpected create recovery'),
@@ -270,13 +352,37 @@ const unusedReleasePersistence: Pick<ReservationReleaseEffectPersistence, 'read'
 const unusedProtectionPersistence: Pick<CommitmentProtectionPersistence, 'createOrRead'> = {
   createOrRead: () => Effect.die('unexpected Protection recovery'),
 };
+const unusedPhysicalPersistence: Pick<PhysicalStockEffectPersistence, 'read' | 'saveTerminal'> = {
+  read: () => Effect.die('unexpected physical recovery'),
+  saveTerminal: () => Effect.die('unexpected physical recovery'),
+};
+const unusedObligationPersistence: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'> = {
+  establishReservation: () => Effect.die('unexpected Reservation establishment'),
+  read: () => Effect.die('unexpected Reservation establishment'),
+};
+
+type RecoveryOwnerDependencies = Parameters<typeof makeInventoryEffectRecoveryOwnerPersistence>[0] & {
+  readonly obligations: Pick<InventoryObligationPersistence, 'establishReservation' | 'read'>;
+  readonly physicalEffects: Pick<PhysicalStockEffectPersistence, 'read' | 'saveTerminal'>;
+};
+
+const makeRecoveryOwners = (overrides: Partial<RecoveryOwnerDependencies> = {}) =>
+  makeInventoryEffectRecoveryOwnerPersistence({
+    creates: unusedCreatePersistence,
+    obligations: unusedObligationPersistence,
+    physicalEffects: unusedPhysicalPersistence,
+    protections: unusedProtectionPersistence,
+    releases: unusedReleasePersistence,
+    ...overrides,
+  });
 
 const recover = Effect.fn('InventoryEffectRecoveryOwnerTest.recover')(function* recover(input: {
   readonly authority: InventoryEffectRecoveryAuthority;
+  readonly beforeLedgerTerminal?: (record: InventoryEffectLedgerRecord) => Effect.Effect<void>;
   readonly intent: InventoryEffectLedgerIntent;
   readonly owners: ReturnType<typeof makeInventoryEffectRecoveryOwnerPersistence>;
 }) {
-  const ledgerHarness = yield* makeLedgerHarness(input.intent);
+  const ledgerHarness = yield* makeLedgerHarness(input.intent, input.beforeLedgerTerminal);
   const service = yield* makeInventoryEffectRecoveryService({
     authority: input.authority,
     ledger: ledgerHarness.ledger,
@@ -295,6 +401,53 @@ const recover = Effect.fn('InventoryEffectRecoveryOwnerTest.recover')(function* 
   });
   return { ledger: yield* Ref.get(ledgerHarness.current), replay, result };
 });
+
+const physicalScenario = (kind: 'ISSUE' | 'RECEIPT', effectIdValue: string) => {
+  const physicalEffectId = Schema.decodeUnknownSync(PhysicalStockEffectIdSchema)(effectIdValue);
+  const request = Schema.decodeUnknownSync(PhysicalStockEffectRequestSchema)({
+    actionInvocationId: '99999999-9999-4999-8999-999999999999',
+    backend: 'external_business_system',
+    backendConfigurationRef: {
+      moduleId: 'commerce.inventory',
+      resourceId: configurationId,
+      resourceType: 'commerce.inventory.inventory-backend-configuration',
+      tenantId,
+    },
+    backendId: 'erp-primary',
+    customerConfigurationId: authorityConfiguration.customerConfigurationId,
+    effectId: physicalEffectId,
+    kind,
+    legalEntityId,
+    positionRef,
+    quantity: { amount: '2', unitRef },
+    reason: { code: kind === 'ISSUE' ? 'ORDER_FULFILLMENT' : 'GOODS_RECEIPT', reference: 'owner-recovery:1' },
+    requestedAt,
+    stockItemRef,
+    stockLocationRef: {
+      moduleId: 'commerce.inventory',
+      resourceId: '12121212-1212-4212-8212-121212121212',
+      resourceType: 'commerce.inventory.stock-location',
+      tenantId,
+    },
+  });
+  const terminal = Schema.decodeUnknownSync(AppliedPhysicalStockEffectSchema)({
+    _tag: 'APPLIED',
+    evidence: {
+      appliedAt: establishedAt,
+      backend: request.backend,
+      backendConfigurationRef: request.backendConfigurationRef,
+      backendEvidenceRef: `erp:${kind.toLowerCase()}:1`,
+      backendId: request.backendId,
+      effectId: request.effectId,
+      issuer: 'erp-primary',
+      kind,
+      positionRef: request.positionRef,
+      quantity: request.quantity,
+    },
+    request,
+  });
+  return { intent: physicalStockLedgerIntent({ _tag: 'REQUESTED', request }), terminal };
+};
 
 describe('Inventory recovery owner persistence', () => {
   it.effect('CAS-applies authoritative create and release outcomes before closing the ledger', () =>
@@ -339,15 +492,26 @@ describe('Inventory recovery owner persistence', () => {
         request: createRequest,
         reservation,
       });
-      const creates = yield* makeCreatePersistence(requestedCreate);
+      const createWriteOrder = yield* Ref.make<readonly string[]>([]);
+      const obligations = yield* makeObligationPersistence(() =>
+        Ref.update(createWriteOrder, (order) => [...order, 'obligation']),
+      );
+      const creates = yield* makeCreatePersistence(requestedCreate, () =>
+        Ref.update(createWriteOrder, (order) => [...order, 'effect']),
+      );
       const createResolution = reservationCreateLedgerResolution(establishedCreate);
       const createRecovered = yield* recover({
         authority: terminalAuthority(createResolution, requestedAt, establishedCreate.ownerEvidenceRef),
+        beforeLedgerTerminal: () =>
+          Effect.gen(function* verifyCreateOwnerState() {
+            expect(yield* Ref.get(obligations.current)).toEqual(Option.some(reservation));
+            expect(yield* Ref.get(creates.current)).toEqual(establishedCreate);
+            yield* Ref.update(createWriteOrder, (order) => [...order, 'ledger']);
+          }),
         intent: reservationCreateLedgerIntent(requestedCreate),
-        owners: makeInventoryEffectRecoveryOwnerPersistence({
+        owners: makeRecoveryOwners({
           creates: creates.persistence,
-          protections: unusedProtectionPersistence,
-          releases: unusedReleasePersistence,
+          obligations: obligations.persistence,
         }),
       });
 
@@ -392,17 +556,200 @@ describe('Inventory recovery owner persistence', () => {
       const releaseRecovered = yield* recover({
         authority: terminalAuthority(releaseResolution, released.releasedAt, released.ownerEvidenceRef),
         intent: reservationReleaseLedgerIntent(requestedRelease),
-        owners: makeInventoryEffectRecoveryOwnerPersistence({
-          creates: unusedCreatePersistence,
-          protections: unusedProtectionPersistence,
+        owners: makeRecoveryOwners({
           releases: releases.persistence,
         }),
       });
 
       expect(yield* Ref.get(creates.current)).toEqual(establishedCreate);
+      expect(yield* Ref.get(obligations.current)).toEqual(Option.some(reservation));
+      expect(yield* Ref.get(obligations.establishCalls)).toBe(1);
+      expect(yield* Ref.get(createWriteOrder)).toEqual(['obligation', 'effect', 'ledger']);
       expect(Option.getOrThrow(createRecovered.ledger).currentState).toBe('SUCCEEDED');
+      expect(Schema.is(AlreadyTerminalInventoryEffectResultSchema)(createRecovered.replay)).toBe(true);
       expect(yield* Ref.get(releases.current)).toEqual(released);
       expect(Option.getOrThrow(releaseRecovered.ledger).currentState).toBe('SUCCEEDED');
+    }),
+  );
+
+  it.effect(
+    'accepts an exact committed Reservation descendant during terminal create replay without downgrading it',
+    () =>
+      Effect.gen(function* preserveCommittedReservation() {
+        const createEffectId = Schema.decodeUnknownSync(ReservationAuthorityEffectIdSchema)(
+          'create:committed-at-replay',
+        );
+        const createRequest = Schema.decodeUnknownSync(InventoryReservationCreateRequestSchema)({
+          authority: authorityConfiguration,
+          commerceContext: {
+            channel: 'B2C',
+            commerceMarketRef: {
+              moduleId: 'commerce.market-catalog',
+              resourceId: 'market-primary',
+              resourceType: 'commerce.market-catalog.market',
+              tenantId,
+            },
+            customerConfigurationId: authorityConfiguration.customerConfigurationId,
+            evidenceRef: 'commerce-context:committed-replay',
+            observedAt: requestedAt,
+            sellingLegalEntityRef: {
+              moduleId: 'core.identity',
+              resourceId: legalEntityId,
+              resourceType: 'core.identity.legal-entity',
+              tenantId,
+            },
+            status: 'CURRENT_OWNER_VERIFIED',
+            storefrontRef: { appId: 'storefront-primary', tenantId },
+            tenantId,
+          },
+          effectId: createEffectId,
+          legalEntityId,
+          mutationId: Schema.decodeUnknownSync(InventoryReservationCreateMutationIdSchema)(
+            '19191919-1919-4919-8919-191919191919',
+          ),
+          requestedAt,
+          reservation: { origin: reservation.origin, ref: reservation.ref, requirements: reservation.requirements },
+          sourceActionInvocationId: '20202020-2020-4020-8020-202020202020',
+        });
+        const establishedCreate = Schema.decodeUnknownSync(EstablishedReservationCreateEffectSchema)({
+          _tag: 'ESTABLISHED',
+          ownerEvidenceRef: 'erp:create:committed-replay',
+          request: createRequest,
+          reservation,
+        });
+        const committed = Schema.decodeUnknownSync(RuntimeCommittedInventoryObligationSchema)({
+          ...reservation,
+          confirmationTerminationReleasesStock: false,
+          historicalBindingPolicy: 'PRESERVE_AND_RECONCILE',
+          lifecycleMeaning: 'COMMITTED_OBLIGATION',
+          obligationReductionCreatesOnHand: false,
+          orderProof: {
+            acceptedOrderId: 'accepted-order-committed-replay',
+            attemptId: reservation.origin.attemptId,
+            authority: 'ORDER_COMMIT_PROOF_AUTHORITY',
+            commitStatus: 'COMMITTED',
+            evidenceRef: 'order-proof:committed-replay',
+            observedAt: establishedAt,
+            reservationRef: reservation.ref,
+            tenantId,
+          },
+          physicalIssueBoundary: 'SEPARATE_INVENTORY_TRANSITION',
+          remainingQuantityConstraint: 'OWNER_GOVERNED_TRANSITION_REQUIRED',
+        });
+        const obligations = yield* makeObligationPersistence(() => Effect.void, Option.some(committed));
+        const creates = yield* makeCreatePersistence(establishedCreate);
+        const resolution = reservationCreateLedgerResolution(establishedCreate);
+
+        const recovered = yield* recover({
+          authority: terminalAuthority(resolution, reservation.establishedAt, establishedCreate.ownerEvidenceRef),
+          intent: reservationCreateLedgerIntent(establishedCreate),
+          owners: makeRecoveryOwners({ creates: creates.persistence, obligations: obligations.persistence }),
+        });
+
+        expect(Schema.is(RecoveredInventoryEffectResultSchema)(recovered.result)).toBe(true);
+        expect(Schema.is(AlreadyTerminalInventoryEffectResultSchema)(recovered.replay)).toBe(true);
+        expect(yield* Ref.get(obligations.current)).toEqual(Option.some(committed));
+        expect(yield* Ref.get(obligations.establishCalls)).toBe(0);
+        expect(yield* Ref.get(creates.current)).toEqual(establishedCreate);
+      }),
+  );
+
+  for (const scenario of [
+    physicalScenario('RECEIPT', '13131313-1313-4313-8313-131313131313'),
+    physicalScenario('ISSUE', '14141414-1414-4414-8414-141414141414'),
+  ]) {
+    it.effect(`persists recovered physical ${scenario.terminal.request.kind} before terminal ledger state`, () =>
+      Effect.gen(function* persistRecoveredPhysicalEffect() {
+        const requested = { _tag: 'REQUESTED' as const, request: scenario.terminal.request };
+        const physical = yield* makePhysicalPersistence(requested);
+        const resolution = physicalStockLedgerResolution(scenario.terminal);
+        const recovered = yield* recover({
+          authority: terminalAuthority(
+            resolution,
+            scenario.terminal.evidence.appliedAt,
+            scenario.terminal.evidence.backendEvidenceRef,
+          ),
+          beforeLedgerTerminal: () =>
+            Effect.gen(function* verifyPhysicalOwnerState() {
+              expect(yield* Ref.get(physical.current)).toEqual(scenario.terminal);
+            }),
+          intent: scenario.intent,
+          owners: makeRecoveryOwners({ physicalEffects: physical.persistence }),
+        });
+
+        expect(yield* Ref.get(physical.current)).toEqual(scenario.terminal);
+        expect(yield* Ref.get(physical.saveCalls)).toBe(1);
+        expect(Schema.is(RecoveredInventoryEffectResultSchema)(recovered.result)).toBe(true);
+        expect(Schema.is(AlreadyTerminalInventoryEffectResultSchema)(recovered.replay)).toBe(true);
+        expect(Option.getOrThrow(recovered.ledger).currentState).toBe('SUCCEEDED');
+      }),
+    );
+  }
+
+  it.effect('rejects contradictory physical owner state without terminalizing the ledger', () =>
+    Effect.gen(function* rejectContradictoryPhysicalOwner() {
+      const scenario = physicalScenario('ISSUE', '15151515-1515-4515-8515-151515151515');
+      const contradictory = Schema.decodeUnknownSync(PhysicalStockEffectRecordSchema)({
+        _tag: 'REJECTED',
+        reason: 'BACKEND_REJECTED',
+        request: scenario.terminal.request,
+      });
+      const physical = yield* makePhysicalPersistence(contradictory);
+      const ledgerHarness = yield* makeLedgerHarness(scenario.intent);
+      const service = yield* makeInventoryEffectRecoveryService({
+        authority: terminalAuthority(
+          physicalStockLedgerResolution(scenario.terminal),
+          scenario.terminal.evidence.appliedAt,
+          scenario.terminal.evidence.backendEvidenceRef,
+        ),
+        ledger: ledgerHarness.ledger,
+        owners: makeRecoveryOwners({ physicalEffects: physical.persistence }),
+        records: { read: () => Ref.get(ledgerHarness.current) },
+      });
+
+      const failure = yield* Effect.flip(
+        service.recover({ effectId: ledgerHarness.effectId, expectedKind: 'PHYSICAL_ISSUE', tenantId }),
+      );
+
+      expect(failure).toBeInstanceOf(InventoryEffectRecoveryRejected);
+      expect(failure).toMatchObject({ reason: 'OWNER_STATE_CONFLICT' });
+      expect(yield* Ref.get(physical.current)).toEqual(contradictory);
+      expect(yield* Ref.get(physical.saveCalls)).toBe(0);
+      expect(Option.getOrThrow(yield* Ref.get(ledgerHarness.current)).currentState).toBe('INDETERMINATE');
+    }),
+  );
+
+  it.effect('keeps the ledger nonterminal when physical owner persistence fails', () =>
+    Effect.gen(function* preserveNonterminalLedger() {
+      const scenario = physicalScenario('RECEIPT', '16161616-1616-4616-8616-161616161616');
+      const requested = { _tag: 'REQUESTED' as const, request: scenario.terminal.request };
+      const physical = yield* makePhysicalPersistence(requested, { failSave: true });
+      const ledgerHarness = yield* makeLedgerHarness(scenario.intent);
+      const service = yield* makeInventoryEffectRecoveryService({
+        authority: terminalAuthority(
+          physicalStockLedgerResolution(scenario.terminal),
+          scenario.terminal.evidence.appliedAt,
+          scenario.terminal.evidence.backendEvidenceRef,
+        ),
+        ledger: ledgerHarness.ledger,
+        owners: makeRecoveryOwners({ physicalEffects: physical.persistence }),
+        records: { read: () => Ref.get(ledgerHarness.current) },
+      });
+
+      const failure = yield* Effect.flip(
+        service.recover({ effectId: ledgerHarness.effectId, expectedKind: 'PHYSICAL_RECEIPT', tenantId }),
+      );
+
+      expect(failure).toBeInstanceOf(InventoryEffectRecoveryRejected);
+      expect(failure).toMatchObject({ reason: 'OWNER_PERSISTENCE_UNAVAILABLE' });
+      const preserved = yield* Ref.get(physical.current);
+      expect(Schema.is(RequestedPhysicalStockEffectSchema)(preserved)).toBe(true);
+      if (!Schema.is(RequestedPhysicalStockEffectSchema)(preserved)) {
+        yield* Effect.die('expected requested physical effect to remain unchanged');
+      }
+      expect(preserved.request).toEqual(requested.request);
+      expect(yield* Ref.get(physical.saveCalls)).toBe(1);
+      expect(Option.getOrThrow(yield* Ref.get(ledgerHarness.current)).currentState).toBe('INDETERMINATE');
     }),
   );
 
@@ -446,12 +793,15 @@ describe('Inventory recovery owner persistence', () => {
         confirmation,
         effectId: protectionEffectId,
         legalEntityId,
+        mutationId: '17171717-1717-4717-8717-171717171717',
         protectionRef: Schema.decodeUnknownSync(CommitmentProtectionRefSchema)({
           moduleId: 'commerce.inventory',
           resourceId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
           resourceType: 'commerce.inventory.commitment-protection',
           tenantId,
         }),
+        requestedAt,
+        sourceActionInvocationId: '18181818-1818-4818-8818-181818181818',
       });
       const authorityEvidence = Schema.decodeUnknownSync(AuthoritativeReservationEvidenceSchema)({
         effectId: protectionEffectId,
@@ -490,10 +840,8 @@ describe('Inventory recovery owner persistence', () => {
       const recovered = yield* recover({
         authority: terminalAuthority(resolution, establishedAt, authorityEvidence.evidence.ownerEvidenceRef),
         intent: commitmentProtectionLedgerIntent(protectionRequest),
-        owners: makeInventoryEffectRecoveryOwnerPersistence({
-          creates: unusedCreatePersistence,
+        owners: makeRecoveryOwners({
           protections: protections.persistence,
-          releases: unusedReleasePersistence,
         }),
       });
 
@@ -532,10 +880,8 @@ describe('Inventory recovery owner persistence', () => {
                 : candidate.authorityEvidence.evidence.ownerEvidenceRef,
             ),
             intent: commitmentProtectionLedgerIntent(protectionRequest),
-            owners: makeInventoryEffectRecoveryOwnerPersistence({
-              creates: unusedCreatePersistence,
+            owners: makeRecoveryOwners({
               protections: emptyProtections.persistence,
-              releases: unusedReleasePersistence,
             }),
           }),
         );
@@ -580,10 +926,8 @@ describe('Inventory recovery owner persistence', () => {
             '2026-09-24T22:00:00.000Z',
           ),
           intent: commitmentProtectionLedgerIntent(protectionRequest),
-          owners: makeInventoryEffectRecoveryOwnerPersistence({
-            creates: unusedCreatePersistence,
+          owners: makeRecoveryOwners({
             protections: offsetProtections.persistence,
-            releases: unusedReleasePersistence,
           }),
         }),
       );

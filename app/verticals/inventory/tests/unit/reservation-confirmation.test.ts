@@ -1,6 +1,11 @@
 import { CatalogSelectionSchema } from '@app/catalog/domain/catalog-selection-evidence';
-import { Effect, Match, Option, Schema } from 'effect';
+import type { OutboxWorkerHandlerContext, ScopedRoutineInvoker } from '@app/core-runtime';
+import type { OutboxWorkerLegalEntityScope } from '@app/core-runtime/outbox/worker';
+import { OutboxWorkerLegalEntityScopeFanout } from '@app/core-runtime/outbox/worker';
+import { Effect, Match, Option, Ref, Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
+
+import { OutboxPayloadSchema as ConfirmationIssuancePayloadSchema } from '../../shared/outbox/commerce-inventory-reservation-confirmation-issuance-requested-v1.ts';
 
 import type {
   ReservationConfirmation,
@@ -8,6 +13,7 @@ import type {
 } from '../../shared/domain/reservation-confirmation.ts';
 import {
   evaluateReservationConfirmationCommitment,
+  ReservationConfirmationSchema,
   ReservationConfirmationRejected,
   reservationConfirmationCanEstablishProtection,
 } from '../../shared/domain/reservation-confirmation.ts';
@@ -20,8 +26,16 @@ import { StockItemSchema } from '../../shared/domain/stock-item.ts';
 import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservation-issuer-failure-fields.ts';
 import { ReservationConfirmationRefSchema } from '../../shared/resources/reservation-confirmation.ts';
 import { StockItemRefSchema } from '../../shared/resources/stock-item.ts';
-import type { ReservationConfirmationIssuer } from '../../src/services/reservation-confirmation.service.ts';
+import { reservationConfirmationPersistenceForWorkerScope } from '../../src/persistence/reservation-confirmation-repository.ts';
+import type {
+  IssueReservationConfirmationInput,
+  ReservationConfirmationIssuer,
+} from '../../src/services/reservation-confirmation.service.ts';
 import { makeReservationConfirmationService } from '../../src/services/reservation-confirmation.service.ts';
+import {
+  handleExecuteReservationConfirmationIssuance,
+  ReservationConfirmationIssuanceExecution,
+} from '../../src/workers/execute-reservation-confirmation-issuance.worker.ts';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const reservationId = '22222222-2222-4222-8222-222222222222';
@@ -34,6 +48,9 @@ const bindingId = '88888888-8888-4888-8888-888888888888';
 const issuedAt = '2026-09-24T10:00:00.000Z';
 const expiresAt = '2026-09-24T10:15:00.000Z';
 const attemptId = 'attempt-checkout-1';
+const legalEntityId = '12121212-1212-4121-8121-121212121212';
+const mutationId = '13131313-1313-4131-8131-131313131313';
+const sourceActionInvocationId = '14141414-1414-4141-8141-141414141414';
 const effectId = Schema.decodeUnknownSync(ReservationAuthorityEffectIdSchema)('effect:confirmation:attempt-1');
 const decodeReservationInput = Schema.decodeUnknownSync(EstablishInventoryReservationInputSchema, {
   onExcessProperty: 'error',
@@ -233,6 +250,112 @@ const confirmationRef = Schema.decodeUnknownSync(ReservationConfirmationRefSchem
 });
 
 describe('Inventory Reservation Confirmation', () => {
+  it.effect('publishes readiness only after durable issuance and replays the exact owner proof on redelivery', () =>
+    Effect.gen(function* issueFromWorker() {
+      const reservation = yield* establishInventoryReservation(reservationInput());
+      const payload = Schema.decodeUnknownSync(ConfirmationIssuancePayloadSchema)({
+        request: {
+          confirmationRef,
+          effectId,
+          legalEntityId,
+          mutationId,
+          reservation,
+          sourceActionInvocationId,
+        },
+      });
+      let current: ReservationConfirmation | undefined;
+      const routineCalls: string[] = [];
+      const routineInvoker: ScopedRoutineInvoker = {
+        invoke: (routine, args) =>
+          Effect.sync(() => {
+            routineCalls.push(routine.routineKey);
+            let rows: readonly unknown[] = [];
+            if (routine.routineKey === 'inventory.find-reservation-confirmation-by-attempt-for-worker') {
+              rows = current === undefined ? [] : [{ record: current }];
+            } else if (routine.routineKey === 'inventory.create-or-read-reservation-confirmation-for-worker') {
+              const candidate = Schema.decodeUnknownSync(ReservationConfirmationSchema)(args.at(0));
+              current = candidate;
+              rows = [{ outcome: 'INSERTED', record: candidate }];
+            }
+            return Schema.decodeUnknownSync(Schema.Array(routine.resultSchema))(rows);
+          }),
+      };
+      const publications: { readonly durable: boolean; readonly input: unknown; readonly topic: string }[] = [];
+      const workerScope: OutboxWorkerLegalEntityScope = {
+        completionPublisher: {
+          publish: (definition, input) =>
+            Effect.sync(() => {
+              publications.push({ durable: current !== undefined, input, topic: definition.topic });
+              return { domainEventId: input.completionId, outcome: 'PUBLISHED' as const };
+            }),
+        },
+        legalEntityId,
+        routineInvoker,
+        tenantId,
+      };
+      const context = (deliveryId: string): OutboxWorkerHandlerContext => ({
+        attemptNumber: 1,
+        claimId: `claim:${deliveryId}`,
+        consumerModuleKey: 'commerce.inventory',
+        deliveryId,
+        domainEventId: confirmationId,
+        legalEntityScope: 'required',
+        messageId: `message:${deliveryId}`,
+        producerModuleKey: 'commerce.inventory',
+        tenantId,
+        tenantSequenceNo: 1n,
+        topic: 'commerce.inventory.reservation-confirmation-issuance-requested.v1',
+        workerKey: 'commerce.inventory.execute-reservation-confirmation-issuance',
+      });
+      const authorityCalls = yield* Ref.make(0);
+      const countingIssuer: ReservationConfirmationIssuer = {
+        issue: (request) =>
+          Ref.update(authorityCalls, (count) => count + 1).pipe(Effect.andThen(issuer.issue(request))),
+      };
+      const execution = {
+        execute: (scope: OutboxWorkerLegalEntityScope, input: IssueReservationConfirmationInput) =>
+          makeReservationConfirmationService({
+            issuer: countingIssuer,
+            persistence: reservationConfirmationPersistenceForWorkerScope(scope),
+          }).issue(input),
+      };
+      const run = (deliveryId: string) =>
+        handleExecuteReservationConfirmationIssuance(payload, context(deliveryId)).pipe(
+          Effect.provideService(ReservationConfirmationIssuanceExecution, execution),
+          Effect.provideService(OutboxWorkerLegalEntityScopeFanout, {
+            forEachScope: (_context, observe) => observe(workerScope),
+          }),
+        );
+
+      yield* run('delivery-confirmation-1');
+      yield* run('delivery-confirmation-2');
+
+      expect(yield* Ref.get(authorityCalls)).toBe(1);
+      expect(routineCalls).toEqual([
+        'inventory.find-reservation-confirmation-by-attempt-for-worker',
+        'inventory.create-or-read-reservation-confirmation-for-worker',
+        'inventory.find-reservation-confirmation-by-attempt-for-worker',
+      ]);
+      expect(publications).toHaveLength(2);
+      expect(publications.every(({ durable }) => durable)).toBe(true);
+      expect(publications.map(({ topic }) => topic)).toEqual([
+        'commerce.inventory.reservation-guarantee-changed.v1',
+        'commerce.inventory.reservation-guarantee-changed.v1',
+      ]);
+      expect(publications[1]?.input).toEqual(publications[0]?.input);
+      expect(publications[0]?.input).toMatchObject({
+        completionId: mutationId,
+        payloadJson: {
+          confirmationRef,
+          ordering: { _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY', occurrenceId: mutationId },
+          ownerReadOrProofKey: 'commerce.inventory.api.reservation-confirmation-verification',
+          state: 'ESTABLISHED',
+          subjectRef: reservation.ref,
+        },
+      });
+    }),
+  );
+
   it.effect('issues one selected-authority proof preserving the exact Reservation meaning and stable rank', () =>
     Effect.gen(function* issueConfirmation() {
       const reservation = yield* establishInventoryReservation(reservationInput());
@@ -303,6 +426,9 @@ describe('Inventory Reservation Confirmation', () => {
 
       expect(first.outcome).toBe('ISSUED');
       expect(replay).toEqual({ confirmation: first.confirmation, outcome: 'EXACT_REPLAY' });
+      expect(replay.confirmation.ref).toEqual(confirmationRef);
+      expect(replay.confirmation.issuanceRank).toEqual(first.confirmation.issuanceRank);
+      expect(replay.confirmation.authorityEvidence).toEqual(first.confirmation.authorityEvidence);
       expect(changedMeaning).toMatchObject({ reason: 'CONFIRMATION_IDENTITY_CONFLICT' });
       expect(sibling).toMatchObject({ reason: 'SIBLING_CONFIRMATION_FORBIDDEN' });
     }),

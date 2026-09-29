@@ -856,7 +856,7 @@ describe('Inventory Reservation create result', () => {
     }),
   );
 
-  it.effect('executes the exact Legal Entity worker scope and publishes the persisted terminal completion', () =>
+  it.effect('requests deterministic Confirmation issuance before publishing Reservation readiness', () =>
     Effect.gen(function* executeWorkerIntent() {
       const harness = yield* makeHarness;
       const staged = yield* harness.service.create(payload(), actionContext);
@@ -915,23 +915,36 @@ describe('Inventory Reservation create result', () => {
       expect(executions).toEqual([staged.result.effect.request]);
       expect(completions).toHaveLength(1);
       expect(completions[0]).toMatchObject({
-        topic: 'commerce.inventory.reservation-guarantee-changed.v1',
+        topic: 'commerce.inventory.reservation-confirmation-issuance-requested.v1',
       });
       expect(completions[0]?.input).toMatchObject({
-        completionId: mutationId,
+        completionId: expect.any(String),
         occurredAt: new Date(timestamp),
         payloadJson: {
-          ordering: { _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY', occurrenceId: mutationId },
-          state: 'ESTABLISHED',
-          subjectRef: staged.result.effect.request.reservation.ref,
+          request: {
+            confirmationRef: {
+              moduleId: 'commerce.inventory',
+              resourceId: expect.any(String),
+              resourceType: 'commerce.inventory.reservation-confirmation',
+              tenantId,
+            },
+            effectId: expect.stringMatching(/^reservation-confirmation:/u),
+            reservation: {
+              origin: { attemptId: 'attempt-1' },
+              ref: staged.result.effect.request.reservation.ref,
+            },
+          },
         },
         sourceActionInvocationId: actionInvocationId,
         subjectResourceId: reservationId,
       });
+      expect(completions.map(({ topic }) => topic)).not.toContain(
+        'commerce.inventory.reservation-guarantee-changed.v1',
+      );
     }),
   );
 
-  it.effect('redispatches unresolved debt and later publishes terminal completion with the original identities', () =>
+  it.effect('redelivers the exact Confirmation identity without publishing readiness before proof durability', () =>
     Effect.gen(function* redispatchUntilTerminal() {
       const harness = yield* makeHarness;
       const staged = yield* harness.service.create(payload(), actionContext);
@@ -1013,26 +1026,48 @@ describe('Inventory Reservation create result', () => {
         Effect.provideService(InventoryReservationCreateExecution, execution),
         Effect.provideService(OutboxWorkerLegalEntityScopeFanout, fanout),
       );
+      yield* handleExecuteInventoryReservationCreate(
+        { request: staged.result.effect.request },
+        workerContext('55555555-6666-4777-8888-999999999999'),
+      ).pipe(
+        Effect.provideService(InventoryReservationCreateExecution, execution),
+        Effect.provideService(OutboxWorkerLegalEntityScopeFanout, fanout),
+      );
 
       expect(publications.map(({ topic }) => topic)).toEqual([
         'commerce.inventory.inventory-reservation-create-requested.v1',
-        'commerce.inventory.reservation-guarantee-changed.v1',
+        'commerce.inventory.reservation-confirmation-issuance-requested.v1',
+        'commerce.inventory.reservation-confirmation-issuance-requested.v1',
       ]);
       expect(publications[0]?.input).toMatchObject({
         payloadJson: { request: staged.result.effect.request },
         sourceActionInvocationId: actionInvocationId,
       });
       expect(publications[1]?.input).toMatchObject({
-        completionId: mutationId,
+        completionId: expect.any(String),
         occurredAt: new Date(timestamp),
         payloadJson: {
-          ordering: { _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY', occurrenceId: mutationId },
-          state: 'ESTABLISHED',
-          subjectRef: established.reservation.ref,
+          request: {
+            confirmationRef: {
+              moduleId: 'commerce.inventory',
+              resourceId: expect.any(String),
+              resourceType: 'commerce.inventory.reservation-confirmation',
+              tenantId,
+            },
+            effectId: expect.stringMatching(/^reservation-confirmation:/u),
+            reservation: {
+              origin: { attemptId: 'attempt-1' },
+              ref: established.reservation.ref,
+            },
+          },
         },
         sourceActionInvocationId: actionInvocationId,
       });
-      expect(yield* Ref.get(attempts)).toBe(2);
+      expect(publications[2]?.input).toEqual(publications[1]?.input);
+      expect(publications.map(({ topic }) => topic)).not.toContain(
+        'commerce.inventory.reservation-guarantee-changed.v1',
+      );
+      expect(yield* Ref.get(attempts)).toBe(3);
       expect(staged.result.effect.request.effectId).toBe(effectId);
       expect(staged.result.effect.request.mutationId).toBe(mutationId);
     }),

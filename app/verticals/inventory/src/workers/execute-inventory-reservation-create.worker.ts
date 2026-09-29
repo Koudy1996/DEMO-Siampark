@@ -16,9 +16,9 @@ import {
   outboxTopic,
 } from '@app/inventory/outbox/commerce-inventory-inventory-reservation-create-requested-v1';
 import {
-  OutboxPayloadSchema as ReservationGuaranteeChangedPayloadSchema,
-  outboxTopic as reservationGuaranteeChangedTopic,
-} from '@app/inventory/outbox/commerce-inventory-reservation-guarantee-changed-v1';
+  OutboxPayloadSchema as ReservationConfirmationIssuanceRequestedPayloadSchema,
+  outboxTopic as reservationConfirmationIssuanceRequestedTopic,
+} from '@app/inventory/outbox/commerce-inventory-reservation-confirmation-issuance-requested-v1';
 
 import {
   EstablishedReservationCreateEffectSchema,
@@ -27,6 +27,8 @@ import {
   ReservationCreateEffectSchema,
   ResolvedNoReservationCreateEffectSchema,
 } from '../../shared/domain/inventory-reservation-create.ts';
+import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservation-issuer-failure-fields.ts';
+import { ReservationConfirmationRefSchema } from '../../shared/resources/reservation-confirmation.ts';
 import { reservationCreateEffectPersistenceForWorkerScope } from '../persistence/reservation-create-effect-repository.ts';
 import type { InventoryReservationCreateExecutionService } from '../services/inventory-reservation-create.service.ts';
 
@@ -47,12 +49,12 @@ const terminalCompletion = defineOutboxWorkerCompletion({
   workerKey,
 });
 
-const reservationGuaranteeChanged = defineOutboxWorkerCompletion({
+const reservationConfirmationIssuanceRequested = defineOutboxWorkerCompletion({
   consumerModuleKey: moduleKey,
-  eventType: reservationGuaranteeChangedTopic,
-  payloadSchema: ReservationGuaranteeChangedPayloadSchema,
+  eventType: reservationConfirmationIssuanceRequestedTopic,
+  payloadSchema: ReservationConfirmationIssuanceRequestedPayloadSchema,
   producerModuleKey: moduleKey,
-  topic: reservationGuaranteeChangedTopic,
+  topic: reservationConfirmationIssuanceRequestedTopic,
   workerKey,
 });
 
@@ -70,6 +72,28 @@ const redispatchId = (context: OutboxWorkerHandlerContext, request: OutboxPayloa
     .update(`${context.deliveryId}\u0000${request.mutationId}\u0000reservation-create-reconciliation`)
     .digest('hex');
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+};
+
+const deterministicUuid = (seed: string) => {
+  const digest = createHash('sha256').update(seed).digest('hex');
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+};
+
+const confirmationIdentityFor = (request: OutboxPayload['request']) => {
+  const confirmationId = deterministicUuid(
+    `${request.reservation.ref.tenantId}\u0000${request.reservation.ref.resourceId}\u0000${request.reservation.origin.attemptId}\u0000reservation-confirmation`,
+  );
+  return Effect.all({
+    confirmationRef: Schema.decodeUnknownEffect(ReservationConfirmationRefSchema)({
+      moduleId: moduleKey,
+      resourceId: confirmationId,
+      resourceType: 'commerce.inventory.reservation-confirmation',
+      tenantId: request.reservation.ref.tenantId,
+    }),
+    effectId: Schema.decodeUnknownEffect(ReservationAuthorityEffectIdSchema)(
+      `reservation-confirmation:${confirmationId}`,
+    ),
+  }).pipe(Effect.mapError((cause) => unavailable(request, cause)));
 };
 
 const redispatchOccurredAt = (effect: typeof ReservationCreateEffectSchema.Type) =>
@@ -149,14 +173,18 @@ export const handleExecuteInventoryReservationCreate = Effect.fn('ExecuteInvento
                   return yield* Effect.void;
                 }
                 if (Schema.is(EstablishedReservationCreateEffectSchema)(terminal)) {
-                  yield* scope.completionPublisher.publish(reservationGuaranteeChanged, {
-                    completionId: request.mutationId,
+                  const identity = yield* confirmationIdentityFor(request);
+                  yield* scope.completionPublisher.publish(reservationConfirmationIssuanceRequested, {
+                    completionId: identity.confirmationRef.resourceId,
                     occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(terminal.reservation.establishedAt)),
                     payloadJson: {
-                      ordering: { _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY', occurrenceId: request.mutationId },
-                      ownerReadOrProofKey: 'commerce.inventory.api.inventory-reservation-detail',
-                      state: 'ESTABLISHED',
-                      subjectRef: terminal.reservation.ref,
+                      request: {
+                        ...identity,
+                        legalEntityId: request.legalEntityId,
+                        mutationId: request.mutationId,
+                        reservation: terminal.reservation,
+                        sourceActionInvocationId: request.sourceActionInvocationId,
+                      },
                     },
                     sourceActionInvocationId: request.sourceActionInvocationId,
                     subjectModuleKey: terminal.reservation.ref.moduleId,

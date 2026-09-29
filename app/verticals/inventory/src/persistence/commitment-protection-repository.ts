@@ -1,18 +1,27 @@
-import { findPostgresFailure } from '@app/core-runtime';
+import { defineScopedRoutine, findPostgresFailure } from '@app/core-runtime';
 import type { OperationalScope, ReadServiceFactory } from '@app/core-runtime';
+import type { OutboxWorkerLegalEntityScope } from '@app/core-runtime/outbox/worker';
 import { and, asc, eq, or } from 'drizzle-orm';
 import { DateTime, Effect, Option, Result, Schema } from 'effect';
 
 import {
   CommitmentProtectionRejected,
+  CommitmentProtectionEffectSchema,
   CommitmentProtectionSchema,
   CommitmentProtectionUnavailable,
+  sameCommitmentProtectionRequest,
 } from '../../shared/domain/commitment-protection.ts';
 import type {
   CommitmentProtection,
+  CommitmentProtectionEffect,
   CommitmentProtectionPersistence,
   EstablishCommitmentProtectionError,
 } from '../../shared/domain/commitment-protection.ts';
+import {
+  CommitmentProtectionInventoryEffectLedgerIntentSchema,
+  InventoryEffectLedgerRecordSchema,
+} from '../../shared/domain/inventory-effect-ledger.ts';
+import type { InventoryEffectLedgerRecord } from '../../shared/domain/inventory-effect-ledger.ts';
 import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservation-issuer-failure-fields.ts';
 import { currentBindingRequirementsMatch, lockBindingCorrectionScopes } from './binding-correction-serialization.ts';
 import {
@@ -25,6 +34,23 @@ type ScopedTransaction = Parameters<ReadServiceFactory<Readonly<Record<string, n
 type ProtectionRow = typeof inventoryCommitmentProtections.$inferSelect;
 type HistoryRow = typeof inventoryCommitmentProtectionHistory.$inferSelect;
 type ProtectionEffectId = typeof ReservationAuthorityEffectIdSchema.Type;
+
+const workerFinalizationRowSchema = Schema.Struct({ record: InventoryEffectLedgerRecordSchema });
+export const finalizeCommitmentProtectionForWorkerRoutine = defineScopedRoutine({
+  name: 'finalize_commitment_protection_for_worker',
+  ownerModuleKey: 'commerce.inventory',
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'text' },
+    { source: 'input', type: 'integer' },
+    { source: 'input', type: 'text' },
+    { source: 'input', type: 'jsonb' },
+  ],
+  resultSchema: workerFinalizationRowSchema,
+  routineKey: 'inventory.finalize-commitment-protection-for-worker',
+  schema: 'inventory',
+});
 
 const persistenceReadEffectId = Result.getOrThrow(
   Schema.decodeResult(ReservationAuthorityEffectIdSchema)('commitment-protection:persistence-read'),
@@ -73,13 +99,14 @@ export const mapCommitmentProtectionWriteError = (
   const identity = findPostgresFailure(
     cause,
     ({ code, constraint }) =>
-      code === uniqueViolationSqlState &&
-      [
-        'commitment_protections_pkey',
-        'inventory_commitment_protections_scope_id_uk',
-        'inventory_commitment_protections_confirmation_uk',
-        'inventory_commitment_protections_authority_effect_uk',
-      ].includes(constraint ?? ''),
+      (code === uniqueViolationSqlState &&
+        [
+          'commitment_protections_pkey',
+          'inventory_commitment_protections_scope_id_uk',
+          'inventory_commitment_protections_confirmation_uk',
+          'inventory_commitment_protections_authority_effect_uk',
+        ].includes(constraint ?? '')) ||
+      (code === checkViolationSqlState && constraint === 'inventory_commitment_protection_worker_finalization_ck'),
   );
   if (Option.isSome(identity)) {
     return rejected(effectId, 'PROTECTION_IDENTITY_CONFLICT');
@@ -379,4 +406,43 @@ export const commitmentProtectionPersistenceForScope = (
   });
 
   return Object.freeze({ createOrRead, findByRef, findByReservationAttempt, readHistory, saveRevision });
+};
+
+/** Atomically installs an exact Protection (when applicable) and terminalizes its durable ledger intent. */
+export const finalizeCommitmentProtectionForWorker = (
+  scope: OutboxWorkerLegalEntityScope,
+  expected: InventoryEffectLedgerRecord,
+  effect: CommitmentProtectionEffect,
+): Effect.Effect<InventoryEffectLedgerRecord, EstablishCommitmentProtectionError> => {
+  if (!Schema.is(CommitmentProtectionEffectSchema)(effect)) {
+    return Effect.fail(rejected(persistenceReadEffectId, 'INVALID_PROTECTION'));
+  }
+  if (
+    expected.tenantId !== scope.tenantId ||
+    effect.request.confirmation.ref.tenantId !== scope.tenantId ||
+    effect.request.protectionRef.tenantId !== scope.tenantId ||
+    effect.request.legalEntityId !== scope.legalEntityId
+  ) {
+    return Effect.fail(rejected(effect.request.effectId, 'TENANT_SCOPE_MISMATCH'));
+  }
+  if (
+    !Schema.is(CommitmentProtectionInventoryEffectLedgerIntentSchema)(expected.intent) ||
+    String(expected.effectId) !== String(effect.request.effectId) ||
+    !sameCommitmentProtectionRequest(expected.intent.request, effect.request)
+  ) {
+    return Effect.fail(rejected(effect.request.effectId, 'PROTECTION_IDENTITY_CONFLICT'));
+  }
+  return scope.routineInvoker
+    .invoke(finalizeCommitmentProtectionForWorkerRoutine, [
+      expected.effectId,
+      expected.revision,
+      expected.currentState,
+      effect,
+    ])
+    .pipe(
+      Effect.mapError((cause) => mapCommitmentProtectionWriteError(effect.request.effectId, cause)),
+      Effect.flatMap(([row]) =>
+        row === undefined ? Effect.fail(unavailable(effect.request.effectId)) : Effect.succeed(row.record),
+      ),
+    );
 };

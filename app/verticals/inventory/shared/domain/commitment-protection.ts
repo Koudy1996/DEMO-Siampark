@@ -5,7 +5,7 @@ import { ReservationConfirmationSchema } from './reservation-confirmation.ts';
 import { CommitmentProtectionConflict } from './commitment-protection-conflict.ts';
 import { CommitmentProtectionRejected } from './commitment-protection-rejected.ts';
 import { CommitmentProtectionUnavailable } from './commitment-protection-unavailable.ts';
-import { LegalEntityIdSchema } from './physical-stock-effect.ts';
+import { ActionInvocationIdSchema, LegalEntityIdSchema } from './physical-stock-effect.ts';
 import { ReservationAuthorityEffectIdSchema } from './reservation-issuer-failure-fields.ts';
 import { AuthoritativeReservationEvidenceSchema } from './reservation-authority.ts';
 import { CommitmentProtectionRefSchema } from '../resources/commitment-protection.ts';
@@ -79,7 +79,10 @@ export const CommitmentProtectionEffectRequestSchema = Schema.Struct({
   confirmation: ReservationConfirmationSchema,
   effectId: ReservationAuthorityEffectIdSchema,
   legalEntityId: LegalEntityIdSchema,
+  mutationId: Schema.String.check(Schema.isTrimmed(), Schema.isUUID()),
   protectionRef: CommitmentProtectionRefSchema,
+  requestedAt: protectionInstant,
+  sourceActionInvocationId: ActionInvocationIdSchema,
 });
 export type CommitmentProtectionEffectRequest = typeof CommitmentProtectionEffectRequestSchema.Type;
 
@@ -114,6 +117,12 @@ export const CommitmentProtectionAtRiskResultSchema = Schema.TaggedStruct('AT_RI
   reconciliationRequired: Schema.Literal(true),
   replayed: Schema.Boolean,
 });
+export const CommitmentProtectionPendingResultSchema = Schema.TaggedStruct('PENDING', {
+  effectId: ReservationAuthorityEffectIdSchema,
+  fence: Schema.Literal('BLOCKED_PENDING_RECOVERY'),
+  recovery: Schema.Literal('RECOVER_ORIGINAL_EFFECT'),
+  replayed: Schema.Boolean,
+});
 export const CommitmentProtectionIndeterminateResultSchema = Schema.TaggedStruct('INDETERMINATE', {
   effectId: ReservationAuthorityEffectIdSchema,
   fence: Schema.Literal('BLOCKED_PENDING_RECOVERY'),
@@ -128,6 +137,7 @@ export const CommitmentProtectionNotProtectableResultSchema = Schema.TaggedStruc
 export const EstablishCommitmentProtectionResultSchema = Schema.Union([
   CommitmentProtectionProtectedResultSchema,
   CommitmentProtectionAtRiskResultSchema,
+  CommitmentProtectionPendingResultSchema,
   CommitmentProtectionIndeterminateResultSchema,
   CommitmentProtectionNotProtectableResultSchema,
 ]);

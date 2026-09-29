@@ -9,14 +9,20 @@ import {
 } from '@app/core-runtime/outbox/worker';
 
 import { InventoryReservationCreateUnavailable } from '../../shared/domain/inventory-reservation-create.ts';
+import { ReservationConfirmationRejected } from '../../shared/domain/reservation-confirmation.ts';
+import { finalizeCommitmentProtectionForWorker } from '../persistence/commitment-protection-repository.ts';
 import { inventoryEffectLedgerPersistenceForWorkerScope } from '../persistence/inventory-effect-ledger-repository.ts';
 import { physicalStockEffectPersistenceForWorkerScope } from '../persistence/physical-stock-effect-repository.ts';
+import { reservationConfirmationPersistenceForWorkerScope } from '../persistence/reservation-confirmation-repository.ts';
 import { reservationShortageImpactPersistenceForWorkerScope } from '../persistence/reservation-shortage-impact-repository.ts';
 import { reservationCreateEffectPersistenceForWorkerScope } from '../persistence/reservation-create-effect-repository.ts';
 import { reservationReleaseEffectPersistenceForWorkerScope } from '../persistence/reservation-release-effect-repository.ts';
 import { InventoryBackendEffects } from '../services/inventory-backend-effects.service.ts';
 /* oxlint-disable anti-slop-effect/no-service-constructor-imports -- This owner composition layer binds tested constructors to their Context services; expires: 2027-03-31. */
+import { CommitmentProtectionAuthorityPort } from '../services/commitment-protection-authority.ts';
+import { makeCommitmentProtectionEstablishmentExecutionService } from '../services/commitment-protection.service.ts';
 import { makeInventoryEffectLedgerService } from '../services/inventory-effect-ledger.service.ts';
+import { InventoryEffectRecoveryAuthorityPort } from '../services/inventory-effect-recovery-authority.ts';
 import {
   InventoryReservationCreateBackendPort,
   InventoryReservationCreateBackendUnavailableLive,
@@ -31,9 +37,13 @@ import {
   reservationReleaseUnavailable,
 } from '../services/inventory-reservation-release.service.ts';
 import { PhysicalStockEffects, makePhysicalStockEffectsService } from '../services/physical-stock-effects.service.ts';
+import { makeReservationIssuerService } from '../services/reservation-issuer.service.ts';
+import { makeReservationConfirmationService } from '../services/reservation-confirmation.service.ts';
 import { makeReservationShortageImpactService } from '../services/reservation-shortage-impact.service.ts';
+import { CommitmentProtectionEstablishmentExecution } from '../workers/execute-commitment-protection-establishment.worker.ts';
 import { InventoryReservationCreateExecution } from '../workers/execute-inventory-reservation-create.worker.ts';
 import { InventoryReservationReleaseExecution } from '../workers/execute-inventory-reservation-release.worker.ts';
+import { ReservationConfirmationIssuanceExecution } from '../workers/execute-reservation-confirmation-issuance.worker.ts';
 /* oxlint-enable anti-slop-effect/no-service-constructor-imports */
 
 export { CorePersistenceLive as outboxWorkerCorePersistenceLive } from '@app/core-runtime/outbox/worker';
@@ -135,12 +145,60 @@ const inventoryReservationReleaseExecutionLive = Layer.effect(
   Layer.provide(InventoryReservationReleaseBackendUnavailableLive),
 );
 
+const reservationConfirmationIssuanceExecutionLive = Layer.effect(
+  ReservationConfirmationIssuanceExecution,
+  Effect.gen(function* makeReservationConfirmationIssuanceExecutionLive() {
+    const authority = yield* CommitmentProtectionAuthorityPort;
+    const issuer = makeReservationIssuerService({
+      issue: (command) => authority.establish(command),
+    });
+    return {
+      execute: (scope, input) => {
+        if (!isLegalEntityWorkerScope(scope)) {
+          return Effect.fail(
+            new ReservationConfirmationRejected({
+              code: 'reservation_confirmation_rejected',
+              confirmationRef: input.confirmationRef,
+              reason: 'TENANT_SCOPE_MISMATCH',
+            }),
+          );
+        }
+        return makeReservationConfirmationService({
+          issuer,
+          persistence: reservationConfirmationPersistenceForWorkerScope(scope),
+        }).issue(input);
+      },
+    };
+  }),
+);
+
+const commitmentProtectionEstablishmentExecutionLive = Layer.effect(
+  CommitmentProtectionEstablishmentExecution,
+  Effect.gen(function* makeCommitmentProtectionEstablishmentExecutionLive() {
+    const authority = yield* CommitmentProtectionAuthorityPort;
+    const recoveryAuthority = yield* InventoryEffectRecoveryAuthorityPort;
+    return makeCommitmentProtectionEstablishmentExecutionService({
+      authority,
+      confirmations: reservationConfirmationPersistenceForWorkerScope,
+      finalizer: finalizeCommitmentProtectionForWorker,
+      ledger: (scope) =>
+        makeInventoryEffectLedgerService(
+          inventoryEffectLedgerPersistenceForWorkerScope(scope),
+          DateTime.now.pipe(Effect.map(DateTime.formatIso)),
+        ),
+      recoveryAuthority,
+    });
+  }),
+);
+
 type InventoryOutboxWorkerServices =
+  | CommitmentProtectionEstablishmentExecution
   | InventoryReservationCreateExecution
   | InventoryReservationReleaseExecution
   | OutboxRuntime
   | OutboxWorkerLegalEntityScopeFanout
-  | PhysicalStockEffects;
+  | PhysicalStockEffects
+  | ReservationConfirmationIssuanceExecution;
 
 export const outboxWorkerLayer: Layer.Layer<
   InventoryOutboxWorkerServices,
@@ -151,7 +209,9 @@ export const outboxWorkerLayer: Layer.Layer<
 > = Layer.mergeAll(
   OutboxWorkerInfrastructureLive,
   OutboxWorkerLegalEntityScopeFanoutLive,
+  commitmentProtectionEstablishmentExecutionLive,
   inventoryReservationCreateExecutionLive,
   inventoryReservationReleaseExecutionLive,
   physicalStockEffectsLive,
+  reservationConfirmationIssuanceExecutionLive,
 );

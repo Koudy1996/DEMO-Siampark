@@ -5,7 +5,14 @@ import {
   ReservationConfirmationRejected,
   reservationConfirmationCanEstablishProtection,
 } from '../../shared/domain/reservation-confirmation.ts';
-import { mapReservationConfirmationWriteError } from '../../src/persistence/reservation-confirmation-repository.ts';
+import {
+  createOrReadReservationConfirmationForWorkerRoutine,
+  findReservationConfirmationByAttemptForWorkerRoutine,
+  findReservationConfirmationByRefForWorkerRoutine,
+  mapReservationConfirmationWriteError,
+  readReservationConfirmationHistoryForWorkerRoutine,
+  saveReservationConfirmationRevisionForWorkerRoutine,
+} from '../../src/persistence/reservation-confirmation-repository.ts';
 import {
   INVENTORY_RESERVATION_CONFIRMATION_TABLES,
   inventoryReservationConfirmationHistory,
@@ -94,5 +101,37 @@ describe('Reservation Confirmation persistence contract', () => {
     expect(identity).toMatchObject({ reason: 'CONFIRMATION_IDENTITY_CONFLICT' });
     expect(sibling).toMatchObject({ reason: 'SIBLING_CONFIRMATION_FORBIDDEN' });
     expect(reservationConfirmationCanEstablishProtection).toBeTypeOf('function');
+  });
+
+  it('exposes only owner-scoped routines for worker reads, creation, history, and revision writes', () => {
+    expect(findReservationConfirmationByRefForWorkerRoutine).toMatchObject({
+      routineKey: 'inventory.find-reservation-confirmation-by-ref-for-worker',
+    });
+    expect(findReservationConfirmationByAttemptForWorkerRoutine).toMatchObject({
+      routineKey: 'inventory.find-reservation-confirmation-by-attempt-for-worker',
+    });
+    expect(createOrReadReservationConfirmationForWorkerRoutine).toMatchObject({
+      routineKey: 'inventory.create-or-read-reservation-confirmation-for-worker',
+    });
+    expect(readReservationConfirmationHistoryForWorkerRoutine).toMatchObject({
+      routineKey: 'inventory.read-reservation-confirmation-history-for-worker',
+    });
+    expect(saveReservationConfirmationRevisionForWorkerRoutine).toMatchObject({
+      routineKey: 'inventory.save-reservation-confirmation-revision-for-worker',
+    });
+    expect(
+      [
+        findReservationConfirmationByRefForWorkerRoutine,
+        findReservationConfirmationByAttemptForWorkerRoutine,
+        createOrReadReservationConfirmationForWorkerRoutine,
+        readReservationConfirmationHistoryForWorkerRoutine,
+        saveReservationConfirmationRevisionForWorkerRoutine,
+      ].map(({ parameters }) => parameters.slice(0, 2).map(({ source, type }) => ({ source, type }))),
+    ).toEqual(
+      Array.from({ length: 5 }, () => [
+        { source: 'tenantId', type: 'uuid' },
+        { source: 'legalEntityId', type: 'uuid' },
+      ]),
+    );
   });
 });

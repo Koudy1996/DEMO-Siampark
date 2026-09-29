@@ -7,16 +7,28 @@ import {
   InventoryCommittedEventSubjectRefSchema,
   InventoryImmutableOccurrenceOrderingSchema,
 } from '../domain/inventory-domain-event-handoff.ts';
+import { ReservationConfirmationRefSchema } from '../resources/reservation-confirmation.ts';
 
-export const OutboxPayloadSchema = Schema.Struct({
-  ordering: InventoryImmutableOccurrenceOrderingSchema,
-  ownerReadOrProofKey: Schema.Literal('commerce.inventory.api.inventory-reservation-detail'),
-  state: Schema.Literals(['ESTABLISHED', 'RELEASED', 'AT_RISK']),
-  subjectRef: Schema.Struct({
-    ...InventoryCommittedEventSubjectRefSchema.fields,
-    resourceType: Schema.Literal('commerce.inventory.inventory-reservation'),
-  }),
+const subjectRef = Schema.Struct({
+  ...InventoryCommittedEventSubjectRefSchema.fields,
+  resourceType: Schema.Literal('commerce.inventory.inventory-reservation'),
 });
+
+export const OutboxPayloadSchema = Schema.Union([
+  Schema.Struct({
+    confirmationRef: ReservationConfirmationRefSchema,
+    ordering: InventoryImmutableOccurrenceOrderingSchema,
+    ownerReadOrProofKey: Schema.Literal('commerce.inventory.api.reservation-confirmation-verification'),
+    state: Schema.Literal('ESTABLISHED'),
+    subjectRef,
+  }),
+  Schema.Struct({
+    ordering: InventoryImmutableOccurrenceOrderingSchema,
+    ownerReadOrProofKey: Schema.Literal('commerce.inventory.api.inventory-reservation-detail'),
+    state: Schema.Literals(['RELEASED', 'AT_RISK']),
+    subjectRef,
+  }),
+]);
 export type OutboxPayload = Schema.Schema.Type<typeof OutboxPayloadSchema>;
 
 export const outboxTopic = 'commerce.inventory.reservation-guarantee-changed.v1' as const;

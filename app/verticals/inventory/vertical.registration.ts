@@ -17,8 +17,10 @@ import { establishCatalogToStockBindingAction } from './src/actions/establish-ca
 import { establishCommitmentProtectionAction } from './src/actions/establish-commitment-protection.action.ts';
 import { establishExternalStockCorrelationAction } from './src/actions/establish-external-stock-correlation.action.ts';
 import { establishStockSharingEligibilityAction } from './src/actions/establish-stock-sharing-eligibility.action.ts';
+import { executeCommitmentProtectionEstablishmentWorker } from './src/workers/execute-commitment-protection-establishment.worker.ts';
 import { executeInventoryReservationCreateWorker } from './src/workers/execute-inventory-reservation-create.worker.ts';
 import { executeInventoryReservationReleaseWorker } from './src/workers/execute-inventory-reservation-release.worker.ts';
+import { executeReservationConfirmationIssuanceWorker } from './src/workers/execute-reservation-confirmation-issuance.worker.ts';
 import { executeStockIssueWorker } from './src/workers/execute-stock-issue.worker.ts';
 import { executeStockReceiptWorker } from './src/workers/execute-stock-receipt.worker.ts';
 import { importSourceAssertionAction } from './src/actions/import-source-assertion.action.ts';
@@ -93,8 +95,10 @@ export const inventoryRegistration = defineVerticalRuntimeRegistration({
   manifest: inventoryManifest,
   outboxWorkers: [
     // <generated-module-registration-workers>
+    executeCommitmentProtectionEstablishmentWorker,
     executeInventoryReservationCreateWorker,
     executeInventoryReservationReleaseWorker,
+    executeReservationConfirmationIssuanceWorker,
     executeStockIssueWorker,
     executeStockReceiptWorker,
     // </generated-module-registration-workers>

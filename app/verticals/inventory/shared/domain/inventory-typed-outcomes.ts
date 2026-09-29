@@ -294,6 +294,7 @@ export const InventoryCommitmentProtectionCapabilityOutcomeSchema = Schema.Union
 const CommitmentProtectionNextStepInputSchema = Schema.Union([
   Schema.TaggedStruct('PROTECTED', {}),
   Schema.TaggedStruct('AT_RISK', {}),
+  Schema.TaggedStruct('PENDING', {}),
   Schema.TaggedStruct('INDETERMINATE', {}),
   Schema.TaggedStruct('NOT_PROTECTABLE', {}),
   Schema.TaggedStruct('CommitmentProtectionRejected', {}),
@@ -307,6 +308,7 @@ export const inventoryCommitmentProtectionNextStep = (outcome: CommitmentProtect
   Match.value(outcome).pipe(
     Match.tag('PROTECTED', () => 'CONTINUE' as const),
     Match.tag('AT_RISK', () => 'RECONCILE' as const),
+    Match.tag('PENDING', () => 'RECOVER_ORIGINAL_EFFECT' as const),
     Match.tag('INDETERMINATE', () => 'RECOVER_ORIGINAL_EFFECT' as const),
     Match.tag('NOT_PROTECTABLE', () => 'STOP' as const),
     Match.tag('CommitmentProtectionRejected', () => 'STOP' as const),

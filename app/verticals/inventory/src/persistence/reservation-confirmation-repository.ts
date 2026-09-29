@@ -1,5 +1,6 @@
-import { findPostgresFailure } from '@app/core-runtime';
+import { defineScopedRoutine, findPostgresFailure } from '@app/core-runtime';
 import type { OperationalScope, ReadServiceFactory } from '@app/core-runtime';
+import type { OutboxWorkerLegalEntityScope } from '@app/core-runtime/outbox/worker';
 import { and, asc, eq, or } from 'drizzle-orm';
 import { DateTime, Effect, Option, Schema } from 'effect';
 
@@ -24,6 +25,80 @@ import {
 type ScopedTransaction = Parameters<ReadServiceFactory<Readonly<Record<string, never>>>>[0];
 type ConfirmationRow = typeof inventoryReservationConfirmations.$inferSelect;
 type HistoryRow = typeof inventoryReservationConfirmationHistory.$inferSelect;
+const INVENTORY_MODULE_ID = 'commerce.inventory' as const;
+
+const confirmationRecordRowSchema = Schema.Struct({ record: ReservationConfirmationSchema });
+const confirmationWriteRowSchema = Schema.Struct({
+  outcome: Schema.Literals(['EXISTING', 'INSERTED']),
+  record: ReservationConfirmationSchema,
+});
+
+export const findReservationConfirmationByRefForWorkerRoutine = defineScopedRoutine({
+  name: 'find_reservation_confirmation_by_ref_for_worker',
+  ownerModuleKey: INVENTORY_MODULE_ID,
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'uuid' },
+  ],
+  resultSchema: confirmationRecordRowSchema,
+  routineKey: 'inventory.find-reservation-confirmation-by-ref-for-worker',
+  schema: 'inventory',
+});
+
+export const findReservationConfirmationByAttemptForWorkerRoutine = defineScopedRoutine({
+  name: 'find_reservation_confirmation_by_attempt_for_worker',
+  ownerModuleKey: INVENTORY_MODULE_ID,
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'uuid' },
+    { source: 'input', type: 'text' },
+  ],
+  resultSchema: confirmationRecordRowSchema,
+  routineKey: 'inventory.find-reservation-confirmation-by-attempt-for-worker',
+  schema: 'inventory',
+});
+
+export const createOrReadReservationConfirmationForWorkerRoutine = defineScopedRoutine({
+  name: 'create_or_read_reservation_confirmation_for_worker',
+  ownerModuleKey: INVENTORY_MODULE_ID,
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'jsonb' },
+  ],
+  resultSchema: confirmationWriteRowSchema,
+  routineKey: 'inventory.create-or-read-reservation-confirmation-for-worker',
+  schema: 'inventory',
+});
+
+export const readReservationConfirmationHistoryForWorkerRoutine = defineScopedRoutine({
+  name: 'read_reservation_confirmation_history_for_worker',
+  ownerModuleKey: INVENTORY_MODULE_ID,
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'uuid' },
+  ],
+  resultSchema: confirmationRecordRowSchema,
+  routineKey: 'inventory.read-reservation-confirmation-history-for-worker',
+  schema: 'inventory',
+});
+
+export const saveReservationConfirmationRevisionForWorkerRoutine = defineScopedRoutine({
+  name: 'save_reservation_confirmation_revision_for_worker',
+  ownerModuleKey: INVENTORY_MODULE_ID,
+  parameters: [
+    { source: 'tenantId', type: 'uuid' },
+    { source: 'legalEntityId', type: 'uuid' },
+    { source: 'input', type: 'jsonb' },
+    { source: 'input', type: 'jsonb' },
+  ],
+  resultSchema: confirmationRecordRowSchema,
+  routineKey: 'inventory.save-reservation-confirmation-revision-for-worker',
+  schema: 'inventory',
+});
 
 const unavailable = (cause?: unknown) => {
   const failure = new ReservationConfirmationUnavailable({
@@ -301,3 +376,41 @@ export const reservationConfirmationPersistenceForScope = (
 
   return Object.freeze({ createOrRead, findByRef, findByReservationAttempt, readHistory, saveRevision });
 };
+
+export const reservationConfirmationPersistenceForWorkerScope = (
+  scope: OutboxWorkerLegalEntityScope,
+): ReservationConfirmationPersistence => ({
+  createOrRead: (candidate) =>
+    scope.routineInvoker.invoke(createOrReadReservationConfirmationForWorkerRoutine, [candidate]).pipe(
+      Effect.mapError(mapReservationConfirmationWriteError),
+      Effect.flatMap(([row]) =>
+        row === undefined
+          ? Effect.fail(unavailable())
+          : Effect.succeed({ confirmation: row.record, outcome: row.outcome }),
+      ),
+    ),
+  findByRef: (ref) =>
+    scope.routineInvoker.invoke(findReservationConfirmationByRefForWorkerRoutine, [ref.resourceId]).pipe(
+      Effect.mapError((cause) => unavailable(cause)),
+      Effect.map(([row]) => Option.fromNullishOr(row?.record)),
+    ),
+  findByReservationAttempt: (reservationRef, attemptId) =>
+    scope.routineInvoker
+      .invoke(findReservationConfirmationByAttemptForWorkerRoutine, [reservationRef.resourceId, attemptId])
+      .pipe(
+        Effect.mapError((cause) => unavailable(cause)),
+        Effect.map(([row]) => Option.fromNullishOr(row?.record)),
+      ),
+  readHistory: (ref) =>
+    scope.routineInvoker.invoke(readReservationConfirmationHistoryForWorkerRoutine, [ref.resourceId]).pipe(
+      Effect.mapError((cause) => unavailable(cause)),
+      Effect.map((rows) => rows.map(({ record }) => record)),
+    ),
+  saveRevision: ({ current, next }) =>
+    scope.routineInvoker.invoke(saveReservationConfirmationRevisionForWorkerRoutine, [current, next]).pipe(
+      Effect.mapError(mapReservationConfirmationWriteError),
+      Effect.flatMap(([row]) =>
+        row === undefined ? Effect.fail(rejected('REVISION_CONFLICT', current.ref)) : Effect.succeed(row.record),
+      ),
+    ),
+});

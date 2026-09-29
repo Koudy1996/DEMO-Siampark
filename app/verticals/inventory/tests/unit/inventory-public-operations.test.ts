@@ -151,4 +151,24 @@ describe('Inventory public owner contracts', () => {
       'Recover only the original effect identity when unresolved or indeterminate.',
     );
   });
+
+  it('distinguishes queued Commitment Protection from uncertainty and preserves the original fence identity', () => {
+    const protection = inventoryPublicActionContracts.find(
+      ({ key }) => key === 'commerce.inventory.establish-commitment-protection',
+    );
+
+    expect(protection?.outcomes.vocabulary).toEqual([
+      'PENDING',
+      'PROTECTED',
+      'AT_RISK',
+      'INDETERMINATE',
+      'NOT_PROTECTABLE',
+    ]);
+    expect(protection?.safeCallerNextSteps).toContain(
+      'PENDING means the original fence intent is durably queued; recover that original effect.',
+    );
+    expect(protection?.safeCallerNextSteps).toContain(
+      'Never create a new fence while the original effect is pending or indeterminate.',
+    );
+  });
 });

@@ -16,6 +16,7 @@ import { makeDrizzleCatalogToStockBindingPersistence } from '../persistence/cata
 import { commitmentProtectionPersistenceForScope } from '../persistence/commitment-protection-repository.ts';
 import { externalStockCorrelationPersistenceForScope } from '../persistence/external-stock-correlation-repository.ts';
 import { inventoryEffectLedgerPersistenceForScope } from '../persistence/inventory-effect-ledger-repository.ts';
+import { inventoryObligationPersistenceForScope } from '../persistence/inventory-obligation-repository.ts';
 import { inventorySourceConflictPersistenceForScope } from '../persistence/inventory-source-conflict-repository.ts';
 import { reservationConfirmationPersistenceForScope } from '../persistence/reservation-confirmation-repository.ts';
 import { stockSharingEligibilityPersistenceForScope } from '../persistence/stock-sharing-eligibility-repository.ts';
@@ -39,6 +40,7 @@ const ownerRefFor = (input: InventoryReconciliationEvidenceQuery) =>
     Match.tag('PROTECTION_HISTORY', ({ protectionRef }) => protectionRef),
     Match.tag('EFFECT_OUTCOME', ({ ownerRef }) => ownerRef),
     Match.tag('SOURCE_CONFLICT_DETAIL', ({ conflictRef }) => conflictRef),
+    Match.tag('PRIVACY_OWNER_COVERAGE', ({ ownerRef }) => ownerRef),
     Match.exhaustive,
   );
 
@@ -118,6 +120,7 @@ export const inventoryReconciliationEvidenceRead = defineRead(
         conflicts: inventorySourceConflictPersistenceForScope(transaction, scope),
         correlations: externalStockCorrelationPersistenceForScope(transaction, scope),
         effects: inventoryEffectLedgerPersistenceForScope(transaction, scope),
+        obligations: inventoryObligationPersistenceForScope(transaction, scope),
         protections: commitmentProtectionPersistenceForScope(transaction, scope),
         sharing: stockSharingEligibilityPersistenceForScope(transaction, scope),
       }),

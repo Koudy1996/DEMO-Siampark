@@ -1,7 +1,7 @@
 /* oxlint-disable sonarjs/no-nested-functions -- Focused in-memory owner ports keep each protection invariant explicit; expires: 2027-03-31. */
 import { CatalogSelectionSchema } from '@app/catalog/domain/catalog-selection-evidence';
 import { trustVerifiedGatewayPrincipalContext } from '@app/core-runtime';
-import { Effect, Option, Ref, Schema } from 'effect';
+import { Effect, Exit, Match, Option, Predicate, Ref, Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 
 import { createActionCollector } from '../../../../packages/core-runtime/src/actions/collector.ts';
@@ -12,15 +12,17 @@ import type {
 } from '../../shared/domain/commitment-protection.ts';
 import {
   CommitmentProtectionAtRiskResultSchema,
-  CommitmentProtectionIndeterminateResultSchema,
+  CommitmentProtectionEffectRequestSchema,
   CommitmentProtectionNotProtectableResultSchema,
   CommitmentProtectionProtectedResultSchema,
+  establishCommitmentProtection,
 } from '../../shared/domain/commitment-protection.ts';
 import { CommitmentProtectionConflict } from '../../shared/domain/commitment-protection-conflict.ts';
 import type {
   ReservationConfirmation,
   ReservationConfirmationPersistence,
 } from '../../shared/domain/reservation-confirmation.ts';
+import { CommitmentProtectionInventoryEffectLedgerIntentSchema } from '../../shared/domain/inventory-effect-ledger.ts';
 import {
   advanceReservationConfirmationHealth,
   establishReservationConfirmation,
@@ -45,7 +47,14 @@ import {
   handleEstablishCommitmentProtection,
 } from '../../src/actions/establish-commitment-protection.action.ts';
 import type { CommitmentProtectionAuthority } from '../../src/services/commitment-protection-authority.ts';
-import { makeCommitmentProtectionService } from '../../src/services/commitment-protection.service.ts';
+import {
+  makeCommitmentProtectionEstablishmentExecutionService,
+  makeCommitmentProtectionService,
+} from '../../src/services/commitment-protection.service.ts';
+import {
+  commitmentProtectionLedgerIntent,
+  commitmentProtectionLedgerResolution,
+} from '../../src/services/inventory-effect-ledger.service.ts';
 import { makeInMemoryInventoryEffectLedger } from '../support/inventory-effect-ledger.ts';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -217,15 +226,21 @@ const payload = {
   effectId,
   protectionRef,
 };
-const context = { legalEntityId, tenantId };
+const actionInvocationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const context = { actionInvocationId, legalEntityId, tenantId };
 
-const makeHarness = (confirmation: ReservationConfirmation) =>
+const makeHarness = (
+  confirmation: ReservationConfirmation,
+  options: { readonly failProtectionFinalizationOnce?: boolean } = {},
+) =>
   Effect.gen(function* harness() {
     const currentConfirmation = yield* Ref.make(confirmation);
     const confirmationHistory = yield* Ref.make<readonly ReservationConfirmation[]>([confirmation]);
     const storedProtection = yield* Ref.make<Option.Option<CommitmentProtection>>(Option.none());
     const protectionHistory = yield* Ref.make<readonly CommitmentProtection[]>([]);
     const authorityCalls = yield* Ref.make(0);
+    const authorityEffectIds = yield* Ref.make<readonly string[]>([]);
+    const failProtectionFinalization = yield* Ref.make(options.failProtectionFinalizationOnce ?? false);
     const observation = yield* Ref.make<ReservationAuthorityObservation>({
       competingFreshEffectAllowed: false,
       effectId,
@@ -242,6 +257,10 @@ const makeHarness = (confirmation: ReservationConfirmation) =>
     const protections: CommitmentProtectionPersistence = {
       createOrRead: (candidate) =>
         Effect.gen(function* createProtection() {
+          const mustFail = yield* Ref.modify(failProtectionFinalization, (fail) => [fail, false]);
+          if (mustFail) {
+            return yield* Effect.die('simulated local Protection finalizer rollback');
+          }
           const stored = yield* Ref.modify(
             storedProtection,
             (
@@ -270,22 +289,131 @@ const makeHarness = (confirmation: ReservationConfirmation) =>
         ),
     };
     const authority: CommitmentProtectionAuthority = {
-      establish: () =>
-        Ref.updateAndGet(authorityCalls, (count) => count + 1).pipe(Effect.andThen(Ref.get(observation))),
+      establish: (request) =>
+        Ref.update(authorityEffectIds, (effectIds) => [...effectIds, request.effectId]).pipe(
+          Effect.andThen(Ref.updateAndGet(authorityCalls, (count) => count + 1)),
+          Effect.andThen(Ref.get(observation)),
+        ),
     };
+    const ledger = makeInMemoryInventoryEffectLedger(requestedAt);
     const service = makeCommitmentProtectionService({
-      authority,
       confirmations,
-      ledger: makeInMemoryInventoryEffectLedger(requestedAt),
-      now: Effect.succeed('2026-09-24T10:20:00.000Z'),
+      ledger,
+      now: Effect.succeed(requestedAt),
       protections,
     });
+    const execution = makeCommitmentProtectionEstablishmentExecutionService({
+      authority,
+      confirmations: () => confirmations,
+      finalizer: (_scope, expected, effect) =>
+        Match.value(effect).pipe(
+          Match.tag('PROTECTED', (protectedEffect) =>
+            protections.createOrRead(protectedEffect.protection).pipe(
+              Effect.andThen(
+                ledger.transition(expected, {
+                  currentState: 'SUCCEEDED',
+                  resolution: commitmentProtectionLedgerResolution(protectedEffect),
+                }),
+              ),
+            ),
+          ),
+          Match.tag('NOT_PROTECTABLE', (notProtectableEffect) =>
+            ledger.transition(expected, {
+              currentState: 'REJECTED',
+              resolution: commitmentProtectionLedgerResolution(notProtectableEffect),
+            }),
+          ),
+          Match.exhaustive,
+        ),
+      ledger: () => ledger,
+      recoveryAuthority: {
+        recoverOriginal: (original) =>
+          Ref.get(observation).pipe(
+            Effect.flatMap((current) => {
+              const indeterminate = {
+                _tag: 'INDETERMINATE' as const,
+                effectId: original.effectId,
+                intent: original.intent,
+                kind: original.intent._tag,
+                learnedAt: '2026-09-24T10:20:00.000Z',
+                reason: 'OUTCOME_UNKNOWN' as const,
+              };
+              if (!Schema.is(CommitmentProtectionInventoryEffectLedgerIntentSchema)(original.intent)) {
+                return Effect.succeed(indeterminate);
+              }
+              return Match.value(current).pipe(
+                Match.when({ kind: 'CONFIRMED' }, (confirmed) =>
+                  Schema.decodeEffect(AuthoritativeReservationEvidenceSchema)({
+                    ...confirmed,
+                    kind: 'AUTHORITATIVE_RESERVATION_EVIDENCE',
+                  }).pipe(
+                    Effect.flatMap((authorityEvidence) =>
+                      establishCommitmentProtection({
+                        authorityEvidence,
+                        confirmation: original.intent.request.confirmation,
+                        protectionRef: original.intent.request.protectionRef,
+                      }),
+                    ),
+                    Effect.map((protection) => ({
+                      _tag: 'AUTHORITATIVE_SUCCESS' as const,
+                      effectId: original.effectId,
+                      intent: original.intent,
+                      kind: original.intent._tag,
+                      learnedAt: '2026-09-24T10:20:00.000Z',
+                      occurredAt: protection.establishedAt,
+                      ownerEvidenceRef: protection.authorityEvidence.evidence.ownerEvidenceRef,
+                      resolution: commitmentProtectionLedgerResolution({
+                        _tag: 'PROTECTED',
+                        protection,
+                        request: original.intent.request,
+                      }),
+                    })),
+                    Effect.orDie,
+                  ),
+                ),
+                Match.orElse(() => Effect.succeed(indeterminate)),
+              );
+            }),
+          ),
+      },
+    });
+    const executeEstablishment = (request: Parameters<typeof execution.prepare>[1]) =>
+      Effect.gen(function* executeProtectionEstablishment() {
+        const prepared = yield* execution.prepare(context, request);
+        yield* Match.value(prepared).pipe(
+          Match.tag('TERMINAL', () => Effect.void),
+          Match.tag('ATTEMPT', (attempt) =>
+            execution.attempt(attempt).pipe(
+              Effect.flatMap((outcome) =>
+                Match.value(outcome).pipe(
+                  Match.tag('PENDING', () => Effect.void),
+                  Match.tag('AUTHORITY_OBSERVATION', 'RECOVERY_OBSERVATION', (terminal) =>
+                    execution.finalize(context, attempt, terminal),
+                  ),
+                  Match.exhaustive,
+                ),
+              ),
+            ),
+          ),
+          Match.exhaustive,
+        );
+      });
+    const establish = (input = payload) =>
+      service.establish(input, context).pipe(
+        Effect.tap((decision) => (decision.dispatchRequested ? executeEstablishment(decision.request) : Effect.void)),
+        Effect.flatMap(() => service.establish(input, context)),
+        Effect.map(({ result }) => result),
+      );
     return {
       authorityCalls,
+      authorityEffectIds,
       confirmationHistory,
       currentConfirmation,
       observation,
       protectionHistory,
+      establish,
+      execution,
+      executeEstablishment,
       service,
       storedProtection,
     };
@@ -330,8 +458,8 @@ describe('Inventory Commitment Protection', () => {
       const harness = yield* makeHarness(confirmation);
       yield* Ref.set(harness.observation, confirmedObservation(confirmation));
 
-      const first = yield* harness.service.establish(payload, context);
-      const replay = yield* harness.service.establish(payload, context);
+      const first = yield* harness.establish();
+      const replay = yield* harness.establish();
       const protectedResult = yield* Schema.decodeUnknownEffect(CommitmentProtectionProtectedResultSchema)(first).pipe(
         Effect.orDie,
       );
@@ -349,15 +477,98 @@ describe('Inventory Commitment Protection', () => {
     }),
   );
 
-  it.effect('reports an indeterminate outcome without claiming protected or reusable stock', () =>
+  it.effect('commits one exact pending intent and self-outbox request before authority execution', () =>
+    Effect.gen(function* stageProtectionIntent() {
+      const confirmation = yield* buildConfirmation();
+      const harness = yield* makeHarness(confirmation);
+      yield* Ref.set(harness.observation, confirmedObservation(confirmation));
+      const scope = trustVerifiedGatewayPrincipalContext({
+        authBindingId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        authContextRef: 'test:commitment-protection-pending',
+        authMethod: 'api_key',
+        correlationId: 'commitment-protection-pending-test',
+        legalEntityId,
+        principalId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        tenantId,
+      });
+      const execute = (actionInvocationId: string) => {
+        const collector = createActionCollector(
+          establishCommitmentProtectionAction.descriptor.domainEvents,
+          'commerce.inventory',
+          establishCommitmentProtectionAction.descriptor.accessEvidencePolicy,
+        );
+        return handleEstablishCommitmentProtection(payload, {
+          actionInvocationId,
+          addDomainEvent: collector.addDomainEvent,
+          addOutboxMessage: collector.addOutboxMessage,
+          recordAuditEvidence: collector.recordAuditEvidence,
+          recordDataAccess: collector.recordDataAccess,
+          scope,
+          services: harness.service,
+        }).pipe(Effect.map((result) => ({ material: collector.snapshot(), result })));
+      };
+
+      const first = yield* execute('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+      const exactReplay = yield* execute('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+
+      expect(Predicate.isTagged(first.result, 'PENDING')).toBe(true);
+      expect(first.result).toMatchObject({
+        effectId,
+        fence: 'BLOCKED_PENDING_RECOVERY',
+        recovery: 'RECOVER_ORIGINAL_EFFECT',
+        replayed: false,
+      });
+      expect(Predicate.isTagged(exactReplay.result, 'PENDING')).toBe(true);
+      expect(exactReplay.result).toMatchObject({
+        effectId,
+        replayed: true,
+      });
+      expect(yield* Ref.get(harness.authorityCalls)).toBe(0);
+      expect(Option.isNone(yield* Ref.get(harness.storedProtection))).toBe(true);
+      expect(first.material.domainEvents.map(({ eventType }) => eventType)).toEqual([
+        'commerce.inventory.commitment-protection-establishment-requested.v1',
+      ]);
+      expect(first.material.outboxMessages).toHaveLength(1);
+      expect(first.material.outboxMessages[0]?.message).toMatchObject({
+        payloadJson: {
+          request: {
+            confirmation: { ref: payload.confirmationRef },
+            effectId,
+            legalEntityId,
+            mutationId: protectionId,
+            protectionRef,
+            requestedAt,
+            sourceActionInvocationId: actionInvocationId,
+          },
+        },
+        topic: 'commerce.inventory.commitment-protection-establishment-requested.v1',
+      });
+      const persistedEnvelope = Schema.decodeUnknownSync(
+        Schema.Struct({ request: CommitmentProtectionEffectRequestSchema }),
+      )(first.material.outboxMessages[0]?.message.payloadJson).request;
+      const persistedIntent = commitmentProtectionLedgerIntent(persistedEnvelope);
+      expect(Predicate.isTagged(persistedIntent, 'ESTABLISH_COMMITMENT_PROTECTION')).toBe(true);
+      expect(persistedIntent).toMatchObject({ request: persistedEnvelope });
+      expect(exactReplay.material.domainEvents).toEqual([]);
+      expect(exactReplay.material.outboxMessages).toEqual([]);
+    }),
+  );
+
+  it.effect('keeps an indeterminate authority outcome pending without claiming protected or reusable stock', () =>
     Effect.gen(function* remainFenced() {
       const confirmation = yield* buildConfirmation();
       const harness = yield* makeHarness(confirmation);
 
-      const result = yield* harness.service.establish(payload, context);
+      const decision = yield* harness.service.establish(payload, context);
+      yield* harness.executeEstablishment(decision.request);
+      const replay = yield* harness.service.establish(payload, context);
 
-      expect(Schema.is(CommitmentProtectionIndeterminateResultSchema)(result)).toBe(true);
-      expect(result).toMatchObject({ fence: 'BLOCKED_PENDING_RECOVERY', recovery: 'RECOVER_ORIGINAL_EFFECT' });
+      expect(Predicate.isTagged(replay.result, 'INDETERMINATE')).toBe(true);
+      expect(replay.result).toMatchObject({
+        fence: 'BLOCKED_PENDING_RECOVERY',
+        recovery: 'RECOVER_ORIGINAL_EFFECT',
+      });
+      expect(yield* Ref.get(harness.authorityCalls)).toBe(1);
       expect(Option.isNone(yield* Ref.get(harness.storedProtection))).toBe(true);
     }),
   );
@@ -372,6 +583,12 @@ describe('Inventory Commitment Protection', () => {
         [harness.service.establish(payload, context), harness.service.establish(payload, context)],
         { concurrency: 'unbounded' },
       );
+      const dispatch = results.find(({ dispatchRequested }) => dispatchRequested);
+      yield* Effect.fromOption(Option.fromNullishOr(dispatch)).pipe(
+        Effect.flatMap(({ request }) => harness.executeEstablishment(request)),
+        Effect.orDie,
+      );
+      const terminal = yield* harness.service.establish(payload, context);
       const changed = yield* harness.service
         .establish(
           {
@@ -385,7 +602,8 @@ describe('Inventory Commitment Protection', () => {
         )
         .pipe(Effect.flip);
 
-      expect(results.some(Schema.is(CommitmentProtectionProtectedResultSchema))).toBe(true);
+      expect(results.some(({ result }) => Predicate.isTagged(result, 'PENDING'))).toBe(true);
+      expect(Schema.is(CommitmentProtectionProtectedResultSchema)(terminal.result)).toBe(true);
       expect(yield* Ref.get(harness.authorityCalls)).toBe(1);
       expect(Schema.is(CommitmentProtectionConflict)(changed)).toBe(true);
       expect(changed).toMatchObject({ reason: 'MATERIAL_INTENT_CONFLICT' });
@@ -396,7 +614,8 @@ describe('Inventory Commitment Protection', () => {
     Effect.gen(function* recoverAfterExpiry() {
       const confirmation = yield* buildConfirmation();
       const harness = yield* makeHarness(confirmation);
-      yield* harness.service.establish(payload, context);
+      const staged = yield* harness.service.establish(payload, context);
+      yield* harness.executeEstablishment(staged.request);
       const expired = yield* advanceReservationConfirmationHealth(confirmation, {
         _tag: 'VALIDITY_ELAPSED',
         effectiveAt: expiresAt,
@@ -405,7 +624,8 @@ describe('Inventory Commitment Protection', () => {
       yield* Ref.update(harness.confirmationHistory, (entries) => [...entries, expired]);
       yield* Ref.set(harness.observation, confirmedObservation(confirmation));
 
-      const recovered = yield* harness.service.establish(payload, context);
+      yield* harness.executeEstablishment(staged.request);
+      const recovered = (yield* harness.service.establish(payload, context)).result;
       const protectedResult = yield* Schema.decodeUnknownEffect(CommitmentProtectionProtectedResultSchema)(
         recovered,
       ).pipe(Effect.orDie);
@@ -413,6 +633,39 @@ describe('Inventory Commitment Protection', () => {
       expect(Schema.is(CommitmentProtectionProtectedResultSchema)(recovered)).toBe(true);
       expect(protectedResult.protection.establishedAt).toBe(establishedAt);
       expect(protectedResult.protection.confirmation.expiresAt).toBe(expiresAt);
+    }),
+  );
+
+  it.effect('recovers the same in-time Protection after local finalization rolls back and Confirmation expires', () =>
+    Effect.gen(function* recoverAfterFinalizerRollback() {
+      const confirmation = yield* buildConfirmation();
+      const harness = yield* makeHarness(confirmation, { failProtectionFinalizationOnce: true });
+      yield* Ref.set(harness.observation, confirmedObservation(confirmation));
+
+      const staged = yield* harness.service.establish(payload, context);
+      const lostResponse = yield* harness.executeEstablishment(staged.request).pipe(Effect.exit);
+      const expired = yield* advanceReservationConfirmationHealth(confirmation, {
+        _tag: 'VALIDITY_ELAPSED',
+        effectiveAt: expiresAt,
+      });
+      yield* Ref.set(harness.currentConfirmation, expired);
+      yield* Ref.update(harness.confirmationHistory, (entries) => [...entries, expired]);
+
+      yield* harness.executeEstablishment(staged.request);
+      const recovered = (yield* harness.service.establish(payload, context)).result;
+      const replay = (yield* harness.service.establish(payload, context)).result;
+      const protectedResult = yield* Schema.decodeUnknownEffect(CommitmentProtectionProtectedResultSchema)(
+        recovered,
+      ).pipe(Effect.orDie);
+
+      expect(Exit.isFailure(lostResponse)).toBe(true);
+      expect(protectedResult.protection.ref).toEqual(protectionRef);
+      expect(protectedResult.protection.authorityEvidence.effectId).toBe(effectId);
+      expect(protectedResult.protection.establishedAt).toBe(establishedAt);
+      expect(protectedResult.protection.confirmation.expiresAt).toBe(expiresAt);
+      expect(replay).toEqual({ ...recovered, replayed: true });
+      expect(yield* Ref.get(harness.authorityEffectIds)).toEqual([effectId]);
+      expect(yield* Ref.get(harness.protectionHistory)).toHaveLength(1);
     }),
   );
 
@@ -426,7 +679,6 @@ describe('Inventory Commitment Protection', () => {
       const harness = yield* makeHarness(expired);
       yield* Ref.set(harness.confirmationHistory, [confirmation, expired]);
       const service = makeCommitmentProtectionService({
-        authority: { establish: () => Ref.get(harness.observation) },
         confirmations: {
           createOrRead: () => Effect.die('not used'),
           findByRef: () => Effect.succeedSome(expired),
@@ -445,7 +697,7 @@ describe('Inventory Commitment Protection', () => {
         },
       });
 
-      const result = yield* service.establish(payload, context);
+      const result = (yield* service.establish(payload, context)).result;
 
       expect(Schema.is(CommitmentProtectionNotProtectableResultSchema)(result)).toBe(true);
       expect(result).toMatchObject({ reason: 'CONFIRMATION_EXPIRED' });
@@ -457,7 +709,7 @@ describe('Inventory Commitment Protection', () => {
       const confirmation = yield* buildConfirmation();
       const harness = yield* makeHarness(confirmation);
       yield* Ref.set(harness.observation, confirmedObservation(confirmation));
-      const established = yield* harness.service.establish(payload, context);
+      const established = yield* harness.establish();
       const protectedResult = yield* Schema.decodeUnknownEffect(CommitmentProtectionProtectedResultSchema)(
         established,
       ).pipe(Effect.orDie);
@@ -470,68 +722,13 @@ describe('Inventory Commitment Protection', () => {
         },
         protection: protectedResult.protection,
       });
-      const replay = yield* harness.service.establish(payload, context);
+      const replay = (yield* harness.service.establish(payload, context)).result;
 
       expect(atRisk.health).toMatchObject({ reconciliationRequired: true, state: 'AT_RISK' });
       expect(Schema.is(CommitmentProtectionAtRiskResultSchema)(replay)).toBe(true);
       expect(replay).toMatchObject({ reconciliationRequired: true, replayed: true });
       expect(atRisk.confirmation.reservation.requirements[0]?.stockItem.stockItemRef.resourceId).toBe(itemId);
       expect(atRisk).not.toHaveProperty('releasedAt');
-    }),
-  );
-
-  it.effect('publishes one committed Protection notice for the new revision and none for replay', () =>
-    Effect.gen(function* publishCommittedProtection() {
-      const confirmation = yield* buildConfirmation();
-      const harness = yield* makeHarness(confirmation);
-      yield* Ref.set(harness.observation, confirmedObservation(confirmation));
-      const fresh = yield* harness.service.establish(payload, context);
-      const protectedResult = yield* Schema.decodeUnknownEffect(CommitmentProtectionProtectedResultSchema)(fresh).pipe(
-        Effect.orDie,
-      );
-      const scope = trustVerifiedGatewayPrincipalContext({
-        authBindingId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        authContextRef: 'test:commitment-protection',
-        authMethod: 'api_key',
-        correlationId: 'commitment-protection-test',
-        legalEntityId,
-        principalId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-        tenantId,
-      });
-      const runHandler = (result: typeof protectedResult) => {
-        const collector = createActionCollector(
-          establishCommitmentProtectionAction.descriptor.domainEvents,
-          'commerce.inventory',
-          establishCommitmentProtectionAction.descriptor.accessEvidencePolicy,
-        );
-        return handleEstablishCommitmentProtection(payload, {
-          actionInvocationId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-          addDomainEvent: collector.addDomainEvent,
-          addOutboxMessage: collector.addOutboxMessage,
-          recordAuditEvidence: collector.recordAuditEvidence,
-          recordDataAccess: collector.recordDataAccess,
-          scope,
-          services: { ...harness.service, establish: () => Effect.succeed(result) },
-        }).pipe(Effect.map(() => collector.snapshot()));
-      };
-
-      const committed = yield* runHandler(protectedResult);
-      const replay = yield* runHandler({ ...protectedResult, replayed: true });
-
-      expect(committed.domainEvents.map(({ eventType }) => eventType)).toEqual([
-        'commerce.inventory.commitment-protection-changed.v1',
-      ]);
-      expect(committed.outboxMessages).toHaveLength(1);
-      expect(committed.outboxMessages[0]?.message).toMatchObject({
-        payloadJson: {
-          ordering: { _tag: 'OWNER_AGGREGATE_REVISION', revision: 1 },
-          state: 'PROTECTED',
-          subjectRef: protectionRef,
-        },
-        topic: 'commerce.inventory.commitment-protection-changed.v1',
-      });
-      expect(replay.domainEvents).toEqual([]);
-      expect(replay.outboxMessages).toEqual([]);
     }),
   );
 });

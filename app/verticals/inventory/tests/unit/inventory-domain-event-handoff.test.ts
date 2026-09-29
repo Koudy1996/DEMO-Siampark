@@ -1,5 +1,17 @@
 import { Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
+import { getVerticalRuntimeOutboxWorkers } from '@app/core-runtime';
+
+import {
+  OutboxPayloadSchema as CommitmentProtectionEstablishmentRequestedPayloadSchema,
+  outboxProducerModuleKey as commitmentProtectionEstablishmentRequestedProducerModuleKey,
+  outboxTopic as commitmentProtectionEstablishmentRequestedTopic,
+} from '@app/inventory/outbox/commerce-inventory-commitment-protection-establishment-requested-v1';
+import {
+  OutboxPayloadSchema as ReservationConfirmationIssuanceRequestedPayloadSchema,
+  outboxProducerModuleKey as reservationConfirmationIssuanceRequestedProducerModuleKey,
+  outboxTopic as reservationConfirmationIssuanceRequestedTopic,
+} from '@app/inventory/outbox/commerce-inventory-reservation-confirmation-issuance-requested-v1';
 
 import {
   InventoryCommittedEventNoticeSchema,
@@ -15,6 +27,10 @@ import { OutboxPayloadSchema as CommitmentProtectionChangedPayloadSchema } from 
 import { OutboxPayloadSchema as CommittedObligationChangedPayloadSchema } from '../../shared/outbox/commerce-inventory-committed-obligation-changed-v1.ts';
 import { OutboxPayloadSchema as ReservationGuaranteeChangedPayloadSchema } from '../../shared/outbox/commerce-inventory-reservation-guarantee-changed-v1.ts';
 import { OutboxPayloadSchema as StockPositionEvidenceChangedPayloadSchema } from '../../shared/outbox/commerce-inventory-stock-position-evidence-changed-v1.ts';
+import { outboxWorkers } from '../../src/workers/index.ts';
+import { executeCommitmentProtectionEstablishmentWorker } from '../../src/workers/execute-commitment-protection-establishment.worker.ts';
+import { executeReservationConfirmationIssuanceWorker } from '../../src/workers/execute-reservation-confirmation-issuance.worker.ts';
+import { inventoryRegistration } from '../../vertical.registration.ts';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const positionId = '22222222-2222-4222-8222-222222222222';
@@ -45,6 +61,47 @@ const stockPositionNotice = (
   });
 
 describe('Inventory committed Domain Event producer contract', () => {
+  it('registers each owner-local durable intent with its exact private worker once', () => {
+    const bindings = [
+      {
+        payloadSchema: CommitmentProtectionEstablishmentRequestedPayloadSchema,
+        producerModuleKey: commitmentProtectionEstablishmentRequestedProducerModuleKey,
+        topic: commitmentProtectionEstablishmentRequestedTopic,
+        worker: executeCommitmentProtectionEstablishmentWorker,
+        workerKey: 'commerce.inventory.execute-commitment-protection-establishment',
+      },
+      {
+        payloadSchema: ReservationConfirmationIssuanceRequestedPayloadSchema,
+        producerModuleKey: reservationConfirmationIssuanceRequestedProducerModuleKey,
+        topic: reservationConfirmationIssuanceRequestedTopic,
+        worker: executeReservationConfirmationIssuanceWorker,
+        workerKey: 'commerce.inventory.execute-reservation-confirmation-issuance',
+      },
+    ] as const;
+
+    for (const { payloadSchema, producerModuleKey, topic, worker, workerKey } of bindings) {
+      expect(worker.descriptor).toMatchObject({
+        consumerModuleKey: 'commerce.inventory',
+        entrypoint: {
+          access: 'background',
+          authorization: { kind: 'owner_local_background' },
+          entrypointKey: workerKey,
+          moduleKey: 'commerce.inventory',
+          role: 'worker',
+        },
+        legalEntityScope: 'required',
+        producerModuleKey,
+        topic,
+        workerKey,
+      });
+      expect(worker.descriptor.payloadSchema).toBe(payloadSchema);
+      expect(outboxWorkers.filter((candidate) => candidate === worker)).toHaveLength(1);
+      expect(
+        getVerticalRuntimeOutboxWorkers(inventoryRegistration).filter((candidate) => candidate === worker),
+      ).toHaveLength(1);
+    }
+  });
+
   it('owns exactly four canonical family mappings with real consumer use-case metadata', () => {
     const decoded = inventoryDomainEventFamilies.map((entry) =>
       Schema.decodeUnknownSync(InventoryDomainEventFamilySchema, { onExcessProperty: 'error' })(entry),
@@ -126,13 +183,19 @@ describe('Inventory committed Domain Event producer contract', () => {
     });
   });
 
-  it('accepts only the minimal Reservation guarantee notice', () => {
-    const payload = {
+  it('makes established Reservation readiness discoverable by its durable Confirmation proof', () => {
+    const readiness = {
+      confirmationRef: {
+        moduleId: 'commerce.inventory',
+        resourceId: '55555555-5555-4555-8555-555555555555',
+        resourceType: 'commerce.inventory.reservation-confirmation',
+        tenantId,
+      },
       ordering: {
         _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY',
         occurrenceId: 'reservation-create-effect:55555555-5555-4555-8555-555555555555',
       },
-      ownerReadOrProofKey: 'commerce.inventory.api.inventory-reservation-detail',
+      ownerReadOrProofKey: 'commerce.inventory.api.reservation-confirmation-verification',
       state: 'ESTABLISHED',
       subjectRef: {
         moduleId: 'commerce.inventory',
@@ -145,18 +208,51 @@ describe('Inventory committed Domain Event producer contract', () => {
       onExcessProperty: 'error',
     });
 
-    expect(decode(payload)).toEqual(payload);
-    expect(decode({ ...payload, state: 'RELEASED' })).toMatchObject({ state: 'RELEASED' });
-    expect(decode({ ...payload, state: 'AT_RISK' })).toMatchObject({ state: 'AT_RISK' });
-    expect(() => decode({ ...payload, state: 'PROTECTED' })).toThrow();
+    expect(decode(readiness)).toEqual(readiness);
     expect(() =>
       decode({
-        ordering: payload.ordering,
-        state: payload.state,
-        subjectRef: payload.subjectRef,
+        ordering: readiness.ordering,
+        ownerReadOrProofKey: readiness.ownerReadOrProofKey,
+        state: readiness.state,
+        subjectRef: readiness.subjectRef,
       }),
     ).toThrow();
-    expect(() => decode({ ...payload, providerPayload: { token: 'secret' } })).toThrow();
+    expect(() =>
+      decode({ ...readiness, ownerReadOrProofKey: 'commerce.inventory.api.inventory-reservation-detail' }),
+    ).toThrow();
+    expect(() => decode({ ...readiness, state: 'PROTECTED' })).toThrow();
+    expect(() =>
+      decode({
+        ordering: readiness.ordering,
+        state: readiness.state,
+        subjectRef: readiness.subjectRef,
+      }),
+    ).toThrow();
+    expect(() => decode({ ...readiness, providerPayload: { token: 'secret' } })).toThrow();
+  });
+
+  it('keeps non-readiness Reservation lifecycle notices on the Reservation owner read', () => {
+    const lifecycle = {
+      ordering: {
+        _tag: 'IMMUTABLE_OCCURRENCE_IDENTITY',
+        occurrenceId: 'reservation-release-effect:55555555-5555-4555-8555-555555555555',
+      },
+      ownerReadOrProofKey: 'commerce.inventory.api.inventory-reservation-detail',
+      state: 'RELEASED',
+      subjectRef: {
+        moduleId: 'commerce.inventory',
+        resourceId: '44444444-4444-4444-8444-444444444444',
+        resourceType: 'commerce.inventory.inventory-reservation',
+        tenantId,
+      },
+    } as const;
+    const decode = Schema.decodeUnknownSync(ReservationGuaranteeChangedPayloadSchema, {
+      onExcessProperty: 'error',
+    });
+
+    expect(decode(lifecycle)).toEqual(lifecycle);
+    expect(decode({ ...lifecycle, state: 'AT_RISK' })).toMatchObject({ state: 'AT_RISK' });
+    expect(() => decode({ ...lifecycle, state: 'ESTABLISHED' })).toThrow();
   });
 
   it('accepts only revision-ordered Commitment Protection notices', () => {

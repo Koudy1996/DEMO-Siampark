@@ -2,10 +2,12 @@
 // @ontos-action-owner commerce.inventory
 // @ontos-action-slug recover-inventory-effect
 /* oxlint-disable anti-slop-effect/no-service-constructor-imports, effect-native/no-dependency-parameters -- The generated Action factory constructs and binds owner-local transaction services once; expires: 2027-03-31. */
+import { createHash } from 'node:crypto';
+
 import type { ActionHandlerContext, ActionRegistration } from '@app/core-runtime';
 import { defineAction, defineActionBusinessPermission, defineTenantModuleEntrypoint } from '@app/core-runtime';
 import type { Effect as EffectType } from 'effect';
-import { DateTime, Effect, Match, Option } from 'effect';
+import { DateTime, Effect, Match, Option, Schema } from 'effect';
 
 import {
   RecoverInventoryEffectActionRejected,
@@ -20,8 +22,17 @@ import type {
 } from '../../shared/actions/recover-inventory-effect.ts';
 import type { InventoryEffectRecoveryRequest } from '../../shared/domain/inventory-effect-recovery.ts';
 import type { InventoryEffectLedgerIntent } from '../../shared/domain/inventory-effect-ledger.ts';
+import { EstablishedReservationCreateEffectSchema } from '../../shared/domain/inventory-reservation-create.ts';
+import { ReservationAuthorityEffectIdSchema } from '../../shared/domain/reservation-issuer-failure-fields.ts';
+import { OutboxPayloadSchema as ReservationConfirmationIssuanceRequestedPayloadSchema } from '../../shared/outbox/commerce-inventory-reservation-confirmation-issuance-requested-v1.ts';
+import {
+  ReservationConfirmationIdSchema,
+  ReservationConfirmationRefSchema,
+} from '../../shared/resources/reservation-confirmation.ts';
 import { commitmentProtectionPersistenceForScope } from '../persistence/commitment-protection-repository.ts';
 import { inventoryEffectLedgerPersistenceForScope } from '../persistence/inventory-effect-ledger-repository.ts';
+import { inventoryObligationPersistenceForScope } from '../persistence/inventory-obligation-repository.ts';
+import { physicalStockEffectPersistenceForScope } from '../persistence/physical-stock-effect-repository.ts';
 import { reservationCreateEffectPersistenceForScope } from '../persistence/reservation-create-effect-repository.ts';
 import { reservationReleaseEffectPersistenceForScope } from '../persistence/reservation-release-effect-repository.ts';
 import type { InventoryEffectRecoveryAuthority } from '../services/inventory-effect-recovery-authority.ts';
@@ -36,6 +47,7 @@ import {
   makeInventoryEffectRecoveryService,
 } from '../services/inventory-effect-recovery.service.ts';
 import { makeInventoryEffectLedgerService } from '../services/inventory-effect-ledger.service.ts';
+import { createCreateInventoryReservationCommerceInventoryReservationConfirmationIssuanceRequestedV1OutboxMessage as createConfirmationIssuanceOutboxMessage } from './create-inventory-reservation-commerce-inventory-reservation-confirmation-issuance-requested-v1.outbox-message.ts';
 
 export {
   RecoverInventoryEffectErrorSchema,
@@ -45,7 +57,11 @@ export {
 
 const ACTION_KEY = 'commerce.inventory.recover-inventory-effect';
 const MODULE_KEY = 'commerce.inventory';
-const domainEvents = {} as const;
+const CONFIRMATION_ISSUANCE_REQUESTED_EVENT =
+  'commerce.inventory.reservation-confirmation-issuance-requested.v1' as const;
+const domainEvents = {
+  [CONFIRMATION_ISSUANCE_REQUESTED_EVENT]: ReservationConfirmationIssuanceRequestedPayloadSchema,
+} as const;
 
 interface TrustedRecoveryScope {
   readonly legalEntityId: string;
@@ -96,6 +112,46 @@ const sameTarget = (left: RecoverInventoryEffectTargetRef, right: RecoverInvento
   left.resourceType === right.resourceType &&
   left.tenantId === right.tenantId;
 
+const deterministicUuid = (seed: string) => {
+  const digest = createHash('sha256').update(seed).digest('hex');
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+};
+
+const confirmationIssuanceFor = (result: RecoverInventoryEffectResult) => {
+  const { record } = result;
+  const resolution = record?.resolution;
+  if (resolution === null || resolution === undefined) {
+    return null;
+  }
+  return Match.value(resolution).pipe(
+    Match.tag('RESERVATION_CREATE', ({ effect }) => {
+      if (!Schema.is(EstablishedReservationCreateEffectSchema)(effect)) {
+        return null;
+      }
+      const { request, reservation } = effect;
+      const confirmationId = deterministicUuid(
+        `${reservation.ref.tenantId}\u0000${reservation.ref.resourceId}\u0000${reservation.origin.attemptId}\u0000reservation-confirmation`,
+      );
+      return {
+        request: {
+          confirmationRef: ReservationConfirmationRefSchema.make({
+            moduleId: MODULE_KEY,
+            resourceId: ReservationConfirmationIdSchema.make(confirmationId),
+            resourceType: 'commerce.inventory.reservation-confirmation',
+            tenantId: reservation.ref.tenantId,
+          }),
+          effectId: ReservationAuthorityEffectIdSchema.make(`reservation-confirmation:${confirmationId}`),
+          legalEntityId: request.legalEntityId,
+          mutationId: request.mutationId,
+          reservation,
+          sourceActionInvocationId: request.sourceActionInvocationId,
+        },
+      };
+    }),
+    Match.orElse(() => null),
+  );
+};
+
 export const makeRecoverInventoryEffectActionService = (dependencies: {
   readonly records: InventoryEffectRecoveryRecordReader;
   readonly recovery: InventoryEffectRecoveryService;
@@ -145,6 +201,18 @@ export const handleRecoverInventoryEffect = Effect.fn('RecoverInventoryEffectAct
     targetResourceId: payload.targetRef.resourceId,
     targetResourceType: payload.targetRef.resourceType,
   });
+  const confirmationIssuance = confirmationIssuanceFor(result);
+  if (confirmationIssuance !== null) {
+    const event = yield* context.addDomainEvent({
+      eventType: CONFIRMATION_ISSUANCE_REQUESTED_EVENT,
+      payloadJson: confirmationIssuance,
+      producerModuleKey: MODULE_KEY,
+      subjectModuleKey: payload.targetRef.moduleId,
+      subjectResourceId: payload.targetRef.resourceId,
+      subjectResourceType: payload.targetRef.resourceType,
+    });
+    yield* context.addOutboxMessage(event, createConfirmationIssuanceOutboxMessage(confirmationIssuance));
+  }
   return result;
 });
 
@@ -152,7 +220,7 @@ export const recoverInventoryEffectAction: ActionRegistration<
   typeof RecoverInventoryEffectPayloadSchema,
   typeof RecoverInventoryEffectResultSchema,
   typeof RecoverInventoryEffectErrorSchema,
-  Readonly<Record<string, never>>,
+  typeof domainEvents,
   'commerce.inventory',
   RecoverInventoryEffectServices,
   InventoryEffectRecoveryAuthority
@@ -203,6 +271,8 @@ export const recoverInventoryEffectAction: ActionRegistration<
           ledger: makeInventoryEffectLedgerService(records, DateTime.now.pipe(Effect.map(DateTime.formatIso))),
           owners: makeInventoryEffectRecoveryOwnerPersistence({
             creates: reservationCreateEffectPersistenceForScope(transaction, scope),
+            obligations: inventoryObligationPersistenceForScope(transaction, scope),
+            physicalEffects: physicalStockEffectPersistenceForScope(transaction, scope),
             protections: commitmentProtectionPersistenceForScope(transaction, scope),
             releases: reservationReleaseEffectPersistenceForScope(transaction, scope),
           }),
