@@ -3,6 +3,7 @@
   "retiredWorkers": [],
   "schemaVersion": 1,
   "units": [
+    "assortment",
     "party-registry",
     "commerce-customer-context",
     "payment-term-catalog",
