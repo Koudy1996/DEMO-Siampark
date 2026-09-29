@@ -110,6 +110,29 @@ BEGIN
       MESSAGE = 'Commitment Protection must reference its exact immutable Reservation and Attempt lineage';
   END IF;
 
+  IF TG_OP = 'UPDATE' AND (
+    NEW.protection_id IS DISTINCT FROM OLD.protection_id
+    OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+    OR NEW.confirmation_id IS DISTINCT FROM OLD.confirmation_id
+    OR NEW.reservation_id IS DISTINCT FROM OLD.reservation_id
+    OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id
+    OR NEW.owner_configuration_id IS DISTINCT FROM OLD.owner_configuration_id
+    OR NEW.issuer_backend_kind IS DISTINCT FROM OLD.issuer_backend_kind
+    OR NEW.issuer_backend_id IS DISTINCT FROM OLD.issuer_backend_id
+    OR NEW.authority_effect_id IS DISTINCT FROM OLD.authority_effect_id
+    OR NEW.owner_evidence_ref IS DISTINCT FROM OLD.owner_evidence_ref
+    OR NEW.established_at IS DISTINCT FROM OLD.established_at
+    OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    OR (NEW.snapshot - 'health' - 'revision') IS DISTINCT FROM (OLD.snapshot - 'health' - 'revision')
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '23514', CONSTRAINT = 'inventory_commitment_protections_snapshot_ck',
+      MESSAGE = 'Commitment Protection health revisions must preserve exact immutable relational and embedded evidence';
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    RETURN NEW;
+  END IF;
+
   SELECT pg_catalog.jsonb_agg(
     pg_catalog.jsonb_build_object(
       'allocationId', allocation.entry -> 'allocationId',

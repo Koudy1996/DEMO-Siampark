@@ -13,6 +13,9 @@ import { ReservationConfirmationRefSchema } from '../resources/reservation-confi
 
 const protectionInstant = Schema.toEncoded(Schema.DateTimeUtcFromString);
 const boundedEvidenceRef = Schema.String.check(Schema.isTrimmed(), Schema.isMinLength(1), Schema.isMaxLength(300));
+export const CommitmentProtectionMutationIdSchema = Schema.String.check(Schema.isTrimmed(), Schema.isUUID()).pipe(
+  Schema.brand('CommitmentProtectionMutationId'),
+);
 
 export const EstablishCommitmentProtectionPayloadSchema = Schema.Struct({
   confirmationRef: ReservationConfirmationRefSchema,
@@ -79,7 +82,7 @@ export const CommitmentProtectionEffectRequestSchema = Schema.Struct({
   confirmation: ReservationConfirmationSchema,
   effectId: ReservationAuthorityEffectIdSchema,
   legalEntityId: LegalEntityIdSchema,
-  mutationId: Schema.String.check(Schema.isTrimmed(), Schema.isUUID()),
+  mutationId: CommitmentProtectionMutationIdSchema,
   protectionRef: CommitmentProtectionRefSchema,
   requestedAt: protectionInstant,
   sourceActionInvocationId: ActionInvocationIdSchema,

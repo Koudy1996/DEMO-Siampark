@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryReconciliationEvidenceAuthenticationProblemSchema,
-  type InventoryReconciliationEvidenceDomainPolicyProblem,
   InventoryReconciliationEvidenceDomainPolicyProblemSchema,
-  type InventoryReconciliationEvidenceDomainUnavailableProblem,
   InventoryReconciliationEvidenceDomainUnavailableProblemSchema,
   InventoryReconciliationEvidenceForbiddenProblemSchema,
   InventoryReconciliationEvidenceInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   InventoryReconciliationEvidencePolicyConflictProblemSchema,
   InventoryReconciliationEvidencePolicyProblemSchema,
   InventoryReconciliationEvidenceUnavailableProblemSchema,
+} from '../shared/apis/inventory-reconciliation-evidence.ts';
+import type {
+  InventoryReconciliationEvidenceDomainPolicyProblem,
+  InventoryReconciliationEvidenceDomainUnavailableProblem,
 } from '../shared/apis/inventory-reconciliation-evidence.ts';
 import { InventoryReconciliationEvidenceRejected } from '../shared/domain/inventory-reconciliation-evidence-rejected.ts';
 import { InventoryReconciliationEvidenceUnavailable } from '../shared/domain/inventory-reconciliation-evidence-unavailable.ts';

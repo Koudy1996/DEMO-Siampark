@@ -106,7 +106,7 @@ export const createInventoryReservationAction = defineAction(
       captureMode: 'metadata_only',
       policyKey: `${ACTION_KEY}.access.v1`,
     },
-    actionKey: 'commerce.inventory.create-inventory-reservation',
+    actionKey: ACTION_KEY,
     auditProfile: 'standard',
     businessPermission: defineActionBusinessPermission<CreateInventoryReservationPayload>((payload) => ({
       permission: 'inventory.reservation.establish',
@@ -125,13 +125,13 @@ export const createInventoryReservationAction = defineAction(
     entrypoint: defineTenantModuleEntrypoint({
       access: 'write',
       authorization: { kind: 'action_execution', provisioning: 'tenant_membership_default' },
-      entrypointKey: 'commerce.inventory.create-inventory-reservation',
-      moduleKey: 'commerce.inventory',
+      entrypointKey: ACTION_KEY,
+      moduleKey: MODULE_KEY,
       role: 'action',
     }),
     idempotency: 'required',
     legalEntityScope: 'required',
-    owningModuleKey: 'commerce.inventory',
+    owningModuleKey: MODULE_KEY,
     payloadSchema: CreateInventoryReservationPayloadSchema,
     policies: [],
     resourcePermission: defineActionResourcePermission<CreateInventoryReservationPayload>((payload) => ({

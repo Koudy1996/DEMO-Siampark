@@ -114,7 +114,7 @@ export const establishCommitmentProtectionAction = defineAction(
       captureMode: 'metadata_only',
       policyKey: `${ACTION_KEY}.access.v1`,
     },
-    actionKey: 'commerce.inventory.establish-commitment-protection',
+    actionKey: ACTION_KEY,
     auditProfile: 'standard',
     businessPermission: defineActionBusinessPermission<EstablishCommitmentProtectionPayload>((payload) => ({
       permission: 'inventory.commitment_protection.establish',
@@ -133,13 +133,13 @@ export const establishCommitmentProtectionAction = defineAction(
     entrypoint: defineTenantModuleEntrypoint({
       access: 'write',
       authorization: { kind: 'action_execution', provisioning: 'explicit' },
-      entrypointKey: 'commerce.inventory.establish-commitment-protection',
-      moduleKey: 'commerce.inventory',
+      entrypointKey: ACTION_KEY,
+      moduleKey: MODULE_KEY,
       role: 'action',
     }),
     idempotency: 'required',
     legalEntityScope: 'required',
-    owningModuleKey: 'commerce.inventory',
+    owningModuleKey: MODULE_KEY,
     payloadSchema: EstablishCommitmentProtectionPayloadSchema,
     policies: [],
     resourcePermission: defineActionResourcePermission<EstablishCommitmentProtectionPayload>((payload) => ({

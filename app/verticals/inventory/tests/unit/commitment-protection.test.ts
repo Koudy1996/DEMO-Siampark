@@ -22,7 +22,6 @@ import type {
   ReservationConfirmation,
   ReservationConfirmationPersistence,
 } from '../../shared/domain/reservation-confirmation.ts';
-import { CommitmentProtectionInventoryEffectLedgerIntentSchema } from '../../shared/domain/inventory-effect-ledger.ts';
 import {
   advanceReservationConfirmationHealth,
   establishReservationConfirmation,
@@ -324,6 +323,7 @@ const makeHarness = (
             }),
           ),
           Match.exhaustive,
+          Effect.orDie,
         ),
       ledger: () => ledger,
       recoveryAuthority: {
@@ -338,37 +338,39 @@ const makeHarness = (
                 learnedAt: '2026-09-24T10:20:00.000Z',
                 reason: 'OUTCOME_UNKNOWN' as const,
               };
-              if (!Schema.is(CommitmentProtectionInventoryEffectLedgerIntentSchema)(original.intent)) {
-                return Effect.succeed(indeterminate);
-              }
-              return Match.value(current).pipe(
-                Match.when({ kind: 'CONFIRMED' }, (confirmed) =>
-                  Schema.decodeEffect(AuthoritativeReservationEvidenceSchema)({
-                    ...confirmed,
-                    kind: 'AUTHORITATIVE_RESERVATION_EVIDENCE',
-                  }).pipe(
-                    Effect.flatMap((authorityEvidence) =>
-                      establishCommitmentProtection({
-                        authorityEvidence,
-                        confirmation: original.intent.request.confirmation,
-                        protectionRef: original.intent.request.protectionRef,
-                      }),
+              return Match.value(original.intent).pipe(
+                Match.tag('ESTABLISH_COMMITMENT_PROTECTION', (intent) =>
+                  Match.value(current).pipe(
+                    Match.when({ kind: 'CONFIRMED' }, (confirmed) =>
+                      Schema.decodeEffect(AuthoritativeReservationEvidenceSchema)({
+                        ...confirmed,
+                        kind: 'AUTHORITATIVE_RESERVATION_EVIDENCE',
+                      }).pipe(
+                        Effect.flatMap((authorityEvidence) =>
+                          establishCommitmentProtection({
+                            authorityEvidence,
+                            confirmation: intent.request.confirmation,
+                            protectionRef: intent.request.protectionRef,
+                          }),
+                        ),
+                        Effect.map((protection) => ({
+                          _tag: 'AUTHORITATIVE_SUCCESS' as const,
+                          effectId: original.effectId,
+                          intent,
+                          kind: intent._tag,
+                          learnedAt: '2026-09-24T10:20:00.000Z',
+                          occurredAt: protection.establishedAt,
+                          ownerEvidenceRef: protection.authorityEvidence.evidence.ownerEvidenceRef,
+                          resolution: commitmentProtectionLedgerResolution({
+                            _tag: 'PROTECTED',
+                            protection,
+                            request: intent.request,
+                          }),
+                        })),
+                        Effect.orDie,
+                      ),
                     ),
-                    Effect.map((protection) => ({
-                      _tag: 'AUTHORITATIVE_SUCCESS' as const,
-                      effectId: original.effectId,
-                      intent: original.intent,
-                      kind: original.intent._tag,
-                      learnedAt: '2026-09-24T10:20:00.000Z',
-                      occurredAt: protection.establishedAt,
-                      ownerEvidenceRef: protection.authorityEvidence.evidence.ownerEvidenceRef,
-                      resolution: commitmentProtectionLedgerResolution({
-                        _tag: 'PROTECTED',
-                        protection,
-                        request: original.intent.request,
-                      }),
-                    })),
-                    Effect.orDie,
+                    Match.orElse(() => Effect.succeed(indeterminate)),
                   ),
                 ),
                 Match.orElse(() => Effect.succeed(indeterminate)),
@@ -409,11 +411,11 @@ const makeHarness = (
       authorityEffectIds,
       confirmationHistory,
       currentConfirmation,
+      establish,
+      executeEstablishment,
+      execution,
       observation,
       protectionHistory,
-      establish,
-      execution,
-      executeEstablishment,
       service,
       storedProtection,
     };
@@ -491,14 +493,14 @@ describe('Inventory Commitment Protection', () => {
         principalId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         tenantId,
       });
-      const execute = (actionInvocationId: string) => {
+      const execute = (invocationId: string) => {
         const collector = createActionCollector(
           establishCommitmentProtectionAction.descriptor.domainEvents,
           'commerce.inventory',
           establishCommitmentProtectionAction.descriptor.accessEvidencePolicy,
         );
         return handleEstablishCommitmentProtection(payload, {
-          actionInvocationId,
+          actionInvocationId: invocationId,
           addDomainEvent: collector.addDomainEvent,
           addOutboxMessage: collector.addOutboxMessage,
           recordAuditEvidence: collector.recordAuditEvidence,
@@ -697,7 +699,7 @@ describe('Inventory Commitment Protection', () => {
         },
       });
 
-      const result = (yield* service.establish(payload, context)).result;
+      const { result } = yield* service.establish(payload, context);
 
       expect(Schema.is(CommitmentProtectionNotProtectableResultSchema)(result)).toBe(true);
       expect(result).toMatchObject({ reason: 'CONFIRMATION_EXPIRED' });

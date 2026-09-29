@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CurrentStockEvidenceForAvailabilityAuthenticationProblemSchema,
-  type CurrentStockEvidenceForAvailabilityDomainPolicyProblem,
   CurrentStockEvidenceForAvailabilityDomainPolicyProblemSchema,
-  type CurrentStockEvidenceForAvailabilityDomainUnavailableProblem,
   CurrentStockEvidenceForAvailabilityDomainUnavailableProblemSchema,
   CurrentStockEvidenceForAvailabilityForbiddenProblemSchema,
   CurrentStockEvidenceForAvailabilityInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   CurrentStockEvidenceForAvailabilityPolicyConflictProblemSchema,
   CurrentStockEvidenceForAvailabilityPolicyProblemSchema,
   CurrentStockEvidenceForAvailabilityUnavailableProblemSchema,
+} from '../shared/apis/current-stock-evidence-for-availability.ts';
+import type {
+  CurrentStockEvidenceForAvailabilityDomainPolicyProblem,
+  CurrentStockEvidenceForAvailabilityDomainUnavailableProblem,
 } from '../shared/apis/current-stock-evidence-for-availability.ts';
 import {
   CurrentStockEvidenceForAvailabilityRejected,

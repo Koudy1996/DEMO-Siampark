@@ -6,7 +6,7 @@ import type {
   PrivacyOwnerExecutionOutcomeEncoded,
   PrivacyOwnerReconciliationResultEncoded,
 } from '@app/shared-contracts';
-import { Match } from 'effect';
+import { Function as EffectFunction, Match } from 'effect';
 
 /**
  * Inventory-owned privacy scope that must be accounted for before Inventory can truthfully report
@@ -34,13 +34,13 @@ export interface InventoryPrivacyScopeObservation {
   readonly coverageStatus: PrivacyOwnerCoveragePartEncoded['coverageStatus'];
   readonly evidenceRefs: readonly string[];
   readonly foundContentRefs: readonly string[];
-  readonly observedAt: string;
+  readonly observedAt: PrivacyOwnerCoveragePartEncoded['observedAt'];
   readonly scopePart: InventoryPrivacyOwnerScopePart;
   readonly unresolvedReason?: string;
 }
 
 export interface InventoryPrivacyCoverageInput {
-  readonly assessedAt: string;
+  readonly assessedAt: PrivacyOwnerCoverageResultEncoded['assessedAt'];
   readonly evidenceRefs: readonly string[];
   readonly observations: readonly InventoryPrivacyScopeObservation[];
   readonly scope: PrivacyOwnerCoverageResultEncoded['scope'];
@@ -80,40 +80,51 @@ export const assessInventoryPrivacyOwnerCoverage = (
 
   const coverageParts = inventoryPrivacyOwnerScopeParts.map((scopePart): PrivacyOwnerCoveragePartEncoded => {
     const observations = observationsByPart.get(scopePart) ?? [];
-    const observation = observations[0];
+    const [observation] = observations;
     if (observations.length !== 1 || observation === undefined) {
+      const unresolvedReason =
+        observations.length === 0
+          ? 'REQUIRED_INVENTORY_OWNER_SCOPE_NOT_OBSERVED'
+          : 'DUPLICATE_INVENTORY_OWNER_SCOPE_OBSERVATION';
       return {
         coverageStatus: 'INDETERMINATE',
         evidenceRefs: observations.flatMap(({ evidenceRefs }) => evidenceRefs),
         foundContentRefs: observations.flatMap(({ foundContentRefs }) => foundContentRefs),
         observedAt: input.assessedAt,
         scopeRef: `commerce.inventory/privacy-owner-scope/${scopePart}`,
-        unresolvedReason:
-          observations.length === 0
-            ? 'REQUIRED_INVENTORY_OWNER_SCOPE_NOT_OBSERVED'
-            : 'DUPLICATE_INVENTORY_OWNER_SCOPE_OBSERVATION',
+        unresolvedReason,
       };
     }
 
-    return {
+    const coveragePart = {
       coverageStatus: observation.coverageStatus,
       evidenceRefs: [...observation.evidenceRefs],
       foundContentRefs: [...observation.foundContentRefs],
       observedAt: observation.observedAt,
       scopeRef: `commerce.inventory/privacy-owner-scope/${scopePart}`,
-      ...(observation.coverageStatus === 'COMPLETE'
-        ? {}
-        : {
-            unresolvedReason: observation.unresolvedReason ?? 'INVENTORY_OWNER_SCOPE_NOT_COMPLETELY_VERIFIED',
-          }),
+    };
+    if (observation.coverageStatus === 'COMPLETE') {
+      return coveragePart;
+    }
+    return {
+      ...coveragePart,
+      unresolvedReason: observation.unresolvedReason ?? 'INVENTORY_OWNER_SCOPE_NOT_COMPLETELY_VERIFIED',
     };
   });
   const coverageStatus = aggregateCoverageStatus(coverageParts);
   const anyContentFound = coverageParts.some(({ foundContentRefs }) => foundContentRefs.length > 0);
+  let contentStatus: PrivacyOwnerCoverageResultEncoded['contentStatus'];
+  if (anyContentFound) {
+    contentStatus = 'FOUND';
+  } else if (coverageStatus === 'COMPLETE') {
+    contentStatus = 'NO_DATA';
+  } else {
+    contentStatus = 'UNKNOWN';
+  }
 
   return {
     assessedAt: input.assessedAt,
-    contentStatus: anyContentFound ? 'FOUND' : coverageStatus === 'COMPLETE' ? 'NO_DATA' : 'UNKNOWN',
+    contentStatus,
     coverageParts,
     coverageStatus,
     evidenceRefs: [...input.evidenceRefs],
@@ -141,7 +152,7 @@ export interface InventoryPrivacyPreviousAttempt {
 
 export interface InventoryPrivacyMeasureEvaluationInput {
   readonly antiResurrectionProtection?: AntiResurrectionProtectionEncoded;
-  readonly confirmedAt: string;
+  readonly confirmedAt: PrivacyOwnerExecutionOutcomeEncoded['confirmedAt'];
   readonly coverage: PrivacyOwnerCoverageResultEncoded;
   readonly evidenceRefs: readonly string[];
   readonly measure: PrivacyMeasureEncoded;
@@ -177,6 +188,7 @@ const canonicalOwnerScope = (scope: PrivacyMeasureEncoded['scope']) => ({
 });
 
 /** Stable comparison value persisted by the previous-attempt measure itself. */
+/* oxlint-disable effect-native/no-native-json-stringify -- The explicitly ordered canonical projection is the persisted fingerprint contract; expires: 2027-03-31. */
 export const inventoryPrivacyMeasureIdentityFingerprint = (measure: PrivacyMeasureEncoded): string =>
   JSON.stringify({
     expectedEvidenceRefs: canonicalReferences(measure.expectedEvidenceRefs),
@@ -190,36 +202,76 @@ export const inventoryPrivacyMeasureIdentityFingerprint = (measure: PrivacyMeasu
     sourceDecisionRevision: measure.sourceDecisionRevision,
     targetContentRefs: canonicalReferences(measure.targetContentRefs),
   });
+/* oxlint-enable effect-native/no-native-json-stringify */
 
 const hasSameMeasureIntent = (left: PrivacyMeasureEncoded, right: PrivacyMeasureEncoded): boolean =>
   inventoryPrivacyMeasureIdentityFingerprint(left) === inventoryPrivacyMeasureIdentityFingerprint(right);
 
-const hasExactReferences = (left: readonly string[], right: readonly string[]): boolean =>
-  left.length === right.length &&
-  canonicalReferences(left).every((reference, index) => reference === canonicalReferences(right)[index]);
+const hasExactReferences = (left: readonly string[], right: readonly string[]): boolean => {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const canonicalLeft = canonicalReferences(left);
+  const canonicalRight = canonicalReferences(right);
+  return (
+    canonicalLeft.length === canonicalRight.length &&
+    canonicalLeft.every((reference, index) => reference === canonicalRight[index])
+  );
+};
+
+const hasSamePrivacySubject = (
+  left: ReturnType<typeof canonicalPrivacySubject>,
+  right: ReturnType<typeof canonicalPrivacySubject>,
+): boolean =>
+  Match.value(left).pipe(
+    Match.tag('RESOLVED_DATA_SUBJECT', ({ subjectRef }) =>
+      Match.value(right).pipe(
+        Match.tag('RESOLVED_DATA_SUBJECT', (candidate) => subjectRef === candidate.subjectRef),
+        Match.orElse(() => false),
+      ),
+    ),
+    Match.tag('ANONYMOUS_PRIVACY_CONTEXT', ({ contextRef }) =>
+      Match.value(right).pipe(
+        Match.tag('ANONYMOUS_PRIVACY_CONTEXT', (candidate) => contextRef === candidate.contextRef),
+        Match.orElse(() => false),
+      ),
+    ),
+    Match.exhaustive,
+  );
+
+const hasSameOwnerScope = (left: PrivacyMeasureEncoded['scope'], right: PrivacyMeasureEncoded['scope']): boolean => {
+  const leftCanonical = canonicalOwnerScope(left);
+  const rightCanonical = canonicalOwnerScope(right);
+  return (
+    leftCanonical.controllerRef === rightCanonical.controllerRef &&
+    leftCanonical.dsrControllerObligationRef === rightCanonical.dsrControllerObligationRef &&
+    leftCanonical.ownerCapability === rightCanonical.ownerCapability &&
+    leftCanonical.requestedScopeRef === rightCanonical.requestedScopeRef &&
+    leftCanonical.tenantId === rightCanonical.tenantId &&
+    hasSamePrivacySubject(leftCanonical.subject, rightCanonical.subject) &&
+    hasExactReferences(leftCanonical.requestedScopePartRefs, rightCanonical.requestedScopePartRefs) &&
+    hasExactReferences(leftCanonical.trustedLookupRefs, rightCanonical.trustedLookupRefs)
+  );
+};
 
 const requiredAntiResurrectionKind = (
   intendedOutcome: PrivacyMeasureEncoded['intendedOutcome'],
-): AntiResurrectionProtectionEncoded['kind'] | undefined => {
-  switch (intendedOutcome) {
-    case 'DELETE':
-      return 'DELETED_SCOPE';
-    case 'ANONYMIZE':
-      return 'ANONYMIZED_SCOPE';
-    case 'ENFORCE_DISPOSITION_RESTRICTION':
-      return 'OWNER_ENFORCED_DISPOSITION_RESTRICTION';
-    case 'ENFORCE_PROCESSING_RESTRICTION':
-      return 'OWNER_ENFORCED_PROCESSING_RESTRICTION';
-    case 'RECTIFY':
-      return undefined;
-  }
-};
+): AntiResurrectionProtectionEncoded['kind'] | undefined =>
+  Match.value(intendedOutcome).pipe(
+    Match.when('DELETE', () => 'DELETED_SCOPE' as const),
+    Match.when('ANONYMIZE', () => 'ANONYMIZED_SCOPE' as const),
+    Match.when('ENFORCE_DISPOSITION_RESTRICTION', () => 'OWNER_ENFORCED_DISPOSITION_RESTRICTION' as const),
+    Match.when('ENFORCE_PROCESSING_RESTRICTION', () => 'OWNER_ENFORCED_PROCESSING_RESTRICTION' as const),
+    Match.when('RECTIFY', EffectFunction.constUndefined),
+    Match.exhaustive,
+  );
 
 /**
  * Evaluates Inventory's truthful response without inventing a generic privacy mutation path.
  * Inventory currently has no approved generic privacy Action; required business evidence is preserved,
  * and any indeterminate prior attempt must be reconciled before this evaluator considers a retry.
  */
+// oxlint-disable-next-line eslint/complexity -- The owner decision table remains intentionally explicit and exhaustively tested; expires: 2027-03-31.
 export const evaluateInventoryPrivacyMeasure = (
   input: InventoryPrivacyMeasureEvaluationInput,
 ): InventoryPrivacyMeasureEvaluation => {
@@ -249,7 +301,7 @@ export const evaluateInventoryPrivacyMeasure = (
     }
 
     if (input.previousAttempt.outcome.status === 'INDETERMINATE') {
-      const reconciliation = input.reconciliation;
+      const { reconciliation } = input;
       if (
         reconciliation === undefined ||
         reconciliation.measureRef !== input.measure.measureRef ||
@@ -275,8 +327,7 @@ export const evaluateInventoryPrivacyMeasure = (
           requiredProtectionKind === undefined ||
           (protection !== undefined &&
             protection.kind === requiredProtectionKind &&
-            JSON.stringify(canonicalOwnerScope(protection.scope)) ===
-              JSON.stringify(canonicalOwnerScope(input.measure.scope)) &&
+            hasSameOwnerScope(protection.scope, input.measure.scope) &&
             protection.sourceDecisionRef === input.measure.sourceDecisionRef &&
             protection.sourceDecisionRevision === input.measure.sourceDecisionRevision &&
             protection.sourceOutcomeRef === input.outcomeRef &&
@@ -288,7 +339,7 @@ export const evaluateInventoryPrivacyMeasure = (
               'BACKUP_RECOVERY',
             ]));
 
-        if (hasCompleteProtection === false) {
+        if (!hasCompleteProtection) {
           return {
             outcome: {
               ...baseOutcome,
@@ -302,8 +353,7 @@ export const evaluateInventoryPrivacyMeasure = (
           };
         }
 
-        return {
-          ...(protection === undefined ? {} : { antiResurrectionProtection: protection }),
+        const achieved = {
           outcome: {
             ...baseOutcome,
             affectedContentRefs: [...input.measure.targetContentRefs],
@@ -313,9 +363,10 @@ export const evaluateInventoryPrivacyMeasure = (
             remainingContentRefs: [],
             status: 'ACHIEVED',
           },
-        };
+        } satisfies InventoryPrivacyMeasureEvaluation;
+        return protection === undefined ? achieved : { ...achieved, antiResurrectionProtection: protection };
       }
-      if (reconciliation.retryAllowed === false) {
+      if (!reconciliation.retryAllowed) {
         return {
           outcome: {
             ...baseOutcome,

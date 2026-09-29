@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   StockSharingEligibilityResolutionAuthenticationProblemSchema,
-  type StockSharingEligibilityResolutionDomainPolicyProblem,
   StockSharingEligibilityResolutionDomainPolicyProblemSchema,
-  type StockSharingEligibilityResolutionDomainUnavailableProblem,
   StockSharingEligibilityResolutionDomainUnavailableProblemSchema,
   StockSharingEligibilityResolutionForbiddenProblemSchema,
   StockSharingEligibilityResolutionInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   StockSharingEligibilityResolutionPolicyConflictProblemSchema,
   StockSharingEligibilityResolutionPolicyProblemSchema,
   StockSharingEligibilityResolutionUnavailableProblemSchema,
+} from '../shared/apis/stock-sharing-eligibility-resolution.ts';
+import type {
+  StockSharingEligibilityResolutionDomainPolicyProblem,
+  StockSharingEligibilityResolutionDomainUnavailableProblem,
 } from '../shared/apis/stock-sharing-eligibility-resolution.ts';
 import { StockSharingEligibilityRejected } from '../shared/domain/stock-sharing-eligibility.ts';
 import { StockSharingEligibilityUnavailable } from '../shared/domain/stock-sharing-eligibility-unavailable.ts';

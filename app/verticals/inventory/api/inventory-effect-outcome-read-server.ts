@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryEffectOutcomeAuthenticationProblemSchema,
-  type InventoryEffectOutcomeDomainConflictProblem,
   InventoryEffectOutcomeDomainConflictProblemSchema,
-  type InventoryEffectOutcomeDomainUnavailableProblem,
   InventoryEffectOutcomeDomainUnavailableProblemSchema,
   InventoryEffectOutcomeForbiddenProblemSchema,
   InventoryEffectOutcomeInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   InventoryEffectOutcomePolicyConflictProblemSchema,
   InventoryEffectOutcomePolicyProblemSchema,
   InventoryEffectOutcomeUnavailableProblemSchema,
+} from '../shared/apis/inventory-effect-outcome.ts';
+import type {
+  InventoryEffectOutcomeDomainConflictProblem,
+  InventoryEffectOutcomeDomainUnavailableProblem,
 } from '../shared/apis/inventory-effect-outcome.ts';
 import {
   InventoryEffectLedgerConflict,

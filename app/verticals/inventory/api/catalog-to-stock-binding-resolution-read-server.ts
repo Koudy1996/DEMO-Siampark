@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CatalogToStockBindingResolutionAuthenticationProblemSchema,
-  type CatalogToStockBindingResolutionDomainPolicyProblem,
   CatalogToStockBindingResolutionDomainPolicyProblemSchema,
-  type CatalogToStockBindingResolutionDomainUnavailableProblem,
   CatalogToStockBindingResolutionDomainUnavailableProblemSchema,
   CatalogToStockBindingResolutionForbiddenProblemSchema,
   CatalogToStockBindingResolutionInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   CatalogToStockBindingResolutionPolicyConflictProblemSchema,
   CatalogToStockBindingResolutionPolicyProblemSchema,
   CatalogToStockBindingResolutionUnavailableProblemSchema,
+} from '../shared/apis/catalog-to-stock-binding-resolution.ts';
+import type {
+  CatalogToStockBindingResolutionDomainPolicyProblem,
+  CatalogToStockBindingResolutionDomainUnavailableProblem,
 } from '../shared/apis/catalog-to-stock-binding-resolution.ts';
 import { CatalogToStockBindingResolutionFailure } from '../shared/domain/catalog-to-stock-binding-resolution.ts';
 import { CatalogToStockBindingUnavailable } from '../shared/domain/catalog-to-stock-binding-unavailable.ts';

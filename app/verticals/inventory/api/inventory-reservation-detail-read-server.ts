@@ -6,11 +6,8 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryReservationDetailAuthenticationProblemSchema,
-  type InventoryReservationDetailDomainConflictProblem,
   InventoryReservationDetailDomainConflictProblemSchema,
-  type InventoryReservationDetailDomainPolicyProblem,
   InventoryReservationDetailDomainPolicyProblemSchema,
-  type InventoryReservationDetailDomainUnavailableProblem,
   InventoryReservationDetailDomainUnavailableProblemSchema,
   InventoryReservationDetailForbiddenProblemSchema,
   InventoryReservationDetailInternalProblemSchema,
@@ -19,6 +16,11 @@ import {
   InventoryReservationDetailPolicyConflictProblemSchema,
   InventoryReservationDetailPolicyProblemSchema,
   InventoryReservationDetailUnavailableProblemSchema,
+} from '../shared/apis/inventory-reservation-detail.ts';
+import type {
+  InventoryReservationDetailDomainConflictProblem,
+  InventoryReservationDetailDomainPolicyProblem,
+  InventoryReservationDetailDomainUnavailableProblem,
 } from '../shared/apis/inventory-reservation-detail.ts';
 import { InventoryObligationRejected } from '../shared/domain/inventory-obligation.ts';
 import { InventoryObligationPersistenceUnavailable } from '../shared/domain/inventory-obligation-persistence-unavailable.ts';

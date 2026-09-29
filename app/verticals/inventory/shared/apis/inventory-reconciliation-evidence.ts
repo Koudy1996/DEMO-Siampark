@@ -115,7 +115,7 @@ const InventoryPrivacyOwnerCoverageQuerySchema = Schema.TaggedStruct('PRIVACY_OW
     if (scope.ownerCapability !== 'commerce.inventory') {
       return { issue: 'privacy owner capability must be commerce.inventory', path: ['scope', 'ownerCapability'] };
     }
-    if (scope.tenantId !== ownerRef.tenantId) {
+    if (String(scope.tenantId) !== String(ownerRef.tenantId)) {
       return { issue: 'privacy owner scope and owner Resource must share one Tenant', path: ['scope', 'tenantId'] };
     }
     if (!hasExactReferenceSet(scope.requestedScopePartRefs, inventoryPrivacyOwnerScopeRefs)) {

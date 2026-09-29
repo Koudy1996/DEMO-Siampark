@@ -6,7 +6,6 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventorySourceConflictDetailAuthenticationProblemSchema,
-  type InventorySourceConflictDetailDomainUnavailableProblem,
   InventorySourceConflictDetailDomainUnavailableProblemSchema,
   InventorySourceConflictDetailForbiddenProblemSchema,
   InventorySourceConflictDetailInternalProblemSchema,
@@ -16,6 +15,7 @@ import {
   InventorySourceConflictDetailPolicyProblemSchema,
   InventorySourceConflictDetailUnavailableProblemSchema,
 } from '../shared/apis/inventory-source-conflict-detail.ts';
+import type { InventorySourceConflictDetailDomainUnavailableProblem } from '../shared/apis/inventory-source-conflict-detail.ts';
 import { InventorySourceConflictUnavailable } from '../shared/domain/inventory-source-conflict-unavailable.ts';
 import { inventorySourceConflictDetailRead } from '../src/api/inventory-source-conflict-detail.read.ts';
 import type { InventorySourceConflictDetailDomainError } from '../src/api/inventory-source-conflict-detail.read.ts';

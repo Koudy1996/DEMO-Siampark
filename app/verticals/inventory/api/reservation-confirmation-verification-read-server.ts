@@ -6,11 +6,8 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   ReservationConfirmationVerificationAuthenticationProblemSchema,
-  type ReservationConfirmationVerificationDomainConflictProblem,
   ReservationConfirmationVerificationDomainConflictProblemSchema,
-  type ReservationConfirmationVerificationDomainPolicyProblem,
   ReservationConfirmationVerificationDomainPolicyProblemSchema,
-  type ReservationConfirmationVerificationDomainUnavailableProblem,
   ReservationConfirmationVerificationDomainUnavailableProblemSchema,
   ReservationConfirmationVerificationForbiddenProblemSchema,
   ReservationConfirmationVerificationInternalProblemSchema,
@@ -19,6 +16,11 @@ import {
   ReservationConfirmationVerificationPolicyConflictProblemSchema,
   ReservationConfirmationVerificationPolicyProblemSchema,
   ReservationConfirmationVerificationUnavailableProblemSchema,
+} from '../shared/apis/reservation-confirmation-verification.ts';
+import type {
+  ReservationConfirmationVerificationDomainConflictProblem,
+  ReservationConfirmationVerificationDomainPolicyProblem,
+  ReservationConfirmationVerificationDomainUnavailableProblem,
 } from '../shared/apis/reservation-confirmation-verification.ts';
 import {
   ReservationConfirmationRejected,

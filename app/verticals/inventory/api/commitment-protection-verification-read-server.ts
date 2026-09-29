@@ -6,9 +6,7 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CommitmentProtectionVerificationAuthenticationProblemSchema,
-  type CommitmentProtectionVerificationDomainConflictProblem,
   CommitmentProtectionVerificationDomainConflictProblemSchema,
-  type CommitmentProtectionVerificationDomainUnavailableProblem,
   CommitmentProtectionVerificationDomainUnavailableProblemSchema,
   CommitmentProtectionVerificationForbiddenProblemSchema,
   CommitmentProtectionVerificationInternalProblemSchema,
@@ -17,6 +15,10 @@ import {
   CommitmentProtectionVerificationPolicyConflictProblemSchema,
   CommitmentProtectionVerificationPolicyProblemSchema,
   CommitmentProtectionVerificationUnavailableProblemSchema,
+} from '../shared/apis/commitment-protection-verification.ts';
+import type {
+  CommitmentProtectionVerificationDomainConflictProblem,
+  CommitmentProtectionVerificationDomainUnavailableProblem,
 } from '../shared/apis/commitment-protection-verification.ts';
 import { CommitmentProtectionUnavailable } from '../shared/domain/commitment-protection.ts';
 import { commitmentProtectionVerificationRead } from '../src/api/commitment-protection-verification.read.ts';

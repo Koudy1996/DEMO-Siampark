@@ -26,11 +26,11 @@ const scope = {
   controllerRef: 'legal-entity:controller-a',
   dsrControllerObligationRef: 'privacy:dsr-obligation-7',
   ownerCapability: 'commerce.inventory',
-  requestedScopeRef: 'privacy-owner-scope:inventory/7',
   requestedScopePartRefs: [
     'inventory-privacy-scope:reservation-history',
     'inventory-privacy-scope:recovery-responsibilities',
   ],
+  requestedScopeRef: 'privacy-owner-scope:inventory/7',
   subject: { _tag: 'RESOLVED_DATA_SUBJECT', subjectRef: 'party:subject-7' },
   tenantId: 'tenant-a',
   trustedLookupRefs: ['reservation:opaque-correlation-7'],

@@ -6,7 +6,6 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryBackendConfigurationCurrentAuthenticationProblemSchema,
-  type InventoryBackendConfigurationCurrentDomainUnavailableProblem,
   InventoryBackendConfigurationCurrentDomainUnavailableProblemSchema,
   InventoryBackendConfigurationCurrentForbiddenProblemSchema,
   InventoryBackendConfigurationCurrentInternalProblemSchema,
@@ -16,6 +15,7 @@ import {
   InventoryBackendConfigurationCurrentPolicyProblemSchema,
   InventoryBackendConfigurationCurrentUnavailableProblemSchema,
 } from '../shared/apis/inventory-backend-configuration-current.ts';
+import type { InventoryBackendConfigurationCurrentDomainUnavailableProblem } from '../shared/apis/inventory-backend-configuration-current.ts';
 import { InventoryBackendConfigurationPersistenceUnavailable } from '../shared/domain/inventory-backend-configuration-persistence-unavailable.ts';
 import { inventoryBackendConfigurationCurrentRead } from '../src/api/inventory-backend-configuration-current.read.ts';
 import type { InventoryBackendConfigurationCurrentDomainError } from '../src/api/inventory-backend-configuration-current.read.ts';

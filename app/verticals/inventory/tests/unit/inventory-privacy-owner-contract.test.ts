@@ -15,10 +15,10 @@ const scope = {
   controllerRef: 'legal-entity:controller-a',
   dsrControllerObligationRef: 'privacy:dsr-obligation-858',
   ownerCapability: 'commerce.inventory',
-  requestedScopeRef: 'privacy-owner-scope:inventory/858',
   requestedScopePartRefs: inventoryPrivacyOwnerScopeParts.map(
     (scopePart) => `commerce.inventory/privacy-owner-scope/${scopePart}`,
   ),
+  requestedScopeRef: 'privacy-owner-scope:inventory/858',
   subject: { _tag: 'RESOLVED_DATA_SUBJECT', subjectRef: 'party:subject-858' },
   tenantId: 'tenant-a',
   trustedLookupRefs: ['reservation-correlation:opaque-858'],

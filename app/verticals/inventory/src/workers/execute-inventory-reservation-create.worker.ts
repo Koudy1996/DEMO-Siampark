@@ -79,19 +79,35 @@ const deterministicUuid = (seed: string) => {
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
 };
 
+const unavailable = (request: OutboxPayload['request'], cause?: unknown) => {
+  const failure = new InventoryReservationCreateUnavailable({
+    code: 'inventory_reservation_create_unavailable',
+    effectId: request.effectId,
+    reason: 'The Reservation create effect did not reach a terminal owner state',
+    retryable: true,
+  });
+  if (cause !== undefined) {
+    Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
+  }
+  return failure;
+};
+
 const confirmationIdentityFor = (request: OutboxPayload['request']) => {
   const confirmationId = deterministicUuid(
     `${request.reservation.ref.tenantId}\u0000${request.reservation.ref.resourceId}\u0000${request.reservation.origin.attemptId}\u0000reservation-confirmation`,
   );
-  return Effect.all({
-    confirmationRef: Schema.decodeEffect(ReservationConfirmationRefSchema)({
-      moduleId: moduleKey,
-      resourceId: confirmationId,
-      resourceType: 'commerce.inventory.reservation-confirmation',
-      tenantId: request.reservation.ref.tenantId,
-    }),
-    effectId: Schema.decodeEffect(ReservationAuthorityEffectIdSchema)(`reservation-confirmation:${confirmationId}`),
-  }).pipe(Effect.mapError((cause) => unavailable(request, cause)));
+  return Effect.all(
+    {
+      confirmationRef: Schema.decodeEffect(ReservationConfirmationRefSchema)({
+        moduleId: moduleKey,
+        resourceId: confirmationId,
+        resourceType: 'commerce.inventory.reservation-confirmation',
+        tenantId: request.reservation.ref.tenantId,
+      }),
+      effectId: Schema.decodeEffect(ReservationAuthorityEffectIdSchema)(`reservation-confirmation:${confirmationId}`),
+    },
+    { concurrency: 1 },
+  ).pipe(Effect.mapError((cause) => unavailable(request, cause)));
 };
 
 const redispatchOccurredAt = (effect: typeof ReservationCreateEffectSchema.Type) =>
@@ -113,19 +129,6 @@ const rejected = (request: OutboxPayload['request']) =>
     effectId: request.effectId,
     reason: 'TENANT_SCOPE_MISMATCH',
   });
-
-const unavailable = (request: OutboxPayload['request'], cause?: unknown) => {
-  const failure = new InventoryReservationCreateUnavailable({
-    code: 'inventory_reservation_create_unavailable',
-    effectId: request.effectId,
-    reason: 'The Reservation create effect did not reach a terminal owner state',
-    retryable: true,
-  });
-  if (cause !== undefined) {
-    Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
-  }
-  return failure;
-};
 
 export const handleExecuteInventoryReservationCreate = Effect.fn('ExecuteInventoryReservationCreateWorker.handle')(
   function* handle(payload: OutboxPayload, context: OutboxWorkerHandlerContext) {

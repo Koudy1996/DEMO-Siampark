@@ -5,6 +5,7 @@ import { Effect, Match, Option, Predicate, Schema } from 'effect';
 
 import {
   CommitmentProtectionConflict,
+  CommitmentProtectionMutationIdSchema,
   CommitmentProtectionRejected,
   CommitmentProtectionUnavailable,
   establishCommitmentProtection,
@@ -50,10 +51,10 @@ import {
   commitmentProtectionLedgerIntent,
   commitmentProtectionLedgerResolution,
   inventoryEffectLedgerId,
+  sameInventoryEffectIntent,
   synchronizeInventoryEffectLedger,
 } from './inventory-effect-ledger.service.ts';
 import type { InventoryEffectLedgerService } from './inventory-effect-ledger.service.ts';
-import { sameInventoryEffectIntent } from './inventory-effect-ledger.service.ts';
 
 interface CommitmentProtectionOperationContext {
   readonly legalEntityId: typeof LegalEntityIdSchema.Type;
@@ -90,13 +91,10 @@ export interface CommitmentProtectionDecision {
   readonly result: EstablishCommitmentProtectionResult;
 }
 
+// oxlint-disable-next-line effect-native/require-context-service-for-service-interface -- The worker binds this transaction-scoped execution port through its Context service wrapper; expires: 2027-03-31.
 export interface CommitmentProtectionEstablishmentExecutionService<
   TScope extends CommitmentProtectionExecutionScope = CommitmentProtectionExecutionScope,
 > {
-  readonly prepare: (
-    scope: TScope,
-    request: CommitmentProtectionEffectRequest,
-  ) => EffectType.Effect<CommitmentProtectionPreparedExecution, EstablishCommitmentProtectionError>;
   readonly attempt: (
     prepared: Exclude<CommitmentProtectionPreparedExecution, { readonly _tag: 'TERMINAL' }>,
   ) => EffectType.Effect<CommitmentProtectionAttemptOutcome, EstablishCommitmentProtectionError>;
@@ -105,8 +103,13 @@ export interface CommitmentProtectionEstablishmentExecutionService<
     prepared: Exclude<CommitmentProtectionPreparedExecution, { readonly _tag: 'TERMINAL' }>,
     outcome: Exclude<CommitmentProtectionAttemptOutcome, { readonly _tag: 'PENDING' }>,
   ) => EffectType.Effect<void, EstablishCommitmentProtectionError>;
+  readonly prepare: (
+    scope: TScope,
+    request: CommitmentProtectionEffectRequest,
+  ) => EffectType.Effect<CommitmentProtectionPreparedExecution, EstablishCommitmentProtectionError>;
 }
 
+/* oxlint-disable effect-native/no-hand-rolled-tagged-union -- This internal worker protocol is narrowed exhaustively with Effect Match and is not a wire contract; expires: 2027-03-31. */
 export type CommitmentProtectionPreparedExecution =
   | {
       readonly _tag: 'TERMINAL';
@@ -130,6 +133,7 @@ export type CommitmentProtectionAttemptOutcome =
         | typeof AuthoritativeSuccessInventoryEffectRecoveryObservationSchema.Type
         | typeof DefinitiveNonEffectInventoryEffectRecoveryObservationSchema.Type;
     };
+/* oxlint-enable effect-native/no-hand-rolled-tagged-union */
 
 export type CommitmentProtectionWorkerFinalizer<
   TScope extends CommitmentProtectionExecutionScope = CommitmentProtectionExecutionScope,
@@ -154,6 +158,7 @@ const unavailable = (effectId: EstablishCommitmentProtectionPayload['effectId'],
   if (cause !== undefined) {
     Object.defineProperty(failure, 'cause', { configurable: true, value: cause });
   }
+
   return failure;
 };
 
@@ -332,11 +337,14 @@ export const makeCommitmentProtectionService = (dependencies: {
     const sourceActionInvocationId = yield* Schema.decodeEffect(ActionInvocationIdSchema)(
       context.actionInvocationId,
     ).pipe(Effect.mapError((cause) => unavailable(payload.effectId, 'Action identity is invalid', cause)));
+    const mutationId = yield* Schema.decodeEffect(CommitmentProtectionMutationIdSchema)(
+      payload.protectionRef.resourceId,
+    ).pipe(Effect.mapError((cause) => unavailable(payload.effectId, 'Protection identity is invalid', cause)));
     const request: CommitmentProtectionEffectRequest = {
       confirmation: originalConfirmation(current, history),
       effectId: payload.effectId,
       legalEntityId: context.legalEntityId,
-      mutationId: payload.protectionRef.resourceId,
+      mutationId,
       protectionRef: payload.protectionRef,
       requestedAt: yield* dependencies.now,
       sourceActionInvocationId,
@@ -431,18 +439,25 @@ export const makeCommitmentProtectionEstablishmentExecutionService = <
   const loadConfirmationTimeline = Effect.fn('CommitmentProtectionEstablishmentExecution.loadConfirmationTimeline')(
     function* loadTimeline(scope: TScope, request: CommitmentProtectionEffectRequest) {
       const confirmations = dependencies.confirmations(scope);
-      const current = yield* confirmations.findByRef(request.confirmation.ref).pipe(
-        Effect.mapError((cause) => unavailable(request.effectId, 'Reservation Confirmation is unavailable', cause)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(rejected(request.effectId, 'CONFIRMATION_SCOPE_MISMATCH')),
-            onSome: Effect.succeed,
-          }),
-        ),
+      const [current, history] = yield* Effect.all(
+        [
+          confirmations.findByRef(request.confirmation.ref).pipe(
+            Effect.mapError((cause) => unavailable(request.effectId, 'Reservation Confirmation is unavailable', cause)),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(rejected(request.effectId, 'CONFIRMATION_SCOPE_MISMATCH')),
+                onSome: Effect.succeed,
+              }),
+            ),
+          ),
+          confirmations
+            .readHistory(request.confirmation.ref)
+            .pipe(
+              Effect.mapError((cause) => unavailable(request.effectId, 'Confirmation history is unavailable', cause)),
+            ),
+        ],
+        { concurrency: 1 },
       );
-      const history = yield* confirmations
-        .readHistory(request.confirmation.ref)
-        .pipe(Effect.mapError((cause) => unavailable(request.effectId, 'Confirmation history is unavailable', cause)));
       return { current, history };
     },
   );
@@ -489,9 +504,9 @@ export const makeCommitmentProtectionEstablishmentExecutionService = <
       ) {
         return yield* rejected(request.effectId, 'PROTECTION_IDENTITY_CONFLICT');
       }
-      const terminalObservation = Schema.is(AuthoritativeSuccessInventoryEffectRecoveryObservationSchema)(observation)
-        ? observation
-        : Schema.is(DefinitiveNonEffectInventoryEffectRecoveryObservationSchema)(observation)
+      const terminalObservation =
+        Schema.is(AuthoritativeSuccessInventoryEffectRecoveryObservationSchema)(observation) ||
+        Schema.is(DefinitiveNonEffectInventoryEffectRecoveryObservationSchema)(observation)
           ? observation
           : undefined;
       if (terminalObservation === undefined) {
@@ -576,10 +591,15 @@ export const makeCommitmentProtectionEstablishmentExecutionService = <
     if (observation.kind !== 'CONFIRMED') {
       return yield* Effect.void;
     }
-    const evidence = yield* authoritativeEvidenceFor(observation).pipe(
-      Effect.mapError((cause) => unavailable(request.effectId, 'Protection evidence is invalid', cause)),
+    const [evidence, { current, history }] = yield* Effect.all(
+      [
+        authoritativeEvidenceFor(observation).pipe(
+          Effect.mapError((cause) => unavailable(request.effectId, 'Protection evidence is invalid', cause)),
+        ),
+        loadConfirmationTimeline(scope, request),
+      ],
+      { concurrency: 1 },
     );
-    const { current, history } = yield* loadConfirmationTimeline(scope, request);
     const effective = confirmationEffectiveAt(current, history, evidence.evidence.validFrom);
     const evaluation = yield* evaluateReservationConfirmationCommitment(
       effective,
@@ -590,14 +610,17 @@ export const makeCommitmentProtectionEstablishmentExecutionService = <
       history,
     ).pipe(Effect.mapError((cause) => Object.assign(rejected(request.effectId, 'PROOF_SCOPE_MISMATCH'), { cause })));
     if (evaluation.outcome !== 'PROTECTION_ESTABLISHED_IN_TIME') {
+      let reason: 'CONFIRMATION_REVOKED' | 'CONFIRMATION_EXPIRED' | 'ESTABLISHMENT_AFTER_EXPIRY';
+      if (effective.health.state === 'REVOKED') {
+        reason = 'CONFIRMATION_REVOKED';
+      } else if (effective.health.state === 'EXPIRED') {
+        reason = 'CONFIRMATION_EXPIRED';
+      } else {
+        reason = 'ESTABLISHMENT_AFTER_EXPIRY';
+      }
       yield* dependencies.finalizer(scope, recovered.record, {
         _tag: 'NOT_PROTECTABLE',
-        reason:
-          effective.health.state === 'REVOKED'
-            ? 'CONFIRMATION_REVOKED'
-            : effective.health.state === 'EXPIRED'
-              ? 'CONFIRMATION_EXPIRED'
-              : 'ESTABLISHMENT_AFTER_EXPIRY',
+        reason,
         request,
       });
       return yield* Effect.void;
