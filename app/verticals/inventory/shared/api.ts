@@ -5,7 +5,6 @@ import {
   createMicroVerticalOperationContext,
 } from '@modern-js/bff-effect/microvertical-api';
 import type { MicroVerticalOperationContext } from '@modern-js/bff-effect/microvertical-api';
-// oxlint-disable-next-line typescript/consistent-type-imports -- The framework baseline requires Schema in the exact value import.
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, Schema } from '@modern-js/bff-effect/effect-client';
 
 // <generated-governed-http-api-imports>
