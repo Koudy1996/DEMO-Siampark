@@ -5,6 +5,8 @@ const OpaquePrivacyReferenceSchema = Schema.String.check(
   Schema.isMaxLength(1000),
   Schema.isTrimmed(),
 );
+const IdempotencyKeySchema = OpaquePrivacyReferenceSchema.pipe(Schema.brand('PrivacyIdempotencyKey'));
+const TenantIdSchema = OpaquePrivacyReferenceSchema.pipe(Schema.brand('PrivacyTenantId'));
 
 const PrivacyReferenceListSchema = Schema.Array(OpaquePrivacyReferenceSchema);
 
@@ -29,10 +31,10 @@ export const PrivacyOwnerScopeSchema = Schema.Struct({
   controllerRef: OpaquePrivacyReferenceSchema,
   dsrControllerObligationRef: Schema.optionalKey(OpaquePrivacyReferenceSchema),
   ownerCapability: OpaquePrivacyReferenceSchema,
-  requestedScopeRef: OpaquePrivacyReferenceSchema,
   requestedScopePartRefs: PrivacyReferenceListSchema,
+  requestedScopeRef: OpaquePrivacyReferenceSchema,
   subject: PrivacySubjectSchema,
-  tenantId: OpaquePrivacyReferenceSchema,
+  tenantId: TenantIdSchema,
   trustedLookupRefs: PrivacyReferenceListSchema,
 }).check(
   Schema.makeFilter((scope) =>
@@ -81,7 +83,7 @@ export const PrivacyOwnerCoveragePartSchema = Schema.Struct({
         path: ['unresolvedReason'],
       };
     }
-    return undefined;
+    return true;
   }),
 );
 export type PrivacyOwnerCoveragePart = typeof PrivacyOwnerCoveragePartSchema.Type;
@@ -134,7 +136,7 @@ export const PrivacyOwnerCoverageResultSchema = Schema.Struct({
         path: ['contentStatus'],
       };
     }
-    return undefined;
+    return true;
   }),
 );
 export type PrivacyOwnerCoverageResult = typeof PrivacyOwnerCoverageResultSchema.Type;
@@ -152,7 +154,7 @@ export type PrivacyMeasureIntendedOutcome = typeof PrivacyMeasureIntendedOutcome
 /** Approved exact-scope owner work. It is not permission to bypass the owner's public Actions. */
 export const PrivacyMeasureSchema = Schema.Struct({
   expectedEvidenceRefs: PrivacyReferenceListSchema,
-  idempotencyKey: OpaquePrivacyReferenceSchema,
+  idempotencyKey: IdempotencyKeySchema,
   intendedOutcome: PrivacyMeasureIntendedOutcomeSchema,
   measureRef: OpaquePrivacyReferenceSchema,
   preconditionRefs: PrivacyReferenceListSchema,
@@ -228,7 +230,7 @@ export const PrivacyOwnerExecutionOutcomeSchema = Schema.Struct({
         path: ['reconciliationRequired'],
       };
     }
-    return undefined;
+    return true;
   }),
 );
 export type PrivacyOwnerExecutionOutcome = typeof PrivacyOwnerExecutionOutcomeSchema.Type;
@@ -273,7 +275,7 @@ export const PrivacyOwnerReconciliationResultSchema = Schema.Struct({
         path: ['preconditionsRecheckedAt'],
       };
     }
-    return undefined;
+    return true;
   }),
 );
 export type PrivacyOwnerReconciliationResult = typeof PrivacyOwnerReconciliationResultSchema.Type;
