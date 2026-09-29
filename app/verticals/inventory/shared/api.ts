@@ -41,12 +41,17 @@ import { StockReceiptActionApi } from './apis/stock-receipt-action.ts';
 import { StockSharingEligibilityResolutionApi } from './apis/stock-sharing-eligibility-resolution.ts';
 // </generated-governed-http-api-imports>
 
-export const inventoryMarkerSchema: Schema.Codec<typeof MicroVerticalBuildMarkerSchema.Type> =
-  MicroVerticalBuildMarkerSchema;
+export const inventoryMarkerSchema = Schema.Struct({
+  ...MicroVerticalBuildMarkerSchema.fields,
+  kind: Schema.Literal('microvertical-delivery-unit'),
+  schemaVersion: Schema.Literal(1),
+});
 export type InventoryMarker = typeof inventoryMarkerSchema.Type;
 
-export const inventoryReadinessSchema: Schema.Codec<typeof MicroVerticalReadinessSchema.Type> =
-  MicroVerticalReadinessSchema;
+export const inventoryReadinessSchema = Schema.Struct({
+  ...MicroVerticalReadinessSchema.fields,
+  marker: inventoryMarkerSchema,
+});
 export type InventoryReadiness = typeof inventoryReadinessSchema.Type;
 
 export type OperationContext = MicroVerticalOperationContext;

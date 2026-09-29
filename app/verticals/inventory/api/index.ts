@@ -71,7 +71,11 @@ const inventoryReadinessLayer = HttpApiBuilder.group(inventoryApi, 'foundation',
         ssr: 'ready' as const,
         translations: 'ready' as const,
       },
-      marker: ultramodernApiMarker,
+      marker: {
+        ...ultramodernApiMarker,
+        kind: 'microvertical-delivery-unit' as const,
+        schemaVersion: 1 as const,
+      },
       status: 'ready' as const,
       versionSkew: 'none' as const,
     }).pipe(
