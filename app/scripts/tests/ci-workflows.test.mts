@@ -90,6 +90,7 @@ interface PlacementBuildInputs {
 
 const EDGE_READINESS_JOB = 'edge-deploy-readiness';
 const DEPLOY_TARGET_JOB = 'deploy-target';
+const OUTBOX_WORKER_MODE_OUTPUT = expression('needs.deploy-target.outputs.outbox-worker-mode');
 
 const runStep = (script: string, environment: Readonly<Record<string, string>>) => {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'ontos-workflow-step-'));
@@ -185,7 +186,7 @@ it('deploys planned edge units to Cloudflare after the stage migration, with the
   // Zerops deployment of the same revision.
   expect(jobs['deploy-zerops'].environment).toBe(expression('needs.deploy-target.outputs.environment'));
   expect(edge.environment).toBe(EDGE_ENVIRONMENT);
-  expect(edge.needs).toEqual(['deploy-zerops', EDGE_READINESS_JOB]);
+  expect(edge.needs).toEqual([DEPLOY_TARGET_JOB, 'deploy-zerops', EDGE_READINESS_JOB]);
   expect(edge.if).toBe("needs.edge-deploy-readiness.outputs.configured == 'true'");
   expect(edge.env).toBeUndefined();
   const byName = new Map(edge.steps.map((step) => [step.name, step]));
@@ -312,6 +313,8 @@ const readTargetWorkflow = () =>
 const DEPLOY_ENVIRONMENT_EXPRESSION = expression("inputs.environment || 'stage'");
 
 const CONFIGURED = { ZEROPS_PROJECT_ID: 'project', ZEROPS_TOKEN: 'token' } as const;
+const DEDICATED = { OUTBOX_WORKER_MODE: 'dedicated' } as const;
+const HOST = { OUTBOX_WORKER_MODE: 'host' } as const;
 
 it('selects each environment deploy target from its DEPLOY_TARGET variable, Zerops when unset', () => {
   const workflow = readTargetWorkflow();
@@ -328,35 +331,67 @@ it('selects each environment deploy target from its DEPLOY_TARGET variable, Zero
   expect(step?.env).toEqual({
     DEPLOY_ENVIRONMENT: DEPLOY_ENVIRONMENT_EXPRESSION,
     DEPLOY_TARGET: expression('vars.DEPLOY_TARGET'),
+    OUTBOX_WORKER_MODE: expression('vars.OUTBOX_WORKER_MODE'),
     ZEROPS_PROJECT_ID: expression('vars.ZEROPS_PROJECT_ID'),
     ZEROPS_TOKEN: expression('secrets.ZEROPS_TOKEN'),
   });
+  expect(target.outputs['outbox-worker-mode']).toBe(expression('steps.target.outputs.outbox_worker_mode'));
   const resolve = (environment: Readonly<Record<string, string>>) => runStep(step?.run ?? 'exit 1', environment);
-  // An unset target keeps today's all-Zerops stage without any new variable.
-  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: '' })).toEqual({
+  // An unset target keeps today's all-Zerops stage.
+  expect(resolve({ ...CONFIGURED, ...DEDICATED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: '' })).toEqual({
     configured: 'true',
     environment: 'stage',
+    outbox_worker_mode: 'dedicated',
     target: 'zerops',
   });
-  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: 'cloudflare' })).toEqual({
+  expect(resolve({ ...CONFIGURED, ...HOST, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: 'cloudflare' })).toEqual({
     configured: 'true',
     environment: 'stage',
+    outbox_worker_mode: 'host',
     target: 'cloudflare',
   });
-  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: 'zerops' })).toEqual({
+  expect(resolve({ ...CONFIGURED, ...DEDICATED, DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: 'zerops' })).toEqual({
     configured: 'true',
     environment: 'production',
+    outbox_worker_mode: 'dedicated',
     target: 'zerops',
   });
-  // An environment without its Zerops project and token deploys nothing.
-  expect(resolve({ DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: '' })).toEqual({
+  // An environment without its Zerops project and token deploys nothing, so it needs no mode either.
+  expect(resolve({ DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: '', OUTBOX_WORKER_MODE: '' })).toEqual({
     configured: 'false',
     environment: 'production',
+    outbox_worker_mode: '',
     target: 'zerops',
   });
   // Only stage has an edge deploy history and build environment; unknown targets fail closed.
-  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: 'cloudflare' })).toBe('failed');
-  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: 'workers' })).toBe('failed');
+  expect(resolve({ ...CONFIGURED, ...DEDICATED, DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: 'cloudflare' })).toBe(
+    'failed',
+  );
+  expect(resolve({ ...CONFIGURED, ...HOST, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: 'workers' })).toBe('failed');
+});
+
+it('requires each configured environment to choose its Outbox Worker mode, independent of the deploy target', () => {
+  const step = readTargetWorkflow().jobs['deploy-target'].steps.find(({ id }) => id === 'target');
+  const resolve = (environment: Readonly<Record<string, string>>) => runStep(step?.run ?? 'exit 1', environment);
+  // Every mode runs beside every target: a cheap host on a Zerops preview, dedicated workers beside the Workers.
+  for (const [DEPLOY_TARGET, OUTBOX_WORKER_MODE] of [
+    ['zerops', 'host'],
+    ['cloudflare', 'dedicated'],
+  ] as const) {
+    expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET, OUTBOX_WORKER_MODE })).toEqual({
+      configured: 'true',
+      environment: 'stage',
+      outbox_worker_mode: OUTBOX_WORKER_MODE,
+      target: DEPLOY_TARGET,
+    });
+  }
+  // No default: a configured environment that has not chosen fails instead of inheriting a mode.
+  expect(
+    resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'production', DEPLOY_TARGET: 'zerops', OUTBOX_WORKER_MODE: '' }),
+  ).toBe('failed');
+  expect(resolve({ ...CONFIGURED, DEPLOY_ENVIRONMENT: 'stage', DEPLOY_TARGET: '', OUTBOX_WORKER_MODE: 'shared' })).toBe(
+    'failed',
+  );
 });
 
 it('deploys the whole topology to Zerops, or only its infrastructure and outbox workers beside the edge', () => {
@@ -376,17 +411,20 @@ it('deploys the whole topology to Zerops, or only its infrastructure and outbox 
   expect(zerops.needs).toContain(EDGE_READINESS_JOB);
   expect(zerops.concurrency.group).toBe(`zerops-${DEPLOY_ENVIRONMENT_EXPRESSION}`);
   expect(zerops.env.DEPLOY_TARGET).toBe(expression('needs.deploy-target.outputs.target'));
+  expect(zerops.env.OUTBOX_WORKER_MODE).toBe(OUTBOX_WORKER_MODE_OUTPUT);
   // Every service ID comes from the deploying environment's own variables.
   for (const [name, value] of Object.entries(zerops.env).filter(([key]) => key.startsWith('ZEROPS_'))) {
     expect(value).toBe(expression(`vars.${name}`));
   }
   const byName = new Map(zerops.steps.map((step) => [step.name, step]));
+  const planRun = byName.get('Generate topology-driven deployment impact plan')?.run;
   expect(byName.get("Resolve the environment's last successful deployment")?.run).toContain(
     '--environment "$DEPLOY_ENVIRONMENT"',
   );
-  expect(byName.get('Generate topology-driven deployment impact plan')?.run).toContain(
-    '--authorization-environment "$DEPLOY_ENVIRONMENT"',
-  );
+  expect(planRun).toContain('--authorization-environment "$DEPLOY_ENVIRONMENT"');
+  // The Outbox Worker mode, not the deploy target, chooses the workers the plan deploys and stops.
+  expect(planRun).toContain('--outbox-worker-mode "$OUTBOX_WORKER_MODE"');
+  expect(planRun).not.toContain('--deploy-target');
   const select = byName.get('Select the Zerops units of the deploy target');
   const plan = {
     MIGRATOR: 'false',
@@ -422,13 +460,14 @@ it('deploys the whole topology to Zerops, or only its infrastructure and outbox 
   }
   // Only stage deploys to the edge, after its Zerops services.
   expect(jobs['edge-deploy-readiness'].if).toBe("needs.deploy-target.outputs.environment == 'stage'");
-  expect(jobs['deploy-cloudflare'].needs).toEqual(['deploy-zerops', EDGE_READINESS_JOB]);
+  expect(jobs['deploy-cloudflare'].needs).toEqual([DEPLOY_TARGET_JOB, 'deploy-zerops', EDGE_READINESS_JOB]);
   // On Cloudflare the snapshot is published again from the new Workers, outside the deploy history.
   const publish = jobs['publish-edge-composition'];
   expect(publish.if).toBe("needs.deploy-target.outputs.target == 'cloudflare'");
   expect(publish.needs).toEqual(['deploy-target', 'deploy-cloudflare']);
   expect(publish.environment).toEqual({ deployment: false, name: 'stage' });
   expect(publish.env.DEPLOY_TARGET).toBe('cloudflare');
+  expect(publish.env.OUTBOX_WORKER_MODE).toBe(OUTBOX_WORKER_MODE_OUTPUT);
   const edgePublication = publish.steps.find(
     ({ name }) => name === 'Publish the observed Workers and restart the Zerops consumers',
   );
@@ -446,4 +485,11 @@ it('deploys the whole topology to Zerops, or only its infrastructure and outbox 
   expect(sync.needs).toEqual(['publish-edge-composition']);
   expect(sync.environment).toEqual({ deployment: false, name: EDGE_ENVIRONMENT });
   expect(sync.steps.at(-1)?.run).toBe('app/scripts/put-edge-composition-snapshot.sh');
+});
+
+it('hands the edge deployment planner the Outbox Worker mode it requires', () => {
+  const edge = readEdgeDeployJobs()['deploy-cloudflare'];
+  const plan = edge.steps.find((step) => step.name === PLAN_STEP);
+  expect(plan?.env?.OUTBOX_WORKER_MODE).toBe(OUTBOX_WORKER_MODE_OUTPUT);
+  expect(plan?.run).toContain('--outbox-worker-mode "$OUTBOX_WORKER_MODE"');
 });
