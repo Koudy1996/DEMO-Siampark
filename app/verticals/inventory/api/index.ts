@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ActionRuntimeLive,
   ContextAccessLive,
@@ -178,7 +179,10 @@ export const makeInventoryApiRuntime = (
     'InventoryApi',
     InventoryApiGroups,
     InventoryHandlerRequirements
-  >['handlers'] = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  >['handlers'] = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+    Layer.orDie,
+  );
 
   return assembleEffectBffRuntime({
     api: inventoryApi,
