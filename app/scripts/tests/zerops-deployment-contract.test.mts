@@ -101,7 +101,10 @@ it('declares Price Group Cloudflare proof variables and resolves every provider 
 
   expect(workflow).toContain('ULTRAMODERN_PUBLIC_URL_PRICE_GROUP_CATALOG: https://price-group-catalog.invalid');
   expect(workflow).toContain(`STAGE_VARIABLES_JSON: \${{ toJSON(vars) }}`);
-  expect(workflow).toContain(`jq -r --arg key "$environment_key" '.[$key] // empty' <<<"$STAGE_VARIABLES_JSON"`);
+  expect(workflow).toContain('app/scripts/push-zerops-units.sh');
+  expect(readFileSync(new URL('../push-zerops-units.sh', import.meta.url), 'utf-8')).toContain(
+    'active-composition:publish stage-service-id --setup "$unit"',
+  );
   const providerVariables = workflow.match(/^ +ZEROPS_[A-Z_]+_SERVICE_ID: /gmu)?.map((line) => line.trim()) ?? [];
   expect(providerVariables).toEqual([
     'ZEROPS_MIGRATOR_SERVICE_ID:',
@@ -118,7 +121,7 @@ it('starts a dedicated Price Group worker that drains durable pending projection
     `zerops:materialize --app '${priceGroupCatalogSetup}' --package '@app/price-group-catalog' --package-dir 'verticals/price-group-catalog' --worker`,
   );
   expect(worker).toContain(`OUTBOX_WORKER_HEALTH_PORT: '4108'`);
-  expect(worker).toContain(`DATABASE_URL: \${pricegroupcatalog_DATABASE_URL}`);
+  expect(worker).toContain(runtimeDatabaseUrl);
   expect(worker).toContain(`path: '/ready'`);
   expect(worker).toContain(`exec npm run serve`);
 });

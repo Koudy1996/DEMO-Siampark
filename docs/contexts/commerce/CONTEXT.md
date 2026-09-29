@@ -813,16 +813,25 @@ authorized for one exact Order Commitment Attempt under the resolved Payment Ter
 from capture, settlement, refund, and Order. It has explicit provider correlation, idempotency,
 Current status, and validity; secrets or payment instruments never enter Commerce business payloads.
 
+**Order Commitment Time** — Trusted server-side business instant captured once when the final
+Checkout submission freezes one exact purchase candidate for commitment. Every commitment-time
+decision for that candidate uses the same instant; if commitment succeeds, it is preserved as the
+Accepted Order's acceptance time.
+_Avoid_: browser/client click timestamp as authority, database commit timestamp as the business
+acceptance time, different commitment times for different owners in one purchase commitment.
+
 **Order Acceptance Decision Bundle** — Immutable, versioned, canonical-hashable **pre-attempt**
-representation of one exact prospective purchase and the owner-issued decisions/evidence that define
-that purchase meaning. It includes trusted scope, Purchasing Subject/Actor, Cart revision, exact
-Purchase Demand Occurrences and their Catalog Selections + Quantities + Units, Monetary Amounts, Pricing/Tax/currency, Payment Term, Invoice
-Recipient, Delivery Destination, Purchase Value/limit result, Assortment and other prospective source
-evidence. It excludes any proof whose meaning requires an Order Commitment Attempt. Changed
-Bundle-contained evidence produces a distinct Bundle even when an owner proves unchanged business
-meaning. The Bundle owns none of the source facts.
-_Avoid_: attempt-bound Confirmation inside the Bundle hash, Bundle mutated after Attempt creation,
-generic `Decision Bundle` when this exact cross-owner purchase representation is intended.
+representation of one exact final purchase candidate and the owner-issued decisions/evidence that
+define that purchase meaning at one Order Commitment Time. It includes trusted scope, Purchasing
+Subject/Actor, Cart revision, exact Purchase Demand Occurrences and their Catalog Selections +
+Quantities + Units, Monetary Amounts, Pricing/currency, the final Tax Decision/Tax Result for that
+Order Commitment Time, Payment Term, Invoice Recipient, Delivery Destination, Purchase Value/limit
+result, Assortment and other prospective source evidence. It excludes any proof whose meaning
+requires an Order Commitment Attempt. A later customer/operator edit is a new purchase candidate and
+therefore a new Bundle and new commitment; the old Bundle is never patched.
+_Avoid_: attempt-bound Confirmation inside the Bundle hash, recomputing Tax for an unchanged Bundle,
+Bundle mutated after Attempt creation, generic `Decision Bundle` when this exact cross-owner purchase
+representation is intended.
 
 **Order Commitment Attempt** — Durable idempotency and recovery anchor bound permanently to one exact
 Order Acceptance Decision Bundle hash/version and used to attempt at most one Order. It tracks
@@ -841,11 +850,11 @@ _Avoid_: Proof Set as prospective purchase identity, proofs from different Attem
 proof renewal used to smuggle changed Bundle meaning into the same Attempt.
 
 **Order Commitment Gate** — Final consistency boundary that resolves one Order Commitment Attempt,
-rechecks Current profile/Permissions/Business Policies, validates its exact Order Acceptance Decision
-Bundle, establishes the exact Order Commitment Proof Set, validates any approved proposal revision,
-and commits exactly one Order. It coordinates public contracts and never opens a shared cross-module
-business transaction or silently modifies customer choices. Owner validity through commitment must
-be established rather than inferred from an earlier read or an undelivered change event.
+validates its exact Order Acceptance Decision Bundle and required attempt-bound owner proofs, validates
+any approved proposal revision, and commits exactly one Order. It coordinates public contracts and
+never opens a shared cross-module business transaction, silently modifies customer choices, or
+recomputes the Bundle's commitment-time Tax Decision/Result; an edited purchase uses a new Bundle and
+new commitment.
 
 **Order Commitment Reconciliation** — Owner-governed recovery that first proves whether Order commit
 occurred, then converges the exact Attempt's proof/preparation state and provisional

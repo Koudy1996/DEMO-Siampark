@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { NodeServices } from '@effect/platform-node';
-import { Cause, Effect, Exit, Schema } from 'effect';
+import { Cause, Effect, Exit, Option, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import { hashAuthorizationEvidence } from '../check-authorization-readiness.mts';
@@ -13,7 +13,11 @@ import {
   validateAuthorizationPromotionGate,
 } from '../plan-deployment-impact.mts';
 import type { AuthorizationPromotionGateInput, PlanDeploymentImpactOptions } from '../plan-deployment-impact.mts';
-import { resolveStageDeploymentBase, StatusPagesJsonSchema } from '../resolve-stage-deployment-base.mts';
+import {
+  findStageDeploymentBase,
+  resolveStageDeploymentBase,
+  StatusPagesJsonSchema,
+} from '../resolve-stage-deployment-base.mts';
 import type { StageDeploymentSource } from '../resolve-stage-deployment-base.mts';
 
 const planningFailure = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -30,10 +34,15 @@ const planningFailure = <A, E>(effect: Effect.Effect<A, E>) =>
   );
 
 interface FixtureOptions {
+  readonly cloudflareBuildEnvironment?: Readonly<Record<string, string>>;
+  readonly cloudflarePlacement?: readonly string[];
+  readonly cloudflareRetiredWorkers?: readonly string[];
   readonly extraSharedPackages?: readonly FixtureOwner[];
   readonly includeContactOwner?: boolean;
   readonly includeWorker?: boolean;
+  readonly omitVerticalWorkerName?: boolean;
   readonly setupIds?: readonly string[];
+  readonly shellVerticalRefs?: readonly string[];
   readonly verticalId?: string;
 }
 
@@ -52,11 +61,13 @@ interface FixtureTopology {
   readonly schemaVersion: number;
   readonly sharedPackages: readonly FixtureOwner[];
   readonly shell: {
+    readonly cloudflare: { readonly workerName: string };
     readonly id: string;
     readonly package: string;
     readonly verticalRefs: readonly string[];
   };
   readonly verticals: readonly {
+    readonly cloudflare?: { readonly workerName: string };
     readonly id: string;
     readonly moduleFederation: {
       readonly remotes: readonly string[];
@@ -67,7 +78,14 @@ interface FixtureTopology {
   }[];
 }
 
-type FixtureDocument = FixtureOwnership | FixtureTopology;
+interface FixtureCloudflarePlacement {
+  readonly buildEnvironment: Readonly<Record<string, string>>;
+  readonly retiredWorkers: readonly string[];
+  readonly schemaVersion: 1;
+  readonly units: readonly string[];
+}
+
+type FixtureDocument = FixtureCloudflarePlacement | FixtureOwnership | FixtureTopology;
 
 const CORE_RUNTIME_OWNER = {
   id: 'core-runtime',
@@ -81,15 +99,19 @@ const SHARED_CONTRACTS_OWNER = {
 } as const satisfies FixtureOwner;
 const SHELL_ID = 'shell-super-app';
 const SHELL_PACKAGE = '@app/shell-super-app';
+const SHELL_WORKER = 'app-shell-super-app';
+const CONTACTS_WORKER = 'app-contacts';
 const SHELL_OWNER = {
   id: SHELL_ID,
   package: SHELL_PACKAGE,
   path: 'apps/shell-super-app',
 } as const satisfies FixtureOwner;
+const CLOUDFLARE_PLACEMENT_PATH = 'topology/cloudflare-placement.json';
 const OWNERSHIP_PATH = 'topology/ownership.json';
 const TOPOLOGY_PATH = 'topology/reference-topology.json';
 const WORKSPACE_MANIFEST_PATH = 'pnpm-workspace.yaml';
 const DOCUMENTATION_PATH = 'docs/README.md';
+const SHARED_CONTRACT_PATH = 'packages/shared-contracts/src/gateway-context.ts';
 
 const planDeploymentImpact = (options: PlanDeploymentImpactOptions) =>
   planDeploymentImpactEffect(options).pipe(Effect.provide(NodeServices.layer));
@@ -119,22 +141,32 @@ const makeFixture = (options: FixtureOptions = {}) =>
     const verticalId = options.verticalId ?? 'contacts';
     const verticalPackage = `@app/${verticalId}`;
     const verticalPath = `verticals/${verticalId}`;
+    const vertical: FixtureTopology['verticals'][number] = {
+      id: verticalId,
+      moduleFederation: { remotes: [], verticalRefs: [] },
+      package: verticalPackage,
+      path: verticalPath,
+    };
     yield* writeJson(root, TOPOLOGY_PATH, {
       schemaVersion: 1,
       sharedPackages: [CORE_RUNTIME_OWNER, SHARED_CONTRACTS_OWNER, ...(options.extraSharedPackages ?? [])],
       shell: {
+        cloudflare: { workerName: SHELL_WORKER },
         id: SHELL_ID,
         package: SHELL_PACKAGE,
-        verticalRefs: [verticalId],
+        verticalRefs: options.shellVerticalRefs ?? [verticalId],
       },
       verticals: [
-        {
-          id: verticalId,
-          moduleFederation: { remotes: [], verticalRefs: [] },
-          package: verticalPackage,
-          path: verticalPath,
-        },
+        options.omitVerticalWorkerName === true
+          ? vertical
+          : { ...vertical, cloudflare: { workerName: `app-${verticalId}` } },
       ],
+    });
+    yield* writeJson(root, CLOUDFLARE_PLACEMENT_PATH, {
+      buildEnvironment: options.cloudflareBuildEnvironment ?? {},
+      retiredWorkers: options.cloudflareRetiredWorkers ?? [],
+      schemaVersion: 1,
+      units: options.cloudflarePlacement ?? [],
     });
     yield* writeJson(root, OWNERSHIP_PATH, {
       owners: [
@@ -246,6 +278,8 @@ it.live('plans current Contacts owner-local changes without a hard-coded owner r
           rootDirectory: root,
         });
         expect(plan.units).toEqual({
+          cloudflare: [],
+          cloudflareRetirements: [],
           migrator: false,
           providers: ['contacts'],
           shell: false,
@@ -325,11 +359,310 @@ it.live('expands shared-package changes to every consumer in dependency order', 
     yield* withFixture((root) =>
       Effect.gen(function* testEffect19() {
         const plan = yield* planDeploymentImpact({
-          changedPaths: ['packages/shared-contracts/src/gateway-context.ts'],
+          changedPaths: [SHARED_CONTRACT_PATH],
           rootDirectory: root,
         });
         expect(plan.phases.map((phase) => phase.id)).toEqual(['contacts', SHELL_ID]);
       }),
+    );
+  }),
+);
+
+it.live('deploys placed Cloudflare units that are impacted, providers before the Shell', () =>
+  Effect.gen(function* plansCloudflareDeployments() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* plansCloudflareDeploymentsInFixture() {
+          const shared = yield* planDeploymentImpact({
+            changedPaths: [SHARED_CONTRACT_PATH],
+            rootDirectory: root,
+          });
+          expect(shared.units.cloudflare).toEqual([
+            { id: 'contacts', packageName: '@app/contacts', workerName: CONTACTS_WORKER },
+            { id: SHELL_ID, packageName: SHELL_PACKAGE, workerName: SHELL_WORKER },
+          ]);
+          const shellOnly = yield* planDeploymentImpact({
+            changedPaths: ['apps/shell-super-app/src/routes/page.tsx'],
+            rootDirectory: root,
+          });
+          expect(shellOnly.units.cloudflare.map(({ id }) => id)).toEqual([SHELL_ID]);
+        }),
+      { cloudflarePlacement: [SHELL_ID, 'contacts'] },
+    );
+  }),
+);
+
+it.live('replans every placed unit when the edge deploy workflow changes', () =>
+  Effect.gen(function* replansPlacedUnitsForDeployInputs() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* replansPlacedUnitsForDeployInputsInFixture() {
+          for (const changedPath of [
+            '.github/workflows/ultramodern-workspace-gates.yml',
+            '.github/actions/install-app/action.yml',
+          ]) {
+            const plan = yield* planDeploymentImpact({ changedPaths: [changedPath], rootDirectory: root });
+            expect(plan.units.cloudflare.map(({ id }) => id)).toEqual(['contacts']);
+            expect(plan.phases).toEqual([]);
+          }
+        }),
+      { cloudflarePlacement: ['contacts'] },
+    );
+  }),
+);
+
+it.live('replans every unit, on Zerops and the edge, when the planner itself changes', () =>
+  Effect.gen(function* replansEverythingForPlannerChanges() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* replansEverythingForPlannerChangesInFixture() {
+          const plan = yield* planDeploymentImpact({
+            changedPaths: ['scripts/plan-deployment-impact.mts'],
+            rootDirectory: root,
+          });
+          expect(plan.units.cloudflare.map(({ id }) => id)).toEqual(['contacts', SHELL_ID]);
+          expect(plan.phases.map((phase) => phase.id)).toEqual(['migrator', 'spicedb', 'contacts', SHELL_ID]);
+        }),
+      { cloudflarePlacement: [SHELL_ID, 'contacts'] },
+    );
+  }),
+);
+
+it.live('replans every placed unit when the edge build environment changes', () =>
+  Effect.gen(function* replansPlacedUnitsForBuildEnvironment() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* replansPlacedUnitsForBuildEnvironmentInFixture() {
+          const plan = yield* planDeploymentImpact({ changedPaths: [CLOUDFLARE_PLACEMENT_PATH], rootDirectory: root });
+          expect(plan.units.cloudflare.map(({ id }) => id)).toEqual(['contacts']);
+        }),
+      {
+        cloudflareBuildEnvironment: { ULTRAMODERN_MF_DEV_ORIGIN: 'https://stage.example.test' },
+        cloudflarePlacement: ['contacts'],
+      },
+    );
+  }),
+);
+
+it.live('fails closed for an edge build variable the Cloudflare builds do not read', () =>
+  Effect.gen(function* failsClosedForForeignBuildVariable() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* failsClosedForForeignBuildVariableInFixture() {
+          expect(
+            yield* planningFailure(planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root })),
+          ).toMatch(/buildEnvironment key "CLOUDFLARE_API_TOKEN" must be a MODERN_, ULTRAMODERN_ or VERTICAL_ build/u);
+        }),
+      { cloudflareBuildEnvironment: { CLOUDFLARE_API_TOKEN: 'leaked' }, cloudflarePlacement: ['contacts'] },
+    );
+  }),
+);
+
+it.live('fails closed when edge build configuration overrides the run or Worker identity', () =>
+  Effect.gen(function* failsClosedForReservedBuildVariables() {
+    for (const key of [
+      'ULTRAMODERN_SOURCE_REVISION',
+      'ULTRAMODERN_DEPLOYMENT_ENVIRONMENT',
+      'VERTICAL_PRICING_WORKER_NAME',
+    ]) {
+      yield* withFixture(
+        (root) =>
+          Effect.gen(function* failsClosedForReservedBuildVariableInFixture() {
+            expect(
+              yield* planningFailure(planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root })),
+            ).toContain(`buildEnvironment must not set "${key}"`);
+          }),
+        { cloudflareBuildEnvironment: { [key]: 'forged' }, cloudflarePlacement: ['contacts'] },
+      );
+    }
+  }),
+);
+
+const commitPlacement = (
+  root: string,
+  placement: readonly string[],
+  retiredWorkers: readonly string[],
+  message: string,
+) =>
+  Effect.gen(function* commitPlacementEffect() {
+    yield* writeJson(root, CLOUDFLARE_PLACEMENT_PATH, {
+      buildEnvironment: {},
+      retiredWorkers,
+      schemaVersion: 1,
+      units: placement,
+    });
+    runGit(root, ['add', '.']);
+    runGit(root, ['commit', '-m', message]);
+    return runGit(root, ['rev-parse', 'HEAD']);
+  });
+
+it.live('refuses to drop a deployed Worker from placement until it is listed for retirement', () =>
+  Effect.gen(function* retiresRemovedWorkers() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* retiresRemovedWorkersInFixture() {
+          runGit(root, ['init']);
+          runGit(root, ['add', '.']);
+          runGit(root, ['commit', '-m', 'contacts and Shell on the edge']);
+          const deployed = runGit(root, ['rev-parse', 'HEAD']);
+          const dropped = yield* commitPlacement(root, ['contacts'], [], 'drop the Shell');
+          expect(
+            yield* planningFailure(
+              planDeploymentImpact({ baseRevision: deployed, headRevision: dropped, rootDirectory: root }),
+            ),
+          ).toContain(`no longer places or retires Worker "${SHELL_WORKER}"; keep it in retiredWorkers`);
+          // A full plan of the same head still reconciles against the last edge deployment.
+          expect(
+            yield* planningFailure(
+              planDeploymentImpact({ headRevision: dropped, placementBaseRevision: deployed, rootDirectory: root }),
+            ),
+          ).toContain(`no longer places or retires Worker "${SHELL_WORKER}"`);
+          const retired = yield* commitPlacement(root, ['contacts'], [SHELL_WORKER], 'retire the Shell');
+          const plan = yield* planDeploymentImpact({
+            baseRevision: deployed,
+            headRevision: retired,
+            rootDirectory: root,
+          });
+          expect(plan.units.cloudflareRetirements).toEqual([{ packageName: SHELL_PACKAGE, workerName: SHELL_WORKER }]);
+          // The ledger carries forward: a later placement cannot forget a retired Worker.
+          const forgotten = yield* commitPlacement(root, ['contacts'], [], 'forget the retired Shell');
+          expect(
+            yield* planningFailure(
+              planDeploymentImpact({ baseRevision: retired, headRevision: forgotten, rootDirectory: root }),
+            ),
+          ).toContain(`no longer places or retires Worker "${SHELL_WORKER}"`);
+          // A Worker still placed cannot also be retired.
+          const contradictory = yield* commitPlacement(root, ['contacts'], [CONTACTS_WORKER], 'retire contacts');
+          expect(
+            yield* planningFailure(
+              planDeploymentImpact({ baseRevision: retired, headRevision: contradictory, rootDirectory: root }),
+            ),
+          ).toContain(`retires "${CONTACTS_WORKER}", which a placed unit still deploys`);
+          // The placed Shell binds every vertical, so no vertical can leave placement while it stays.
+          const orphaning = yield* commitPlacement(
+            root,
+            [SHELL_ID],
+            [CONTACTS_WORKER],
+            'drop contacts under the Shell',
+          );
+          expect(
+            yield* planningFailure(
+              planDeploymentImpact({ baseRevision: deployed, headRevision: orphaning, rootDirectory: root }),
+            ),
+          ).toContain('places the Shell, which binds every vertical, but not "contacts"');
+        }),
+      { cloudflarePlacement: [SHELL_ID, 'contacts'] },
+    );
+  }),
+);
+
+it.live('fails when the placement base names Workers it has no topology for', () =>
+  Effect.gen(function* failsForPlacementWithoutTopology() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* failsForPlacementWithoutTopologyInFixture() {
+          runGit(root, ['init']);
+          runGit(root, ['add', CLOUDFLARE_PLACEMENT_PATH]);
+          runGit(root, ['commit', '-m', 'placement without topology']);
+          const base = runGit(root, ['rev-parse', 'HEAD']);
+          runGit(root, ['add', '.']);
+          runGit(root, ['commit', '-m', 'everything']);
+          expect(
+            yield* planningFailure(planDeploymentImpact({ placementBaseRevision: base, rootDirectory: root })),
+          ).toContain(`has ${CLOUDFLARE_PLACEMENT_PATH} but no reference topology`);
+        }),
+      { cloudflarePlacement: ['contacts'] },
+    );
+  }),
+);
+
+it.live('fails closed when two placed units share a Worker name', () =>
+  Effect.gen(function* failsClosedForSharedWorkerName() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* failsClosedForSharedWorkerNameInFixture() {
+          const topologyPath = path.join(root, 'topology/reference-topology.json');
+          const topology = yield* Effect.tryPromise(() => readFile(topologyPath, 'utf-8'));
+          yield* Effect.tryPromise(() =>
+            writeFile(
+              topologyPath,
+              topology.replace(`"workerName": "${CONTACTS_WORKER}"`, `"workerName": "${SHELL_WORKER}"`),
+              'utf-8',
+            ),
+          );
+          expect(
+            yield* planningFailure(planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root })),
+          ).toContain(`under the same Worker "${SHELL_WORKER}"`);
+        }),
+      { cloudflarePlacement: [SHELL_ID, 'contacts'] },
+    );
+  }),
+);
+
+const UNREFERENCED_VERTICAL = 'zeta-ledger';
+
+it.live('deploys the Shell Worker after every placed vertical it binds, not only its MF remotes', () =>
+  Effect.gen(function* ordersShellAfterAllVerticals() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* ordersShellAfterAllVerticalsInFixture() {
+          const plan = yield* planDeploymentImpact({ changedPaths: [SHARED_CONTRACT_PATH], rootDirectory: root });
+          expect(plan.units.cloudflare.map(({ id }) => id)).toEqual([UNREFERENCED_VERTICAL, SHELL_ID]);
+        }),
+      {
+        cloudflarePlacement: [SHELL_ID, UNREFERENCED_VERTICAL],
+        shellVerticalRefs: [],
+        verticalId: UNREFERENCED_VERTICAL,
+      },
+    );
+  }),
+);
+
+it.live('keeps unplaced units off Cloudflare', () =>
+  Effect.gen(function* keepsUnplacedUnitsOffCloudflare() {
+    yield* withFixture((root) =>
+      Effect.gen(function* keepsUnplacedUnitsOffCloudflareInFixture() {
+        const plan = yield* planDeploymentImpact({
+          changedPaths: [SHARED_CONTRACT_PATH],
+          rootDirectory: root,
+        });
+        expect(plan.units.cloudflare).toEqual([]);
+        expect(plan.phases.map((phase) => phase.id)).toEqual(['contacts', SHELL_ID]);
+      }),
+    );
+  }),
+);
+
+for (const [placement, failure] of [
+  [['billing'], /places "billing", which is not a topology delivery unit/u],
+  [['contacts', 'contacts'], /places "contacts" more than once/u],
+  [['core-runtime'], /places "core-runtime", which is not a topology delivery unit/u],
+] as const) {
+  it.live(`fails closed for Cloudflare placement ${placement.join(', ')}`, () =>
+    Effect.gen(function* failsClosedForPlacement() {
+      yield* withFixture(
+        (root) =>
+          Effect.gen(function* failsClosedForPlacementInFixture() {
+            expect(
+              yield* planningFailure(planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root })),
+            ).toMatch(failure);
+          }),
+        { cloudflarePlacement: placement },
+      );
+    }),
+  );
+}
+
+it.live('fails closed for a Cloudflare placement whose topology entry names no Worker', () =>
+  Effect.gen(function* failsClosedWithoutWorkerName() {
+    yield* withFixture(
+      (root) =>
+        Effect.gen(function* failsClosedWithoutWorkerNameInFixture() {
+          expect(
+            yield* planningFailure(planDeploymentImpact({ changedPaths: [DOCUMENTATION_PATH], rootDirectory: root })),
+          ).toMatch(/places "contacts", whose topology entry names no Cloudflare workerName/u);
+        }),
+      { cloudflarePlacement: ['contacts'], omitVerticalWorkerName: true },
     );
   }),
 );
@@ -384,11 +717,15 @@ for (const changedPath of [
   'scripts/generate-outbox-worker-deployment.mjs',
   'scripts/materialize-outbox-worker.mjs',
   'scripts/materialize-zerops-runtime.mjs',
+  'scripts/locked-registry-overrides.mjs',
   'scripts/outbox-worker-delivery.mjs',
   'scripts/install-zerops-node.sh',
   'scripts/verify-zerops-workspace-install.mts',
   'zerops.yaml',
   TOPOLOGY_PATH,
+  'module-federation.shared.ts',
+  'tsconfig.base.json',
+  'scripts/generate-ontos-module-contract.mts',
 ]) {
   it.live(`conservatively deploys every phase for ${changedPath}`, () =>
     Effect.gen(function* testEffect24() {
@@ -760,6 +1097,16 @@ it.live('diffs from the last successful stage deployment so failed and cancelled
         expect(plan.units.providers).toContain('contacts');
       }),
     );
+  }),
+);
+
+it.live('reports no base, for a full plan, when the environment has no successful deployment yet', () =>
+  Effect.gen(function* testEffectNoBase() {
+    const base = yield* findStageDeploymentBase(
+      deploymentSource([{ runId: '7', sha: 'first-seed', states: ['failure', 'in_progress'] }]),
+      { currentRunId: '8' },
+    );
+    expect(Option.isNone(base)).toBe(true);
   }),
 );
 

@@ -325,6 +325,12 @@ jobs:
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm node:proof
 
+      # The deployed publisher derives the snapshot from exactly these artifact kinds; this proves its output
+      # decodes with the consumers' ActiveApplicationCompositionSnapshotSchema before stage depends on it.
+      - name: Prove the active Application Composition publisher output decodes
+        working-directory: app
+        run: mise exec -- pnpm active-composition:publish prove-build
+
   cloudflare-runtime:
     name: Cloudflare Workerd Artifact Proof
     runs-on: ubuntu-latest
@@ -376,8 +382,14 @@ jobs:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [workspace-gate, static-contracts, service-integration, node-runtime, cloudflare-runtime]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Each Zerops push builds its unit remotely for about 12 minutes and units deploy one after another in
+    # plan order, so a full topology deploy (12 units plus migrations and publication) needs about 3 hours.
+    timeout-minutes: 240
     environment: stage
+    # Serializes with the scheduled composition refresh so no publication interleaves with a deploy.
+    concurrency:
+      group: zerops-stage
+      cancel-in-progress: false
     permissions:
       contents: read
       deployments: read
@@ -511,54 +523,72 @@ jobs:
           --limit 200
           --minimum-severity DEBUG
 
-      - name: Deploy affected provider MicroVerticals in plan order
+      - name: Resolve active Application Composition consumers
+        id: composition
+        if: steps.impact.outputs.any == 'true'
+        working-directory: app
+        run: mise exec -- pnpm --silent active-composition:publish consumers
+
+      - name: Deploy affected providers that do not consume the active composition
         if: steps.impact.outputs.providers != '[]'
         env:
+          CONSUMERS_JSON: ${{ steps.composition.outputs.consumers }}
           PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
-          # Provider units come from the topology, so their service ids are looked up by the variable
-          # name the topology implies instead of a hand-kept list that silently misses new units.
-          # Public subdomains are declared once per service in app/zerops-import.yaml, not re-enabled per deploy.
           STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
         run: |
-          while IFS= read -r unit; do
-            environment_key="ZEROPS_$(printf '%s' "$unit" | tr '[:lower:]' '[:upper:]' | tr '-' '_')_SERVICE_ID"
-            service_id="$(jq -r --arg key "$environment_key" '.[$key] // empty' <<<"$STAGE_VARIABLES_JSON")"
-            if [[ -z "$service_id" ]]; then
-              echo "Missing stage service variable $environment_key for planned unit $unit" >&2
-              exit 1
-            fi
-            if ! zcli push \
-              --working-dir . \
-              --zerops-yaml-path app/zerops.yaml \
-              --workspace-state clean \
-              --deploy-git-folder \
-              --project-id "$ZEROPS_PROJECT_ID" \
-              --service-id "$service_id" \
-              --setup "$unit" \
-              --version-name "$GITHUB_SHA"; then
-              zcli service log \
-                --project-id "$ZEROPS_PROJECT_ID" \
-                --service-id "$service_id" \
-                --limit 200 \
-                --minimum-severity DEBUG || true
-              echo "Deployment failed for planned provider unit $unit" >&2
-              exit 1
-            fi
-          done < <(jq -r '.[]' <<<"$PROVIDERS_JSON")
+          UNITS_JSON="$(jq -c --argjson consumers "$CONSUMERS_JSON" '[.[] | select(IN($consumers[]) | not)]' <<<"$PROVIDERS_JSON")"
+          export UNITS_JSON
+          app/scripts/push-zerops-units.sh
 
       - name: Deploy Shell after affected providers
         if: steps.impact.outputs.shell == 'true'
         id: shell
-        run: >-
-          zcli push
-          --working-dir .
-          --zerops-yaml-path app/zerops.yaml
-          --workspace-state clean
-          --deploy-git-folder
-          --project-id "$ZEROPS_PROJECT_ID"
-          --service-id "$ZEROPS_SHELL_SERVICE_ID"
-          --setup shellsuperapp
-          --version-name "$GITHUB_SHA"
+        env:
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          UNITS_JSON: '["shellsuperapp"]'
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: app/scripts/push-zerops-units.sh
+
+      # Consumers refuse to start without the snapshot. Publish the observed inventory without the consumers
+      # about to be deployed, so they start on a current snapshot, then observe them and publish it complete.
+      - name: Publish the active Application Composition before its consumers deploy
+        id: planned-consumers
+        if: steps.impact.outputs.any == 'true'
+        working-directory: app
+        env:
+          CONSUMERS_JSON: ${{ steps.composition.outputs.consumers }}
+          PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: |
+          planned="$(jq -c --argjson consumers "$CONSUMERS_JSON" '[.[] | select(IN($consumers[]))]' <<<"$PROVIDERS_JSON")"
+          echo "units=$planned" >> "$GITHUB_OUTPUT"
+          if [[ "$planned" == '[]' ]]; then
+            echo 'No composition consumer is planned; the complete publication follows.'
+            exit 0
+          fi
+          exclusions=()
+          while IFS= read -r unit; do
+            exclusions+=(--exclude-app "$unit")
+          done < <(jq -r '.[]' <<<"$planned")
+          mise exec -- pnpm active-composition:publish publish --environment stage "${exclusions[@]}"
+
+      - name: Deploy affected composition consumers
+        if: steps.planned-consumers.outputs.units != '' && steps.planned-consumers.outputs.units != '[]'
+        env:
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          UNITS_JSON: ${{ steps.planned-consumers.outputs.units }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: app/scripts/push-zerops-units.sh
+
+      - name: Publish the complete active Application Composition and restart its consumers
+        if: steps.impact.outputs.any == 'true'
+        working-directory: app
+        env:
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: mise exec -- pnpm active-composition:publish publish --environment stage --restart-consumers
 
       - name: Show bounded Shell logs after failure
         if: failure() && steps.shell.outcome == 'failure'
@@ -569,3 +599,304 @@ jobs:
           --service-id "$ZEROPS_SHELL_SERVICE_ID"
           --limit 200
           --minimum-severity DEBUG
+
+  # The edge deploy runs only when the repository is configured for Cloudflare: the
+  # CLOUDFLARE_ACCOUNT_ID variable, the `stage-edge` CLOUDFLARE_API_TOKEN secret, and a complete
+  # reviewed build environment (the Shell origin and every placed Worker's public URL). Environment
+  # secrets are unreadable in a job-level `if`, so this job reads them from `stage-edge` without
+  # creating a deployment (`deployment: false`); only a real edge deploy enters its history.
+  edge-deploy-readiness:
+    name: Check the Cloudflare edge deploy configuration
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: stage-edge
+      deployment: false
+    permissions:
+      contents: read
+    outputs:
+      configured: ${{ steps.configuration.outputs.configured }}
+    steps:
+      - name: Checkout the edge placement
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: app/topology/cloudflare-placement.json
+          sparse-checkout-cone-mode: false
+
+      - name: Check the Cloudflare account, deploy token and edge build environment
+        id: configuration
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          missing=()
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || missing+=('the CLOUDFLARE_ACCOUNT_ID variable')
+          [[ -n "$CLOUDFLARE_API_TOKEN" ]] || missing+=('the stage-edge CLOUDFLARE_API_TOKEN secret')
+          # The placed units bake the Shell origin into their API CORS allowlist, and the output
+          # verifier requires every Worker's public URL.
+          while IFS= read -r key; do
+            missing+=("buildEnvironment.$key")
+          done < <(jq -r '.buildEnvironment as $environment | (["ULTRAMODERN_MF_DEV_ORIGIN"] + [.units[] | "ULTRAMODERN_PUBLIC_URL_" + (ascii_upcase | gsub("-"; "_"))])[] | select(($environment[.] // "") == "")' app/topology/cloudflare-placement.json)
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            joined="$(IFS=','; echo "${missing[*]}")"
+            echo "::notice title=Edge deploy not configured::Missing ${joined//,/, }; edge units were not deployed."
+          fi
+
+  # Edge units (topology/cloudflare-placement.json) ship as Cloudflare Workers after the Zerops
+  # deploy has migrated the database, so Worker code never runs against an older schema. The
+  # `stage-edge` environment keeps its own deployment history: the job plans against the last
+  # successful edge deployment, so a failed or skipped edge deploy is never hidden by a successful
+  # Zerops one. Unconfigured repositories skip it, so it records nothing.
+  deploy-cloudflare:
+    name: Deploy edge units to Cloudflare Workers after the stage migration
+    if: needs.edge-deploy-readiness.outputs.configured == 'true'
+    needs: [deploy-stage, edge-deploy-readiness]
+    runs-on: ubuntu-latest
+    # Step timeouts leave the restore step its own budget inside the job deadline, so a hung
+    # deploy or proof still ends with every changed Worker restored.
+    timeout-minutes: 90
+    environment: stage-edge
+    permissions:
+      contents: read
+      deployments: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout main revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
+
+      - name: Derive exact-build authorization inventory
+        working-directory: app
+        env:
+          ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
+        run: mise exec -- pnpm authorization:inventory:check
+
+      # A full plan deploys every placed unit but still checks retirements against the last edge
+      # deployment; only a first seed has none.
+      - name: Resolve the last successful edge deployment
+        id: base
+        working-directory: app
+        env:
+          FULL_PLAN: ${{ inputs.full }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          optional=()
+          if [[ "$FULL_PLAN" == 'true' ]]; then
+            optional=(--optional)
+          fi
+          mise exec -- pnpm deployment-base:resolve --environment stage-edge "${optional[@]}"
+
+      # A full recovery run after rewritten history may name a base no branch reaches any more; the
+      # planner needs its placement to check retirements, so fetch that commit by id.
+      - name: Fetch the last edge deployment commit
+        if: steps.base.outputs.base != ''
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            authorization="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $authorization" \
+              fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+
+      - name: Plan the impacted edge units
+        id: impact
+        working-directory: app
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base }}
+          FULL_PLAN: ${{ inputs.full }}
+        run: |
+          base_arguments=()
+          if [[ -n "$BASE_SHA" ]]; then
+            base_arguments=(--placement-base "$BASE_SHA")
+          fi
+          if [[ "$FULL_PLAN" != 'true' ]]; then
+            base_arguments+=(--base "$BASE_SHA")
+          fi
+          mise exec -- pnpm deployment-impact:plan \
+            --authorization-environment stage \
+            "${base_arguments[@]}" \
+            --head "$GITHUB_SHA"
+
+      # Only Wrangler sees the account token. Building, verifying and proving a unit runs
+      # dependency code (bundlers, build plugins, the framework CLI), so those steps run without
+      # it. The build step runs each unit's `cloudflare:deploy` up to, but not including, Wrangler.
+      - name: Build and verify planned edge units
+        timeout-minutes: 25
+        working-directory: app
+        env:
+          CLOUDFLARE_UNITS_JSON: ${{ steps.impact.outputs.cloudflare }}
+          ULTRAMODERN_DEPLOYMENT_ENVIRONMENT: stage
+          ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          # Worker public URLs, binding names and the Shell origin are reviewed edge configuration
+          # (topology/cloudflare-placement.json `buildEnvironment`), so changing them replans every
+          # placed unit.
+          while IFS=$'\t' read -r key value; do
+            export "$key=$value"
+          done < <(jq -r '.buildEnvironment | to_entries[] | [.key, .value] | @tsv' topology/cloudflare-placement.json)
+          mapfile -t units < <(jq -r '.[] | [.id, .packageName, .workerName] | @tsv' <<<"$CLOUDFLARE_UNITS_JSON")
+          for unit in "${units[@]}"; do
+            IFS=$'\t' read -r id package worker <<<"$unit"
+            mise exec -- pnpm --filter "$package" run cloudflare:build
+            mise exec -- pnpm --filter "$package" exec ultramodern-create ultramodern cloudflare-output-verify --app "$id" --require-public-urls
+            # Wrangler deploys the name in the built config; the run snapshots and restores the
+            # planned topology name, so they must be the same Worker.
+            built_worker="$(mise exec -- pnpm --filter "$package" exec jq -r '.name' .output/wrangler.json)"
+            if [[ "$built_worker" != "$worker" ]]; then
+              echo "$id builds Worker $built_worker, but topology places $worker; no Worker was changed." >&2
+              exit 1
+            fi
+          done
+
+      - name: Deploy planned edge units in dependency order
+        id: deploy
+        timeout-minutes: 15
+        working-directory: app
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_UNITS_JSON: ${{ steps.impact.outputs.cloudflare }}
+          EDGE_DEPLOY_STATE: ${{ runner.temp }}/edge-deploy-state.tsv
+        run: |
+          active_version() {
+            mise exec -- pnpm --filter "$1" exec wrangler deployments status --name "$2" --json \
+              | jq -er '.versions | map(select(.percentage == 100)) | .[0].version_id'
+          }
+          # Snapshot every planned Worker's active version before changing any of them. Only
+          # Cloudflare's "Worker not found" (API code 10007) means a first deployment without a
+          # rollback target; any other failure aborts before anything is deployed.
+          mapfile -t units < <(jq -r '.[] | [.packageName, .workerName] | @tsv' <<<"$CLOUDFLARE_UNITS_JSON")
+          declare -A previous_versions=()
+          for unit in "${units[@]}"; do
+            IFS=$'\t' read -r package worker <<<"$unit"
+            status_log="$RUNNER_TEMP/deployments-status-$worker.log"
+            if previous_version="$(active_version "$package" "$worker" 2>"$status_log")"; then
+              previous_versions["$worker"]="$previous_version"
+            elif grep -q 'code: 10007' "$status_log"; then
+              previous_versions["$worker"]=''
+            else
+              cat "$status_log" >&2
+              echo "Could not read the active version of $worker; no Worker was changed." >&2
+              exit 1
+            fi
+          done
+          # Each Worker is recorded with its snapshot before its deploy starts, so the restore step
+          # covers a deploy that fails halfway.
+          : >"$EDGE_DEPLOY_STATE"
+          for unit in "${units[@]}"; do
+            IFS=$'\t' read -r package worker <<<"$unit"
+            printf '%s\t%s\t%s\n' "$package" "$worker" "${previous_versions[$worker]}" >>"$EDGE_DEPLOY_STATE"
+            mise exec -- pnpm --filter "$package" exec wrangler deploy --config .output/wrangler.json
+          done
+
+      - name: Prove the deployed edge units on their public URLs
+        timeout-minutes: 15
+        working-directory: app
+        env:
+          CLOUDFLARE_UNITS_JSON: ${{ steps.impact.outputs.cloudflare }}
+          ULTRAMODERN_DEPLOYMENT_ENVIRONMENT: stage
+          ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          while IFS=$'\t' read -r key value; do
+            export "$key=$value"
+          done < <(jq -r '.buildEnvironment | to_entries[] | [.key, .value] | @tsv' topology/cloudflare-placement.json)
+          mapfile -t packages < <(jq -r '.[].packageName' <<<"$CLOUDFLARE_UNITS_JSON")
+          for package in "${packages[@]}"; do
+            mise exec -- pnpm --filter "$package" run cloudflare:proof
+          done
+
+      # Retirement is two-phase. The deploy that drops a Worker from placement leaves it running, so
+      # a rollback of its dependents still finds it. Once this run has proven the new topology, each
+      # retired Worker that still exists is reported for an operator to delete
+      # (`wrangler delete`); CI never deletes a Worker. The check is read-only and never fails the run.
+      - name: Report retired Workers that still exist
+        if: steps.impact.outputs.cloudflare_retirements != '[]'
+        timeout-minutes: 5
+        working-directory: app
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_RETIREMENTS_JSON: ${{ steps.impact.outputs.cloudflare_retirements }}
+        run: |
+          mapfile -t retirements < <(jq -r '.[] | [.packageName, .workerName] | @tsv' <<<"$CLOUDFLARE_RETIREMENTS_JSON")
+          for retirement in "${retirements[@]}"; do
+            IFS=$'\t' read -r package worker <<<"$retirement"
+            status_log="$RUNNER_TEMP/retired-status-$worker.log"
+            if mise exec -- pnpm --filter "$package" exec wrangler deployments status --name "$worker" --json >/dev/null 2>"$status_log"; then
+              echo "::warning title=Retired edge Worker still exists::No placed unit deploys $worker any more; delete it (wrangler delete --name $worker)."
+            elif grep -q 'code: 10007' "$status_log"; then
+              echo "$worker is retired"
+            else
+              echo "::warning title=Retired edge Worker not checked::Could not read $worker; check it is deleted."
+            fi
+          done
+
+      # Worker versions are immutable. After a failed deploy or proof, each Worker this run
+      # deployed returns to its snapshotted state: the exact version that was active before, or no
+      # Worker at all when this run created it. A Worker counts as restored only once that state is
+      # observed; anything left on the candidate is reported. A cancelled run restores too: its
+      # deploy may have stopped after some Workers changed.
+      - name: Restore the edge Workers this run deployed
+        if: (failure() || cancelled()) && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 10
+        working-directory: app
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          EDGE_DEPLOY_STATE: ${{ runner.temp }}/edge-deploy-state.tsv
+        run: |
+          active_version() {
+            mise exec -- pnpm --filter "$1" exec wrangler deployments status --name "$2" --json \
+              | jq -er '.versions | map(select(.percentage == 100)) | .[0].version_id'
+          }
+          absent() {
+            local status_log="$RUNNER_TEMP/restore-status-$2.log"
+            ! active_version "$1" "$2" >/dev/null 2>"$status_log" && grep -q 'code: 10007' "$status_log"
+          }
+          deployed=()
+          if [[ -f "$EDGE_DEPLOY_STATE" ]]; then
+            mapfile -t deployed <"$EDGE_DEPLOY_STATE"
+          fi
+          unrestored=()
+          for deployment in "${deployed[@]}"; do
+            IFS=$'\t' read -r deployed_package deployed_worker previous_version <<<"$deployment"
+            if [[ -z "$previous_version" ]]; then
+              if absent "$deployed_package" "$deployed_worker"; then
+                echo "$deployed_worker, which this run was creating, does not exist"
+              elif mise exec -- pnpm --filter "$deployed_package" exec wrangler delete --name "$deployed_worker" --force \
+                && absent "$deployed_package" "$deployed_worker"; then
+                echo "Removed $deployed_worker, which this run created"
+              else
+                unrestored+=("$deployed_worker (created by this run and not removed)")
+              fi
+              continue
+            fi
+            if [[ "$(active_version "$deployed_package" "$deployed_worker" 2>/dev/null)" == "$previous_version" ]]; then
+              echo "$deployed_worker still serves $previous_version"
+            elif mise exec -- pnpm --filter "$deployed_package" exec wrangler rollback "$previous_version" --name "$deployed_worker" --message "Rollback of $GITHUB_SHA after a failed edge deploy" --yes \
+              && [[ "$(active_version "$deployed_package" "$deployed_worker")" == "$previous_version" ]]; then
+              echo "Restored $deployed_worker to $previous_version"
+            else
+              unrestored+=("$deployed_worker (expected $previous_version)")
+            fi
+          done
+          for worker_state in "${unrestored[@]}"; do
+            echo "::error title=Edge Worker not restored::$worker_state is still serving $GITHUB_SHA"
+          done
+          [[ ${#unrestored[@]} -eq 0 ]]

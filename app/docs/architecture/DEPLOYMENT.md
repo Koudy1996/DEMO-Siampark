@@ -4,7 +4,7 @@ This playbook is the authoritative release guidance for OntOS application delive
 
 > [!IMPORTANT] Explicit `implementationId`, dependency-closure selection, public-contract hashes, migration-set identity, and full artifact metadata are accepted target architecture, not fields in the current manifest/catalog schema. Requirements below that name them become mandatory with that contract. Until then, releases use one implicit `standard` implementation per `moduleId` and the current generated `buildMarker`; do not simulate missing fields with ad hoc configuration.
 
-Application Composition validation is implemented; publication and live Shell loading are not. Until #374–#377 wire those paths in, remote URL and generated lazy-registry changes still require Shell regeneration and redeployment. The composition promotion sequence below is the target flow.
+Application Composition validation and stage publication are implemented; live Shell loading is not. After providers and Shell deploy, the stage workflow observes the deployed artifacts and publishes the active snapshot as the `ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON` Zerops project variable, deploys the composition consumers on it, then publishes the complete inventory and restarts them; a scheduled workflow re-publishes it before it expires (see ADR-0020). Until #374–#377 wire those paths in, remote URL and generated lazy-registry changes still require Shell regeneration and redeployment. The composition promotion sequence below is the target flow.
 
 The rules exist because the first Zerops stage rollout was merged after source-level validation and then required 43 linear repair commits. Stage had become the first production-shaped integration test. Future releases must prove the target artifact and the distributed user journey before promotion.
 
@@ -207,6 +207,74 @@ Use this sequence for a new or changed MicroVertical:
 12. **Close:** record deployed digests, smoke evidence, and the new last-known-good set.
 
 Do not report release success before all required smoke checks pass.
+
+### Edge units on Cloudflare Workers
+
+`topology/cloudflare-placement.json` lists the delivery units CI also ships as Cloudflare Workers;
+each needs a `cloudflare.workerName` in the reference topology, and its Worker configuration must be
+deployable on its own. Every vertical (UI and headless API) and the Shell are placed, so every
+Worker the Shell binds as a service is placed too. The deployment planner emits the placed,
+impacted units as `units.cloudflare` in dependency order (providers before Shell).
+
+The edge deploy is additive. The Zerops deploy (`deploy-stage`: migrator, SpiceDB, providers,
+workers and Shell) is unchanged and keeps working for every environment that targets Zerops. The
+edge deploy runs only for an environment configured for Cloudflare (below); which target an
+environment serves is decided per GitHub environment, not by this job.
+
+The `deploy-cloudflare` job runs after `deploy-stage` has migrated the database, in its own
+`stage-edge` environment. It resolves the last successful `stage-edge` deployment, plans the diff
+from there, and ships the planned units in three passes: build and verify every unit (each unit's
+`cloudflare:deploy` up to its final `wrangler deploy`), deploy them with Wrangler in plan order, then
+run each unit's `cloudflare:proof`. Only the Wrangler steps receive `CLOUDFLARE_API_TOKEN`; the
+build, verification and proof run dependency code and never see it. Every Worker's active version
+is recorded before the first deploy. A failed deploy or proof returns each Worker this run deployed
+to that state: the recorded version, or no Worker at all when the run created it. A cancelled run
+restores the same way, because its deploy may have stopped after some Workers changed. The restore
+step verifies that state, and any Worker left on the candidate is reported and fails the job. A
+change to the edge workflow or the install action replans every placed unit, and a change to the
+planner itself replans every unit on Zerops and the edge. Because the history is separate, a failed
+edge deploy is replanned by the next run even when Zerops succeeded for the same revision.
+
+Build, deploy, proof and retirement-check steps each have a timeout that leaves the restore step
+its own budget inside the job deadline, so a hung deploy still ends with every changed Worker
+restored.
+
+Removing a unit from placement, or renaming its Worker, must list the old Worker in
+`retiredWorkers`. The planner compares placement with the last successful edge deployment, in full
+plans too, and refuses a change that drops a deployed Worker without retiring it. Placed units must
+also have distinct Worker names. Retirement has two phases, and CI never deletes a Worker. The
+deploy that drops a Worker leaves it running, so a rollback of the Shell or another dependent still
+finds its binding target. After the proofs pass, every successful edge deploy reports each retired
+Worker that still exists as a warning, until an operator deletes it with
+`wrangler delete --name <worker>`. `retiredWorkers` is a ledger: CI cannot see a deletion, so the
+planner keeps every entry the last edge deployment retired, and a deleted Worker's entry costs one
+read-only check per deploy.
+
+The job runs only when the repository is configured for Cloudflare: the `CLOUDFLARE_ACCOUNT_ID`
+variable, the `CLOUDFLARE_API_TOKEN` secret in the `stage-edge` environment, and a complete build
+environment (below). The `edge-deploy-readiness` job checks all three from `stage-edge` without
+creating a deployment. If any is missing, `deploy-cloudflare` is skipped, records nothing, a notice
+names what is missing, and CI stays green. Reading `stage-edge` without a deployment uses
+`environment.deployment: false`, which GitHub refuses for environments with custom deployment
+protection rules, so `stage-edge` must not have any.
+
+The non-secret configuration the Worker builds read is reviewed source, the `buildEnvironment` of
+`topology/cloudflare-placement.json`. It must hold `ULTRAMODERN_MF_DEV_ORIGIN`, the stage Shell
+origin (the placed units' API CORS allowlist), and `ULTRAMODERN_PUBLIC_URL_<UNIT>` for every placed
+unit (the output verifier requires them). It may add `MODERN_ASSET_PREFIX` or
+`VERTICAL_*_WORKER_BINDING` overrides. Only `MODERN_`, `ULTRAMODERN_` and `VERTICAL_` keys are
+accepted. `ULTRAMODERN_SOURCE_REVISION` and `ULTRAMODERN_DEPLOYMENT_ENVIRONMENT` are reserved for
+the run, and `VERTICAL_*_WORKER_NAME` is rejected because a Worker's name is its topology
+`cloudflare.workerName`, the name CI deploys. Because it is a topology document,
+changing a value replans every unit, so no Worker keeps a build of the old configuration. The job
+never reads the Zerops `stage` environment.
+Each Worker's runtime configuration is set once, outside CI, before its first deploy: secrets
+(`wrangler secret put`, for example `SPICEDB_PRESHARED_KEY` and `BETTER_AUTH_SECRET`) and the
+Hyperdrive and Workers VPC bindings its Worker configuration declares. The per-unit
+`cloudflare:proof` and the verified rollback catch a Worker whose configuration is incomplete.
+The first edge deploy has no previous edge deployment, so seed it with a full run:
+`gh workflow run ultramodern-workspace-gates.yml --ref main -f full=true`. Placement adds the Worker
+delivery; it never removes a Zerops service or any GitHub environment variable or secret.
 
 ## Required smoke suite
 
