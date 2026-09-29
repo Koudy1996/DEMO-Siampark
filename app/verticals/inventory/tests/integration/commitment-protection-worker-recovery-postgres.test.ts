@@ -426,6 +426,13 @@ it.live(
         if (requestedMessage === undefined) {
           yield* Effect.die('Action did not commit its Protection establishment request');
         }
+        const [requestedLedger] = yield* admin
+          .select()
+          .from(inventoryEffectLedger)
+          .where(and(eq(inventoryEffectLedger.tenantId, tenantId), eq(inventoryEffectLedger.effectId, effectId)));
+        if (requestedLedger === undefined) {
+          yield* Effect.die('Action did not commit its Protection effect ledger');
+        }
         const workerPayload = Schema.decodeUnknownSync(OutboxPayloadSchema)(requestedMessage.payloadJson);
         const authoritySucceededAt = workerPayload.request.requestedAt;
         expect(workerPayload.request.protectionRef.resourceId).toBe(protectionId);
@@ -514,7 +521,7 @@ it.live(
           ledger: (scope) =>
             makeInventoryEffectLedgerService(
               inventoryEffectLedgerPersistenceForWorkerScope(scope),
-              Effect.succeed(workerPayload.request.requestedAt),
+              Effect.succeed(requestedLedger.requestedAt.toISOString()),
             ),
           recoveryAuthority,
         });
