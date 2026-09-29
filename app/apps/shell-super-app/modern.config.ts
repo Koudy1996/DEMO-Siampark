@@ -5,23 +5,24 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@modern-js/app-tools';
 import { presetUltramodern, ultramodernAppTools } from '@modern-js/ultramodern-app-tools';
 import type { AppTools, AppToolsUserConfig, CliPlugin } from '@modern-js/app-tools';
-import { getBuildConfigEnvironment, withBuildConfigEnvironment } from '@modern-js/app-tools-extensions/config';
+import { getBuildConfigEnvironment, resolveDeployTarget } from '@modern-js/app-tools-extensions/config';
 import { bffPlugin } from '@modern-js/plugin-bff-build-extensions';
 import { i18nPlugin } from '@modern-js/plugin-i18n';
 import { tanstackRouterPlugin } from '@modern-js/plugin-tanstack';
 import { moduleFederationPlugin } from '@module-federation/modern-js-v3';
 import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
-import {
-  contains as optionContains,
-  getOrElse as getOptionOrElse,
-  getOrUndefined as getOptionOrUndefined,
-} from 'effect/Option';
+import { sortWith } from 'effect/Array';
+import { getOrElse as getOptionOrElse, getOrUndefined as getOptionOrUndefined } from 'effect/Option';
+import { String as StringOrder } from 'effect/Order';
 import { getOrThrow as getResultOrThrow, isSuccess as isResultSuccess } from 'effect/Result';
 import {
+  Array as SchemaArray,
   Boolean as BooleanSchema,
   Literals,
+  NonEmptyString,
   NumberFromString,
   OptionFromUndefinedOr,
+  Struct,
   Trim,
   check,
   decodeTo,
@@ -35,6 +36,7 @@ import { transform } from 'effect/SchemaTransformation';
 import { withZephyr as withZephyrRspack } from 'zephyr-rspack-plugin';
 
 import {
+  createCloudflareDataPlaneBindings,
   createCloudflareWorkerSecurity,
   createWorkerSsrPlugins,
   createZephyrRspackPlugin,
@@ -83,12 +85,9 @@ const getBuildBoolean = (name: string): boolean =>
     getResultOrThrow(decodeUnknownResult(OptionFromUndefinedOr(BuildBooleanSchema))(getBuildConfigEnvironment(name))),
     () => false,
   );
-const cloudflareDeployMode = getResultOrThrow(
-  decodeUnknownResult(OptionFromUndefinedOr(Literals(['cloudflare', 'node'])))(
-    getBuildConfigEnvironment('MODERNJS_DEPLOY'),
-  ),
-);
-const cloudflareDeployEnabled = optionContains(cloudflareDeployMode, 'cloudflare');
+const cloudflareDeployEnabled = resolveDeployTarget().target === 'cloudflare';
+// Only a Worker build binds the private data plane; its IDs are required there and unused elsewhere.
+const cloudflareDataPlaneBindings = cloudflareDeployEnabled ? createCloudflareDataPlaneBindings(envValue) : undefined;
 const cloudflareWorkerRemoteStubPath = fileURLToPath(
   new URL('src/api/cloudflare-worker-remote-stub.ts', import.meta.url),
 );
@@ -104,8 +103,8 @@ const cloudflareRuntimeExternal = (
 
 const zephyrRspackPlugin = (): CliPlugin<AppTools> =>
   createZephyrRspackPlugin({
-    configure: () => withBuildConfigEnvironment('ZE_FAIL_BUILD', 'true', withZephyrRspack()),
-    readToken: () => getOptionalBuildConfig('ZE_CI_TOKEN'),
+    configure: () => withZephyrRspack(),
+    readEnvironment: getOptionalBuildConfig,
   });
 
 const appId = 'shell-super-app';
@@ -113,6 +112,35 @@ const moduleFederationConfigPath = fileURLToPath(new URL('module-federation.conf
 const referenceTopologyPath = fileURLToPath(new URL('../../topology/reference-topology.json', import.meta.url));
 const referenceTopology = getResultOrThrow(
   decodeUnknownResult(fromJsonString(DeploymentAllowlistTopologySchema))(readFileSync(referenceTopologyPath, 'utf-8')),
+);
+// The Shell binds every vertical Worker under the vertical's topology identity: its Worker name, its
+// `workerDispatch.serviceBinding` and its BFF prefix. Module discovery and the deploy planner read the
+// same topology, so a renamed binding changes every caller at once.
+const ShellServiceBindingTopologySchema = Struct({
+  verticals: SchemaArray(
+    Struct({
+      api: Struct({ bff: Struct({ prefix: NonEmptyString }) }),
+      backendFederation: Struct({
+        executionSurfaces: Struct({
+          cloudflare: Struct({ workerDispatch: Struct({ serviceBinding: NonEmptyString }) }),
+        }),
+      }),
+      cloudflare: Struct({ workerName: NonEmptyString }),
+    }),
+  ),
+});
+const verticalServiceBindings = sortWith(
+  getResultOrThrow(
+    decodeUnknownResult(fromJsonString(ShellServiceBindingTopologySchema))(
+      readFileSync(referenceTopologyPath, 'utf-8'),
+    ),
+  ).verticals.map(({ api, backendFederation, cloudflare }) => ({
+    binding: backendFederation.executionSurfaces.cloudflare.workerDispatch.serviceBinding,
+    prefix: api.bff.prefix,
+    service: cloudflare.workerName,
+  })),
+  ({ prefix }) => prefix,
+  StringOrder,
 );
 const developmentOverlayPath = fileURLToPath(
   new URL('../../topology/local-overlays/development.json', import.meta.url),
@@ -167,18 +195,6 @@ const shellDevServerHeaders: NonNullable<NonNullable<NonNullable<AppToolsUserCon
   'Access-Control-Allow-Origin': moduleFederationDevServerOrigin,
 };
 
-if (
-  cloudflareDeployEnabled &&
-  getBuildBoolean('ULTRAMODERN_CLOUDFLARE_REQUIRE_PUBLIC_URLS') &&
-  configuredCloudflareUrl === undefined &&
-  configuredSiteUrl === undefined &&
-  inferredCloudflareUrl === undefined
-) {
-  throw new Error(
-    `Cloudflare deploy for ${appId} needs ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP, MODERN_PUBLIC_SITE_URL, or ULTRAMODERN_CLOUDFLARE_WORKERS_DEV_SUBDOMAIN.`,
-  );
-}
-
 export default defineConfig(
   presetUltramodern(
     withOptionalProperty(
@@ -200,71 +216,11 @@ export default defineConfig(
       'deploy',
       {
         worker: {
+          ...cloudflareDataPlaneBindings,
           compatibilityDate: '2026-06-02',
           name: cloudflareWorkerName,
           security: createCloudflareWorkerSecurity(),
-          services: [
-            {
-              binding: getOptionalBuildConfig('VERTICAL_CATALOG_WORKER_BINDING') ?? 'VERTICAL_CATALOG_WORKER',
-              prefix: '/catalog-api',
-              service: getOptionalBuildConfig('VERTICAL_CATALOG_WORKER_NAME') ?? 'app-catalog',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_COMMERCE_CUSTOMER_CONTEXT_WORKER_BINDING') ??
-                'VERTICAL_COMMERCE_CUSTOMER_CONTEXT_WORKER',
-              prefix: '/commerce-customer-context-api',
-              service:
-                getOptionalBuildConfig('VERTICAL_COMMERCE_CUSTOMER_CONTEXT_WORKER_NAME') ??
-                'app-commerce-customer-context',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_COMMERCE_MARKET_CATALOG_WORKER_BINDING') ??
-                'VERTICAL_COMMERCE_MARKET_CATALOG_WORKER',
-              prefix: '/commerce-market-catalog-api',
-              service:
-                getOptionalBuildConfig('VERTICAL_COMMERCE_MARKET_CATALOG_WORKER_NAME') ?? 'app-commerce-market-catalog',
-            },
-            {
-              binding: getOptionalBuildConfig('VERTICAL_INVENTORY_WORKER_BINDING') ?? 'VERTICAL_INVENTORY_WORKER',
-              prefix: '/inventory-api',
-              service: getOptionalBuildConfig('VERTICAL_INVENTORY_WORKER_NAME') ?? 'app-inventory',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_PARTY_REGISTRY_WORKER_BINDING') ?? 'VERTICAL_PARTY_REGISTRY_WORKER',
-              prefix: '/party-registry-api',
-              service: getOptionalBuildConfig('VERTICAL_PARTY_REGISTRY_WORKER_NAME') ?? 'app-party-registry',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_PAYMENT_TERM_CATALOG_WORKER_BINDING') ??
-                'VERTICAL_PAYMENT_TERM_CATALOG_WORKER',
-              prefix: '/payment-term-catalog-api',
-              service:
-                getOptionalBuildConfig('VERTICAL_PAYMENT_TERM_CATALOG_WORKER_NAME') ?? 'app-payment-term-catalog',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_PRICE_GROUP_CATALOG_WORKER_BINDING') ??
-                'VERTICAL_PRICE_GROUP_CATALOG_WORKER',
-              prefix: '/price-group-catalog-api',
-              service: getOptionalBuildConfig('VERTICAL_PRICE_GROUP_CATALOG_WORKER_NAME') ?? 'app-price-group-catalog',
-            },
-            {
-              binding: getOptionalBuildConfig('VERTICAL_PRICING_WORKER_BINDING') ?? 'VERTICAL_PRICING_WORKER',
-              prefix: '/pricing-api',
-              service: getOptionalBuildConfig('VERTICAL_PRICING_WORKER_NAME') ?? 'app-pricing',
-            },
-            {
-              binding:
-                getOptionalBuildConfig('VERTICAL_STOREFRONT_REGISTRY_WORKER_BINDING') ??
-                'VERTICAL_STOREFRONT_REGISTRY_WORKER',
-              prefix: '/storefront-registry-api',
-              service: getOptionalBuildConfig('VERTICAL_STOREFRONT_REGISTRY_WORKER_NAME') ?? 'app-storefront-registry',
-            },
-          ],
+          services: verticalServiceBindings,
           ssr: true,
         },
       } satisfies NonNullable<AppToolsUserConfig['deploy']>,
@@ -283,7 +239,8 @@ export default defineConfig(
         },
         output: {
           assetPrefix,
-          disableTsChecker: false,
+          // `pnpm typecheck` (tsc --build over the reference graph) owns type diagnostics.
+          disableTsChecker: true,
           distPath: {
             html: './',
             root: buildOutputRoot,
@@ -310,6 +267,8 @@ export default defineConfig(
             localeDetection: {
               fallbackLanguage: 'en',
               ignoreRedirectRoutes: [
+                // The Shell runtime contract the Application Composition publisher observes.
+                '/.well-known',
                 '/@mf-types',
                 '/assets',
                 '/bundles',

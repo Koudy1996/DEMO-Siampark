@@ -1,7 +1,8 @@
+// @effect-diagnostics strictEffectProvide:off multipleEffectProvide:off -- Test-owned scripted database entrypoint for Action fixtures; Reactivity feeds both the scripted client and the executor. expires: 2026-12-31.
 import { randomUUID } from 'node:crypto';
 
 import { makeWithDefaults } from 'drizzle-orm/effect-postgres';
-import { DateTime, Deferred, Effect, Layer, Schema, Stream } from 'effect';
+import { DateTime, Deferred, Effect, Layer, Option, Schema, Stream } from 'effect';
 import { Reactivity } from 'effect/unstable/reactivity';
 import type { Connection } from 'effect/unstable/sql/SqlConnection';
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
@@ -16,6 +17,7 @@ import {
 import type { DomainEventContractMap } from '../actions/events.ts';
 import type {
   ActionInvocationRecord,
+  ActionRecordedRejection,
   ActionRepositoryService,
   FinalizeActionPolicyDenialInput,
   FlushActionSuccessInput,
@@ -200,6 +202,7 @@ const actionTestHarness = Effect.fn('ActionTestHarness.make')(function* actionTe
             completedAt: completionTime(),
             status: 'rejected',
           });
+          return Option.none<ActionRecordedRejection>();
         }),
       ),
     );
@@ -209,6 +212,16 @@ const actionTestHarness = Effect.fn('ActionTestHarness.make')(function* actionTe
     flushSuccess: (_transaction, input) =>
       Effect.sync(() => {
         pendingCommit.push(commitSuccess(input));
+      }),
+    loadRecordedRejection: (_executor, id) =>
+      Effect.sync(() => {
+        const policyDenial = policyDenials.find((denial) => denial.actionInvocationId === id);
+        if (policyDenial !== undefined) {
+          return Option.some({ policyReasonCode: policyDenial.reasonCode, stage: 'policy' as const });
+        }
+        return permissionDenials.some((denial) => denial.actionInvocationId === id)
+          ? Option.some({ stage: 'authz' as const })
+          : Option.none();
       }),
     lockInvocation: (_transaction, id) => Effect.suspend(() => find(id)),
     rejectPermissionDenied: (_executor, input) => recordRejection(input, permissionDenials),

@@ -1,5 +1,20 @@
-/** Focused server-only entrypoint used to bundle independently deployed Outbox Worker hosts. */
+/** Focused server-only entrypoint used to bundle the combined Outbox Worker host and its MicroVertical entries. */
 export { defineTenantModuleEntrypoint } from '../modules/module-entrypoint.ts';
+export { defineScopedRoutine } from '../db/scoped-routine.ts';
+export { BusinessPermissionCodeSchema, defineBusinessPermissionCatalog } from '../permissions/business-permission.ts';
+export { AuthorizationMutationReconciliationUnavailable } from '../permissions/authorization-reconciler.ts';
+export {
+  AuthorizationMutationSagaError,
+  reconcileCommittedAuthorizationMutation,
+} from '../permissions/authorization-mutation-saga.ts';
+export { AuthorizationMutationStateSchema } from '../permissions/authorization-mutation.ts';
+export {
+  BusinessPermissionRelationshipMutation,
+  BusinessPermissionRelationshipMutationLive,
+} from '../permissions/business-permission-mutation.ts';
+export { ContextAccess, ContextAccessLive, toBusinessPermissionAccessObjectId } from '../permissions/context-access.ts';
+export { PrincipalEligibility, PrincipalRefSchema } from '../permissions/principal-ref.ts';
+export { ReadHandlerNotFound, ReadHandlerUnavailable } from '../reads/errors.ts';
 export { tenantLegalEntityRlsPolicies, tenantRlsPolicies } from '../db/scoped-transaction.ts';
 export { DatabaseConfigLive } from '../db/config.ts';
 export { CorePersistenceLive } from '../runtime-infrastructure.ts';
@@ -21,7 +36,7 @@ export {
   makeResourceContainmentRelationshipMutation,
   makeResourceContainmentRelationshipMutationLive,
 } from '../permissions/resource-containment-mutation.ts';
-export { OutboxWorkerInfrastructureLive, startOutboxWorkerProcess } from './process.ts';
+export { defineOutboxWorkerEntry, OutboxWorkerInfrastructureLive, startOutboxWorkerHost } from './process.ts';
 export { OutboxRepositoryLive } from './repository.ts';
 export {
   makeOutboxWorkerLegalEntityScopeFanout,
@@ -36,6 +51,7 @@ export {
   OutboxWorkerTenantScopeLive,
 } from './tenant-scope.ts';
 export type { AnyOutboxWorkerRegistration, OutboxWorkerHandlerContext } from './definition.ts';
+export type { OutboxWorkerEntry } from './process.ts';
 export type {
   OutboxWorkerCompletionDefinition,
   OutboxWorkerCompletionInput,

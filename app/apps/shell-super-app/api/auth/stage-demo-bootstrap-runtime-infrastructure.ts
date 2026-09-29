@@ -5,7 +5,7 @@ import { admin } from 'better-auth/plugins/admin';
 import { and, eq } from 'drizzle-orm';
 import { Config, DateTime, Effect, Option, Redacted } from 'effect';
 
-import { STAFF_AUTHENTICATION_NAMESPACE_ID } from './authentication-namespace.ts';
+import { STAFF_AUTHENTICATION_NAMESPACE_ID } from '@app/core-runtime/auth/staff-authentication-namespace';
 import { AuthDatabase } from './db/client.ts';
 import { account, session, user } from './db/schema.ts';
 import type { AuthDatabaseExecutor } from './db/types.ts';
@@ -23,14 +23,11 @@ import type {
 } from './stage-demo-bootstrap-contract.ts';
 
 const persistenceFailure = (cause?: unknown) =>
-  Object.defineProperty(
-    new StageDemoBootstrapError({
-      code: 'stage_demo_persistence_failed',
-      reason: 'The stage demo Better Auth user could not be reconciled',
-    }),
-    'cause',
-    { value: cause },
-  );
+  new StageDemoBootstrapError({
+    cause,
+    code: 'stage_demo_persistence_failed',
+    reason: 'The stage demo Better Auth user could not be reconciled',
+  });
 
 const bootstrapSdkTimeout = Effect.timeoutOrElse({
   duration: '30 seconds',
@@ -88,7 +85,6 @@ const ensureAuthUser = Effect.fn('StageDemoBootstrap.ensureAuthUser')(function* 
       .select({
         accountId: account.accountId,
         id: account.id,
-        issuer: account.issuer,
         password: account.password,
       })
       .from(account)
@@ -104,7 +100,6 @@ const ensureAuthUser = Effect.fn('StageDemoBootstrap.ensureAuthUser')(function* 
     }
     yield* classifyExactStageDemoRecord('Better Auth credential account', credential, {
       accountId: existingUser.id,
-      issuer: 'local:credential',
     });
     const hash = credential.password;
     const validPassword = yield* Effect.tryPromise({

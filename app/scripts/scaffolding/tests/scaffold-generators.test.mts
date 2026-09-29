@@ -36,6 +36,7 @@ import type { TrustedPrincipalContext } from '../../../packages/core-runtime/src
 import { GatewayAssertionRedemptionService } from '../../../packages/core-runtime/src/auth/gateway-assertion-redemption.ts';
 import { defineSystemModuleEntrypoint } from '../../../packages/core-runtime/src/modules/module-entrypoint.ts';
 import { makeActionTestHarness } from '../../../packages/core-runtime/src/testing/actions.ts';
+import type { staffAuthenticationNamespaceRegistryLayer } from '../../../packages/core-runtime/src/auth/staff-authentication-namespace.ts';
 import type { GatewayPrincipalVerifierLive } from '../../../packages/gateway-principal-verifier/src/server.ts';
 import {
   GATEWAY_ASSERTION_CLOCK_SKEW_SECONDS,
@@ -203,8 +204,13 @@ interface GeneratedPrincipalEnvironment {
   readonly ONTOS_GATEWAY_PUBLIC_JWKS?: string;
 }
 
+type StaffAuthenticationNamespaceRegistryLayer = ReturnType<typeof staffAuthenticationNamespaceRegistryLayer>;
+
 interface GeneratedPrincipalModule {
-  readonly ActionPrincipalVerifierLive: typeof GatewayPrincipalVerifierLive;
+  readonly ActionPrincipalVerifierLive: Layer.Layer<
+    Layer.Success<typeof GatewayPrincipalVerifierLive> | Layer.Success<StaffAuthenticationNamespaceRegistryLayer>,
+    Layer.Error<StaffAuthenticationNamespaceRegistryLayer>
+  >;
   readonly verifyActionPrincipal: (
     authorization: string | undefined,
     options: {
@@ -368,6 +374,14 @@ const InventoryLocaleSchema = Schema.Struct({
   }),
 });
 
+const CorePackageExportsSchema = Schema.Struct({
+  exports: Schema.Record(Schema.String, Schema.String),
+  imports: Schema.Record(Schema.String, Schema.Struct({ default: Schema.String })),
+  name: Schema.String,
+});
+
+const decodeCorePackageExports = (source: string) =>
+  Schema.decodeUnknownEffect(CorePackageExportsSchema)(JSON.parse(source));
 const decodeFixturePackage = (source: string) => Schema.decodeUnknownEffect(FixturePackageSchema)(JSON.parse(source));
 const decodeInventoryLocale = (source: string) => Schema.decodeUnknownEffect(InventoryLocaleSchema)(JSON.parse(source));
 
@@ -433,6 +447,7 @@ const rootPackageFile = 'package.json';
 const coreRuntimePackageFile = 'packages/core-runtime/package.json';
 const coreRuntimePackageEntryExport = './src/index.ts';
 const coreRuntimeIndexFile = 'packages/core-runtime/src/index.ts';
+const coreRuntimeModuleEntrypointFile = 'packages/core-runtime/src/modules/module-entrypoint.ts';
 const coreActionCatalogFile = 'packages/core-runtime/src/modules/actions/catalog.ts';
 const shellSentinelFile = 'apps/shell-super-app/src/sentinel.ts';
 const shellVerticalClientsFile = 'apps/shell-super-app/src/api/vertical-clients.ts';
@@ -585,9 +600,9 @@ const createVertical = (root: string, vertical: FixtureVertical): Effect.Effect<
         name: `@app/${vertical.slug}`,
         private: true,
         scripts: {
-          build: 'modern build && MODERNJS_DEPLOY=node modern deploy --skip-build',
+          build: 'modern build --deploy-target node && modern deploy --skip-build --deploy-target node',
           'cloudflare:build':
-            'MODERNJS_DEPLOY=cloudflare modern build && MODERNJS_DEPLOY=cloudflare modern deploy --skip-build',
+            'modern build --deploy-target cloudflare && modern deploy --skip-build --deploy-target cloudflare',
           existing: preservedFixtureValue,
         },
         version: '0.1.0',
@@ -1503,16 +1518,15 @@ it.live(
         expect(searchClient).toMatch(/api: InventoryItemsSearchApi,/u);
         expect(reportClient).toMatch(/api: StockLevelsReportApi,/u);
         expect(moduleApiContract).toMatch(
-          /headers: \{\},\s+params: \{\},\s+payload: ResourceDetailRequestSchema,\s+query: \{\}/u,
+          /\],\s+payload: ResourceDetailRequestSchema,\s+success: ResourceDetailResponseSchema,/u,
         );
+        expect(moduleApiContract).not.toMatch(/(?:headers|params|query): \{\}/u);
         expect(moduleApiContract).toContain(
           'export type ResourceDetailRequest = typeof ResourceDetailRequestSchema.Type;',
         );
         expect(moduleApiContract).toContain('export const ResourceDetailResponseSchema = Schema.Struct(');
         expect(moduleApiContract).not.toMatch(/export type ResourceDetailResponse\b/u);
-        expect(moduleApiClient).toMatch(
-          /client\.resourceDetail\.execute\(\{\s+headers: \{\},\s+params: \{\},\s+payload,\s+query: \{\},?\s+\}\)/u,
-        );
+        expect(moduleApiClient).toContain('client.resourceDetail.execute({ payload })');
         expect(moduleApiContract).toMatch(/HttpApiGroup\.make\('resourceDetail'\)/u);
         expect(secondModuleApiContract).toMatch(/HttpApiGroup\.make\('resourceHistory'\)/u);
         expect(secondModuleApiClient).toMatch(/client\.resourceHistory\.execute\(/u);
@@ -2571,6 +2585,35 @@ it.live(
 );
 
 it.live(
+  'action boundary reruns reject a boundary without the staff namespace registration',
+  Effect.fn(function* rejectBoundaryWithoutStaffNamespace() {
+    yield* withFixture(
+      Effect.fn(function* rejectBoundaryWithoutStaffNamespaceFixture(fixture) {
+        yield* run(fixture, scaffoldCommand.microverticalActionBoundary, [scaffoldFlag.vertical, inventorySlug]);
+        const generated = yield* readFixtureFile(fixture.root, inventoryActionPrincipalFile);
+        const stale = generated
+          .replace(/^import \{ staffAuthenticationNamespaceRegistryLayer \}.*\n/mu, '')
+          .replace(
+            /\/\*\*\n \* What this runtime needs[\s\S]*?\n\);\n/u,
+            'export { GatewayPrincipalVerifierLive as ActionPrincipalVerifierLive };\n',
+          );
+        expect(stale).not.toMatch(/AuthenticationNamespaceRegistry/u);
+        yield* write(fixture.root, inventoryActionPrincipalFile, stale);
+        const before = yield* snapshotTree(fixture.root);
+        yield* expectFailure(
+          run(fixture, scaffoldCommand.microverticalActionBoundary, [scaffoldFlag.vertical, inventorySlug]),
+          (error) =>
+            expect(String(error)).toMatch(
+              /incompatible generated Action boundary:.*Register the staff authentication namespace for this audience/u,
+            ),
+        );
+        expect(yield* snapshotTree(fixture.root)).toEqual(before);
+      }),
+    );
+  }),
+);
+
+it.live(
   'governed generation preserves compatible owner principal adaptations',
   Effect.fn(function* preserveOwnerPrincipalAdaptations() {
     yield* withFixture(
@@ -3025,7 +3068,7 @@ it.live(
             }),
           ),
         ).pipe(
-          Layer.provide(generatedModule.ActionPrincipalVerifierLive),
+          Layer.provide(Layer.orDie(generatedModule.ActionPrincipalVerifierLive)),
           Layer.provide(Layer.succeed(GatewayAssertionRedemptionService, testRedemption)),
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(environment))),
           Layer.provide(harness.layer),
@@ -4128,41 +4171,30 @@ const outboxWorkerHandlerLayer = Layer.empty;
 
 export const outboxWorkerLayer = Layer.merge(OutboxWorkerInfrastructureLive, outboxWorkerHandlerLayer);
 `);
-        expect(yield* readFixtureFile(fixture.root, 'verticals/billing/src/worker-host/main.ts'))
-          .toBe(`// @generated by scaffold:outbox-worker worker-host
-// @ontos-outbox-worker-host-owner billing.core
-import { startBillingOutboxWorker } from '../../scripts/outbox-worker.ts';
-
-startBillingOutboxWorker();
-`);
-        expect(yield* readFixtureFile(fixture.root, 'verticals/billing/scripts/outbox-worker.ts'))
+        expect(yield* readFixtureFile(fixture.root, 'verticals/billing/src/worker-host/entry.ts'))
           .toBe(`// @generated by scaffold:outbox-worker worker-host
 // @ontos-outbox-worker-host-owner billing.core
 import { Layer } from 'effect';
-import { extractOutboxWorkerSubscriptions, startOutboxWorkerProcess } from '@app/core-runtime/outbox/worker';
-import { outboxWorkers } from '../src/workers/index.ts';
+import { defineOutboxWorkerEntry, extractOutboxWorkerSubscriptions } from '@app/core-runtime/outbox/worker';
+import { outboxWorkers } from '../workers/index.ts';
 import {
   outboxWorkerCorePersistenceLive,
   outboxWorkerDatabaseConfigLive,
   outboxWorkerLayer as outboxWorkerDefinitionLayer,
   outboxWorkerRepositoryLive,
-} from '../src/worker-host/layer.ts';
+} from './layer.ts';
 
-const outboxSubscriptions = extractOutboxWorkerSubscriptions(outboxWorkers);
-const outboxWorkerProcessLayer = outboxWorkerDefinitionLayer.pipe(
-  Layer.provide(outboxWorkerRepositoryLive),
-  Layer.provide(outboxWorkerCorePersistenceLive),
-  Layer.provide(outboxWorkerDatabaseConfigLive),
-);
-
-export const startBillingOutboxWorker = (): void =>
-  startOutboxWorkerProcess({
-    claimOwnerPrefix: 'billing.core-outbox-worker',
-    health: true,
-    layer: outboxWorkerProcessLayer,
-    registrations: outboxWorkers,
-    subscriptions: outboxSubscriptions,
-  });
+/** The combined Outbox Worker host polls this entry in its own runtime under its own claim owner. */
+export const outboxWorkerEntry = defineOutboxWorkerEntry({
+  claimOwnerPrefix: 'billing.core-outbox-worker',
+  layer: outboxWorkerDefinitionLayer.pipe(
+    Layer.provide(outboxWorkerRepositoryLive),
+    Layer.provide(outboxWorkerCorePersistenceLive),
+    Layer.provide(outboxWorkerDatabaseConfigLive),
+  ),
+  registrations: outboxWorkers,
+  subscriptions: extractOutboxWorkerSubscriptions(outboxWorkers),
+});
 `);
         expect(yield* readFixtureFile(fixture.root, billingApiIndexFile)).toBe(billingApiBefore);
         const consumerPackage = yield* decodeFixturePackage(
@@ -4171,8 +4203,28 @@ export const startBillingOutboxWorker = (): void =>
         expect(consumerPackage.dependencies['@app/core-runtime']).toBe(workspaceVersion);
         expect(consumerPackage.dependencies[inventoryPackageName]).toBe(workspaceVersion);
         expect(consumerPackage.exports['./workers']).toBe(undefined);
-        expect(consumerPackage.scripts['dev:worker']).toBe(workerStartScript);
+        expect(consumerPackage.exports['./outbox-worker-host']).toBe('./src/worker-host/entry.ts');
+        expect(consumerPackage.scripts['dev:worker']).toBe(undefined);
+        // The worker host imports the hosted entry from the workspace root, so the root depends on its owner.
+        const rootPackage = Schema.decodeUnknownSync(
+          Schema.Struct({ dependencies: StringRecordSchema, name: Schema.String }),
+        )(JSON.parse(yield* readFixtureFile(fixture.root, rootPackageFile)));
+        expect(rootPackage).toEqual({
+          dependencies: {
+            '@app/billing': workspaceVersion,
+            '@app/core-runtime': workspaceVersion,
+          },
+          name: 'fixture',
+        });
         expect(consumerPackage.scripts['worker:start']).toBe(workerStartScript);
+        expect(yield* readFixtureFile(fixture.root, 'verticals/billing/src/worker-host/main.ts'))
+          .toBe(`// @generated by scaffold:outbox-worker worker-host
+// @ontos-outbox-worker-host-owner billing.core
+import { startOutboxWorkerHost } from '@app/core-runtime/outbox/worker';
+import { outboxWorkerEntry } from './entry.ts';
+
+startOutboxWorkerHost({ entries: [outboxWorkerEntry], health: true });
+`);
         const consumerTsconfig = yield* Schema.decodeUnknownEffect(FixtureTsconfigSchema)(
           JSON.parse(yield* readFixtureFile(fixture.root, 'verticals/billing/tsconfig.json')),
         );
@@ -4262,12 +4314,11 @@ it.live(
         expect(worker.includes("from '@app/inventory-stock/outbox/orders-created'")).toBe(true);
         const registry = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/src/workers/index.ts');
         const hostLayer = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/src/worker-host/layer.ts');
-        const hostMain = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/src/worker-host/main.ts');
-        const hostScript = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/scripts/outbox-worker.ts');
+        const hostEntry = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/src/worker-host/entry.ts');
         expect(registry.includes(workerRegistryEntry)).toBe(true);
         expect(hostLayer.includes('OutboxWorkerInfrastructureLive')).toBe(true);
-        expect(hostMain.includes('startInventoryStockOutboxWorker();')).toBe(true);
-        expect(hostScript.includes('startOutboxWorkerProcess({')).toBe(true);
+        expect(hostEntry.includes('export const outboxWorkerEntry = defineOutboxWorkerEntry({')).toBe(true);
+        expect(hostEntry.includes("claimOwnerPrefix: 'inventory.stock-outbox-worker',")).toBe(true);
         const registration = yield* readFixtureFile(fixture.root, inventoryRegistrationFile);
         expect(registration.includes('createOrderAction,')).toBe(true);
         expect(registration.includes(workerRegistryEntry)).toBe(true);
@@ -4277,9 +4328,11 @@ it.live(
         expect(ownerPackage.dependencies['@app/core-runtime']).toBe(workspaceVersion);
         expect(ownerPackage.dependencies[inventoryPackageName]).toBe(undefined);
         expect(ownerPackage.exports['./outbox/orders-created']).toBe(generatedOutboxContractPath);
-        for (const script of ['dev:worker', 'worker:start']) {
-          expect(ownerPackage.scripts[script]).toBe(workerStartScript);
-        }
+        expect(ownerPackage.exports['./outbox-worker-host']).toBe('./src/worker-host/entry.ts');
+        expect(ownerPackage.scripts['dev:worker']).toBe(undefined);
+        expect(ownerPackage.scripts['worker:start']).toBe(workerStartScript);
+        const hostMain = yield* readFixtureFile(fixture.root, 'verticals/inventory-stock/src/worker-host/main.ts');
+        expect(hostMain.includes('startOutboxWorkerHost({ entries: [outboxWorkerEntry], health: true });')).toBe(true);
         yield* assertScaffoldRefused(fixture, scaffoldCommand.outboxWorker, args, /refusing to overwrite/u);
         yield* run(fixture, 'action', [scaffoldFlag.vertical, inventorySlug, '--action', 'request-rebuild']);
         const registrationAfterAction = yield* readFixtureFile(fixture.root, inventoryRegistrationFile);
@@ -4533,7 +4586,7 @@ export default PurchaseOrdersPage;
             fixture.root,
             'verticals/inventory-stock/src/routes/[lang]/inventory-stock/purchase-orders/route.meta.ts',
           ),
-        ).toBe(`import { defineTenantModuleEntrypoint } from '@app/core-runtime';
+        ).toBe(`import { defineTenantModuleEntrypoint } from '@app/core-runtime/module-entrypoint';
 
 const routeMeta = {
   canonicalPath: '/inventory-stock/purchase-orders',
@@ -5779,8 +5832,8 @@ it.live(
           billingApiIndexFile,
           'verticals/billing/src/workers/orders-created-logger.worker.ts',
           'verticals/billing/src/worker-host/layer.ts',
+          'verticals/billing/src/worker-host/entry.ts',
           'verticals/billing/src/worker-host/main.ts',
-          'verticals/billing/scripts/outbox-worker.ts',
           'verticals/inventory-stock/src/policies/stock-available.policy.ts',
           'verticals/inventory-stock/src/routes/[lang]/inventory-stock/orders/page.tsx',
           'verticals/inventory-stock/src/routes/[lang]/inventory-stock/orders/route.meta.ts',
@@ -5889,11 +5942,7 @@ it.live(
               ['packages/core-runtime/src/permissions', 'packages/core-runtime/src/permissions', 'dir'],
               ['packages/core-runtime/src/auth', 'packages/core-runtime/src/auth', 'dir'],
               ['packages/core-runtime/src/authorization', 'packages/core-runtime/src/authorization', 'dir'],
-              [
-                'packages/core-runtime/src/modules/module-entrypoint.ts',
-                'packages/core-runtime/src/modules/module-entrypoint.ts',
-                'file',
-              ],
+              [coreRuntimeModuleEntrypointFile, coreRuntimeModuleEntrypointFile, 'file'],
             ] as const
           ).map(([source, target, kind]) =>
             Effect.promise(() => symlink(path.join(appRoot, source), path.join(fixture.root, target), kind)),
@@ -5922,6 +5971,22 @@ it.live(
           ),
           { concurrency: 'unbounded' },
         );
+        // Map every @app/core-runtime export exactly as the package declares it, so the fixture cannot drift.
+        const coreRuntimeDirectory = path.join(appRoot, path.dirname(path.dirname(coreRuntimeIndexFile)));
+        const corePackage = yield* decodeCorePackageExports(
+          yield* Effect.promise(() => readFile(path.join(coreRuntimeDirectory, 'package.json'), 'utf-8')),
+        );
+        const coreRuntimeExportPaths: (readonly [string, readonly string[]])[] = Object.entries(
+          corePackage.exports,
+        ).map(([subpath, target]) => [
+          path.posix.join(corePackage.name, subpath),
+          [path.join(coreRuntimeDirectory, target)],
+        ]);
+        // Core's own `#` package imports resolve to their Node (`default`) target, as in the workspace.
+        const coreRuntimeImportPaths: (readonly [string, readonly string[]])[] = Object.entries(
+          corePackage.imports,
+        ).map(([specifier, target]) => [specifier, [path.join(coreRuntimeDirectory, target.default)]]);
+        const coreRuntimePaths = Object.fromEntries([...coreRuntimeExportPaths, ...coreRuntimeImportPaths]);
         const fixtureTsconfig = path.join(fixture.root, 'tsconfig.generated.json');
         yield* Effect.promise(() =>
           writeFile(
@@ -5934,28 +5999,7 @@ it.live(
                 moduleResolution: 'Bundler',
                 noEmit: true,
                 paths: {
-                  '@app/core-runtime': [path.join(appRoot, coreRuntimeIndexFile)],
-                  '@app/core-runtime/actions/principal-context': [
-                    path.join(appRoot, 'packages/core-runtime/src/actions/principal-context.ts'),
-                  ],
-                  '@app/core-runtime/actions/runtime-wiring': [
-                    path.join(appRoot, 'packages/core-runtime/src/actions/runtime-wiring.ts'),
-                  ],
-                  '@app/core-runtime/auth/gateway-assertion-redemption': [
-                    path.join(appRoot, 'packages/core-runtime/src/auth/gateway-assertion-redemption.ts'),
-                  ],
-                  '@app/core-runtime/http/action-runner': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/http-instrumentation-seam.ts'),
-                  ],
-                  '@app/core-runtime/http/governed-read': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/governed-read.ts'),
-                  ],
-                  '@app/core-runtime/http/principal-authentication': [
-                    path.join(appRoot, 'packages/core-runtime/src/http/principal-authentication.ts'),
-                  ],
-                  '@app/core-runtime/outbox/worker': [
-                    path.join(appRoot, 'packages/core-runtime/src/outbox/worker-entrypoint.ts'),
-                  ],
+                  ...coreRuntimePaths,
                   '@app/gateway-principal-verifier/server': [
                     path.join(appRoot, 'packages/gateway-principal-verifier/src/server.ts'),
                   ],

@@ -3,24 +3,33 @@ import { builtinModules, createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { findFirst } from 'effect/Array';
 import {
-  contains as optionContains,
   getOrElse as getOptionOrElse,
+  getOrThrow as getOptionOrThrow,
   getOrUndefined as getOptionOrUndefined,
 } from 'effect/Option';
 import { getOrThrow as getResultOrThrow, isSuccess as isResultSuccess } from 'effect/Result';
 import {
+  Array as SchemaArray,
   Boolean as BooleanSchema,
+  Literal,
   Literals,
+  NonEmptyString,
   NumberFromString,
   OptionFromUndefinedOr,
+  Record as SchemaRecord,
+  String as SchemaString,
+  Struct,
   Trim,
   check,
   decodeTo,
   decodeUnknownResult,
+  fromJsonString,
   isBetween,
   isInt,
   isMinLength,
+  optionalKey,
 } from 'effect/Schema';
 import { transform } from 'effect/SchemaTransformation';
 
@@ -99,15 +108,6 @@ const createBuildConfigReaders = (getBuildConfigEnvironment: BuildConfigEnvironm
   return { envValue, getBuildBoolean };
 };
 
-const getCloudflareDeployEnabled = (getBuildConfigEnvironment: BuildConfigEnvironment): boolean => {
-  const cloudflareDeployMode = getResultOrThrow(
-    decodeUnknownResult(OptionFromUndefinedOr(Literals(['cloudflare', 'node'])))(
-      getBuildConfigEnvironment('MODERNJS_DEPLOY'),
-    ),
-  );
-  return optionContains(cloudflareDeployMode, 'cloudflare');
-};
-
 const getBuildPort = (
   getBuildConfigEnvironment: BuildConfigEnvironment,
   portEnvironmentVariable: string,
@@ -142,42 +142,12 @@ const getDefaultRemoteAssetPrefix = (
   return remoteAssetOrigin.length > 0 ? `${remoteAssetOrigin.replace(/\/+$/u, '')}/` : 'auto';
 };
 
-const assertCloudflarePublicUrl = ({
-  appId,
-  cloudflareDeployEnabled,
-  cloudflarePublicUrlEnvironmentVariable,
-  configuredCloudflareUrl,
-  configuredSiteUrl,
-  getBuildBoolean,
-  inferredCloudflareUrl,
-}: {
-  appId: string;
-  cloudflareDeployEnabled: boolean;
-  cloudflarePublicUrlEnvironmentVariable: string;
-  configuredCloudflareUrl: string | undefined;
-  configuredSiteUrl: string | undefined;
-  getBuildBoolean: (name: string) => boolean;
-  inferredCloudflareUrl: string | undefined;
-}): void => {
-  if (
-    cloudflareDeployEnabled &&
-    getBuildBoolean('ULTRAMODERN_CLOUDFLARE_REQUIRE_PUBLIC_URLS') &&
-    configuredCloudflareUrl === undefined &&
-    configuredSiteUrl === undefined &&
-    inferredCloudflareUrl === undefined
-  ) {
-    // oxlint-disable-next-line effect-native/no-native-error-construction -- Missing required deployment configuration is a synchronous build-time invariant at this non-Effect tooling boundary.
-    throw new Error(
-      `Cloudflare deploy for ${appId} needs ${cloudflarePublicUrlEnvironmentVariable}, MODERN_PUBLIC_SITE_URL, or ULTRAMODERN_CLOUDFLARE_WORKERS_DEV_SUBDOMAIN.`,
-    );
-  }
-};
-
 export const createModernBuildContext = ({
   appId,
   cloudflarePublicUrlEnvironmentVariable,
   cloudflareWorkerName,
   defaultPort,
+  deployTarget,
   getBuildConfigEnvironment,
   portEnvironmentVariable,
 }: {
@@ -185,11 +155,13 @@ export const createModernBuildContext = ({
   cloudflarePublicUrlEnvironmentVariable: string;
   cloudflareWorkerName: string;
   defaultPort: number;
+  /** `resolveDeployTarget().target` from `@modern-js/app-tools-extensions/config`. */
+  deployTarget: string;
   getBuildConfigEnvironment: BuildConfigEnvironment;
   portEnvironmentVariable: string;
 }): ModernBuildContext => {
   const { envValue, getBuildBoolean } = createBuildConfigReaders(getBuildConfigEnvironment);
-  const cloudflareDeployEnabled = getCloudflareDeployEnabled(getBuildConfigEnvironment);
+  const cloudflareDeployEnabled = deployTarget === 'cloudflare';
   const port = getBuildPort(getBuildConfigEnvironment, portEnvironmentVariable, defaultPort);
   const configuredSiteUrl = envValue('MODERN_PUBLIC_SITE_URL');
   const configuredCloudflareUrl = envValue(cloudflarePublicUrlEnvironmentVariable);
@@ -222,16 +194,6 @@ export const createModernBuildContext = ({
   const buildCacheDirectory = `node_modules/.cache/rspack-${appId}-${buildTarget}`;
   // oxlint-disable-next-line github/js-class-name -- This interpolated value is a filesystem directory name required by Modern.js, not a CSS class name.
   const buildTempDirectory = `node_modules/.modern-js-${appId}-${buildTarget}`;
-
-  assertCloudflarePublicUrl({
-    appId,
-    cloudflareDeployEnabled,
-    cloudflarePublicUrlEnvironmentVariable,
-    configuredCloudflareUrl,
-    configuredSiteUrl,
-    getBuildBoolean,
-    inferredCloudflareUrl,
-  });
 
   return {
     assetPrefix,
@@ -312,14 +274,95 @@ export const createCloudflareWorkerSecurity = () => ({
   },
 });
 
-const createCloudflareDeployment = (enabled: boolean, workerName: string) =>
-  enabled
+const requiredCloudflareBuildValue = (envValue: ModernBuildContext['envValue'], name: string): string =>
+  getResultOrThrow(
+    decodeUnknownResult(
+      Trim.pipe(check(isMinLength(1, { message: `${name} is required for a Cloudflare Worker build` }))),
+    )(envValue(name) ?? ''),
+  );
+
+/**
+ * Every OntOS Worker reaches the private data plane through two account objects: PostgreSQL through
+ * the `HYPERDRIVE` binding (Core's `#database-runtime`) and SpiceDB's HTTP gateway through the
+ * `SPICEDB` Workers VPC binding (Core's `#spicedb-transport`). Their IDs are reviewed build inputs.
+ */
+export const createCloudflareDataPlaneBindings = (envValue: ModernBuildContext['envValue']) => ({
+  vpcServices: [
+    {
+      binding: 'SPICEDB',
+      serviceId: requiredCloudflareBuildValue(envValue, 'ULTRAMODERN_CLOUDFLARE_SPICEDB_VPC_SERVICE_ID'),
+    },
+  ],
+  wrangler: {
+    hyperdrive: [
+      { binding: 'HYPERDRIVE', id: requiredCloudflareBuildValue(envValue, 'ULTRAMODERN_CLOUDFLARE_HYPERDRIVE_ID') },
+    ],
+  },
+});
+
+/** A Worker service binding to another OntOS unit's Worker, named as in the reference topology. */
+export interface CloudflareUnitServiceBinding {
+  readonly binding: string;
+  readonly service: string;
+}
+
+const UnitServiceBindingTopologySchema = Struct({
+  verticals: SchemaArray(
+    Struct({
+      backendFederation: Struct({
+        executionSurfaces: Struct({
+          cloudflare: Struct({ workerDispatch: Struct({ serviceBinding: NonEmptyString }) }),
+        }),
+      }),
+      cloudflare: Struct({ workerName: NonEmptyString }),
+      id: NonEmptyString,
+    }),
+  ),
+});
+const UnitServiceBindingPlacementSchema = Struct({
+  unitServiceBindings: optionalKey(SchemaRecord(SchemaString, SchemaArray(SchemaString))),
+});
+const topologyDocumentUrl = (name: string) => new URL(`../../../topology/${name}`, import.meta.url);
+
+/**
+ * The service bindings a placed unit's Worker declares to the other units it calls, from the
+ * reviewed placement (`unitServiceBindings`) and each target's topology binding and Worker names.
+ * The deploy planner reads the same placement to deploy every target before its consumer.
+ */
+const readCloudflareUnitServiceBindings = (appId: string): readonly CloudflareUnitServiceBinding[] => {
+  const placement = getResultOrThrow(
+    decodeUnknownResult(fromJsonString(UnitServiceBindingPlacementSchema))(
+      readFileSync(topologyDocumentUrl('cloudflare-placement.json'), 'utf-8'),
+    ),
+  );
+  const topology = getResultOrThrow(
+    decodeUnknownResult(fromJsonString(UnitServiceBindingTopologySchema))(
+      readFileSync(topologyDocumentUrl('reference-topology.json'), 'utf-8'),
+    ),
+  );
+  return (placement.unitServiceBindings?.[appId] ?? []).map((target) => {
+    // The deploy planner rejects a binding to a unit that is not a placed vertical.
+    const vertical = getOptionOrThrow(findFirst(topology.verticals, ({ id }) => id === target));
+    return {
+      binding: vertical.backendFederation.executionSurfaces.cloudflare.workerDispatch.serviceBinding,
+      service: vertical.cloudflare.workerName,
+    };
+  });
+};
+
+const createCloudflareDeployment = (
+  build: ModernBuildContext,
+  worker: { readonly name: string; readonly unitServiceBindings: readonly CloudflareUnitServiceBinding[] },
+) =>
+  build.cloudflareDeployEnabled
     ? {
         deploy: {
           worker: {
+            ...createCloudflareDataPlaneBindings(build.envValue),
             compatibilityDate: '2026-06-02',
-            name: workerName,
+            name: worker.name,
             security: createCloudflareWorkerSecurity(),
+            services: worker.unitServiceBindings.map(({ binding, service }) => ({ binding, service })),
             ssr: true,
           },
         },
@@ -424,7 +467,10 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
     },
     // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This generic optional field retains the public factory's inferred return shape and its position in the emitted configuration.
     ...(builderPlugins === undefined ? {} : { builderPlugins }),
-    ...createCloudflareDeployment(build.cloudflareDeployEnabled, cloudflareWorkerName),
+    ...createCloudflareDeployment(build, {
+      name: cloudflareWorkerName,
+      unitServiceBindings: build.cloudflareDeployEnabled ? readCloudflareUnitServiceBindings(appId) : [],
+    }),
     dev: {
       // Remote dev manifests must publish an absolute publicPath so host
       // shells load remoteEntry.js and exposed chunks from this dev server.
@@ -439,7 +485,8 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
     },
     output: {
       assetPrefix: build.assetPrefix,
-      disableTsChecker: false,
+      // `pnpm typecheck` (tsc --build over the reference graph) owns type diagnostics.
+      disableTsChecker: true,
       distPath: {
         html: './',
         root: build.buildOutputRoot,
@@ -491,18 +538,25 @@ export const createModernConfig = <Plugin, BuilderPlugin>({
   };
 };
 
+// Zephyr uploads only for a deploy that provides ZE_CI_TOKEN; the deploy environment then sets
+// ZE_FAIL_BUILD=true so a failed upload fails the build instead of shipping without it.
+const zephyrFailBuildSchema = Literal('true').annotate({
+  message:
+    'ZE_CI_TOKEN is set but ZE_FAIL_BUILD is not "true", so a failed Zephyr upload would not fail the deploy. Set ZE_FAIL_BUILD=true in the deploy environment next to ZE_CI_TOKEN.',
+});
+
 export const createZephyrRspackPlugin = <Configuration>(options: {
   configure: () => Configuration;
-  readToken: () => string | undefined;
+  readEnvironment: (name: 'ZE_CI_TOKEN' | 'ZE_FAIL_BUILD') => string | undefined;
 }) => ({
   name: 'ultramodern-zephyr-rspack-plugin',
   pre: ['@modern-js/plugin-module-federation-config'],
   setup(api: { modifyRspackConfig: (configuration: Configuration) => void }) {
-    // Only authoritative CI deployments upload artifacts. Ordinary builds need
-    // no Zephyr account or network access; deployment upload failures stay fatal.
-    if (options.readToken() === undefined) {
+    // Ordinary builds need no Zephyr account or network access.
+    if (options.readEnvironment('ZE_CI_TOKEN') === undefined) {
       return;
     }
+    getResultOrThrow(decodeUnknownResult(zephyrFailBuildSchema)(options.readEnvironment('ZE_FAIL_BUILD')));
     api.modifyRspackConfig(options.configure());
   },
 });

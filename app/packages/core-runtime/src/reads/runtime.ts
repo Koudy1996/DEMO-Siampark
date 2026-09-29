@@ -216,7 +216,6 @@ const toOwnerAuthorizationTarget = (
 ): OwnerAuthorizationTarget =>
   Match.value(target).pipe(
     Match.discriminatorsExhaustive('kind')({
-      // oxlint-disable-next-line sonarjs/function-name -- Match's discriminator key is the encoded domain vocabulary.
       business_permission: (businessTarget) =>
         withOptionalProperty(
           {
@@ -229,7 +228,6 @@ const toOwnerAuthorizationTarget = (
           businessTarget.trustedStorefrontId,
           {},
         ),
-      // oxlint-disable-next-line sonarjs/function-name -- Match's discriminator key is the encoded domain vocabulary.
       legal_entity: (legalEntityTarget) =>
         withOptionalProperty(
           {

@@ -7,6 +7,8 @@ import { Config, Effect, FileSystem, Layer, Path, Predicate, Schema } from 'effe
 import { Command, Flag } from 'effect/unstable/cli';
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process';
 
+import { lockedRegistryOverrides } from './locked-registry-overrides.mjs';
+
 const packageJsonFile = 'package.json';
 const workspacePackageDirectories = ['packages', 'apps', 'verticals'];
 const DependencyMapSchema = Schema.Record(Schema.String, Schema.String);
@@ -541,7 +543,20 @@ const installRuntimeDependencies = (runtimeManifest, appId, runtimeDir, workspac
     });
     const workspacePackages = yield* collectWorkspacePackages(workspaceRoot, pathService);
     const { installPackage, localDependencies } = removeWorkspaceDependencies(runtimeManifest, workspacePackages);
-    yield* writeJson(pathService.join(installDir, packageJsonFile), installPackage);
+    const lockfilePath = pathService.join(workspaceRoot, 'pnpm-lock.yaml');
+    // Without the lockfile the install would float to the newest matching versions again, so fail loudly.
+    const lockfileText = yield* fileSystem
+      .readFileString(lockfilePath)
+      .pipe(Effect.mapError((cause) => new MaterializationError(`Unable to read ${lockfilePath}: ${String(cause)}`)));
+    const directDependencies = new Set([
+      ...Object.keys(installPackage.dependencies ?? {}),
+      ...Object.keys(installPackage.optionalDependencies ?? {}),
+    ]);
+    // npm rejects an override that restates a direct dependency, and direct dependencies are already exact.
+    const overrides = Object.fromEntries(
+      Object.entries(lockedRegistryOverrides(lockfileText)).filter(([name]) => !directDependencies.has(name)),
+    );
+    yield* writeJson(pathService.join(installDir, packageJsonFile), { ...installPackage, overrides });
     const installCommand = ChildProcess.make(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
       ['install', '--omit=dev', '--no-audit', '--fund=false', '--legacy-peer-deps'],
@@ -589,7 +604,22 @@ const materializeCommand = Command.make(
       yield* assertRelativePath('--package-dir', packageDir, pathService);
       const appRoot = pathService.resolve(workspaceRoot, packageDir);
       const appOutputDir = pathService.join(appRoot, '.output');
-      const runtimeDir = pathService.join(workspaceRoot, '.zerops/runtime', worker ? `${appId}-worker` : appId);
+      const outboxWorkerModule = worker
+        ? yield* Effect.tryPromise({
+            catch: (cause) => new MaterializationError(String(cause)),
+            try: async () => await import('./materialize-outbox-worker.mjs'),
+          })
+        : undefined;
+      // A worker's runtime directory is its service: an owner's dedicated worker or the Outbox Worker host.
+      const runtimeName =
+        outboxWorkerModule === undefined
+          ? appId
+          : (yield* Effect.tryPromise({
+              catch: (cause) => new MaterializationError(String(cause)),
+              try: async () =>
+                await outboxWorkerModule.resolveOutboxWorker({ appId, packageDir, packageName, workspaceRoot }),
+            })).serviceId;
+      const runtimeDir = pathService.join(workspaceRoot, '.zerops/runtime', runtimeName);
       yield* Effect.all(
         [
           assertInsideWorkspace('package directory', appRoot, workspaceRoot, pathService),
@@ -628,11 +658,7 @@ const materializeCommand = Command.make(
       const packageJsonPath = pathService.join(runtimeDir, packageJsonFile);
       /** @type {RuntimePackage} */
       let runtimePackage = (yield* readOptionalRuntimePackage(packageJsonPath)) ?? {};
-      if (worker) {
-        const outboxWorkerModule = yield* Effect.tryPromise({
-          catch: (cause) => new MaterializationError(String(cause)),
-          try: async () => await import('./materialize-outbox-worker.mjs'),
-        });
+      if (outboxWorkerModule !== undefined) {
         runtimePackage = yield* Effect.tryPromise({
           catch: (cause) => new MaterializationError(String(cause)),
           try: async () =>

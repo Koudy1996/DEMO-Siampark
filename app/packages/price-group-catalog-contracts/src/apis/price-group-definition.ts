@@ -15,10 +15,8 @@ import {
 } from '../domain/price-group.ts';
 import { PriceGroupRefSchema } from '../resources/price-group.ts';
 
-export {
-  PriceGroupDefinitionDomainUnavailableProblem,
-  PriceGroupDefinitionDomainUnavailableProblemSchema,
-} from './price-group-definition-domain-unavailable-problem.ts';
+export type { PriceGroupDefinitionDomainUnavailableProblem } from './price-group-definition-domain-unavailable-problem.ts';
+export { PriceGroupDefinitionDomainUnavailableProblemSchema } from './price-group-definition-domain-unavailable-problem.ts';
 
 export const PriceGroupDefinitionRequestSchema = Schema.Struct({
   definitionRevisionId: Schema.optionalKey(PriceGroupDefinitionRevisionIdSchema),
@@ -118,6 +116,8 @@ export const PriceGroupDefinitionResponseSchema = Schema.Union([
     identity: PriceGroupIdentitySchema,
     observedAt: PriceGroupInstantSchema,
     scheduledRetirement: Schema.optionalKey(PriceGroupRetirementAcceptanceSchema),
+    // Exact revision/schedule as accepted; not a claim of Current or eventual usability.
+    // identity.lifecycle and scheduledRetirement independently describe the lifecycle.
     selection: Schema.Literal('HISTORICAL'),
   }).check(
     Schema.makeFilter((response) => {
@@ -195,10 +195,7 @@ export const PriceGroupDefinitionApi = HttpApi.make('PriceGroupDefinitionApi').a
         PriceGroupDefinitionDomainUnavailableProblemSchema,
         PriceGroupDefinitionInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: PriceGroupDefinitionRequestSchema,
-      query: {},
       success: PriceGroupDefinitionResponseSchema,
     }),
   ),

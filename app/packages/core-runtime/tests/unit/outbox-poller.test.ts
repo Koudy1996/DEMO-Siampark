@@ -4,7 +4,8 @@ import { TestClock } from 'effect/testing';
 
 import { defineTenantModuleEntrypoint } from '../../src/modules/module-entrypoint.ts';
 import { defineOutboxWorker } from '../../src/outbox/definition.ts';
-import { OutboxPersistenceError, OutboxPollerConfigError } from '../../src/outbox/errors.ts';
+import { PersistenceFailure } from '../../src/database/persistence-failure.ts';
+import { OutboxPollerConfigError } from '../../src/outbox/errors.ts';
 import { parseOutboxPollingConfig, runOutboxPollingLoop } from '../../src/outbox/poller.ts';
 import type { OutboxCycleRunner } from '../../src/outbox/poller.ts';
 
@@ -49,29 +50,49 @@ it.effect('uses safe one-second defaults and accepts bounded scalar overrides', 
   Effect.gen(function* validPollingConfiguration() {
     expect(
       yield* parseOutboxPollingConfig({
-        defaultClaimOwner: 'consumer:default',
+        claimOwnerPrefixes: ['consumer'],
+        defaultProcessIdentity: '41:7',
         environment: {},
       }),
-    ).toEqual({
-      claimOwner: 'consumer:default',
-      maxDeliveries: 100,
-      pollIntervalMs: 1000,
-    });
+    ).toEqual([
+      {
+        claimOwner: 'consumer:41:7',
+        maxDeliveries: 100,
+        pollIntervalMs: 1000,
+      },
+    ]);
 
     expect(
       yield* parseOutboxPollingConfig({
-        defaultClaimOwner: 'consumer:default',
+        claimOwnerPrefixes: ['consumer'],
+        defaultProcessIdentity: '41:7',
         environment: {
-          OUTBOX_WORKER_CLAIM_OWNER: 'consumer:configured',
           OUTBOX_WORKER_MAX_DELIVERIES: '25',
           OUTBOX_WORKER_POLL_INTERVAL_MS: '250',
+          OUTBOX_WORKER_PROCESS_IDENTITY: 'stage-host-a',
         },
       }),
-    ).toEqual({
-      claimOwner: 'consumer:configured',
-      maxDeliveries: 25,
-      pollIntervalMs: 250,
+    ).toEqual([
+      {
+        claimOwner: 'consumer:stage-host-a',
+        maxDeliveries: 25,
+        pollIntervalMs: 250,
+      },
+    ]);
+  }),
+);
+
+it.effect('a process identity override keeps a distinct claim owner for every hosted loop', () =>
+  Effect.gen(function* distinctClaimOwners() {
+    const configs = yield* parseOutboxPollingConfig({
+      claimOwnerPrefixes: ['billing-outbox-worker', 'ledger-outbox-worker'],
+      defaultProcessIdentity: '41:7',
+      environment: { OUTBOX_WORKER_PROCESS_IDENTITY: 'stage-host-a' },
     });
+    expect(configs.map(({ claimOwner }) => claimOwner)).toEqual([
+      'billing-outbox-worker:stage-host-a',
+      'ledger-outbox-worker:stage-host-a',
+    ]);
   }),
 );
 
@@ -79,11 +100,23 @@ it.effect('rejects invalid polling values instead of falling back to a busy loop
   Effect.gen(function* invalidPollingConfiguration() {
     const error = yield* Effect.flip(
       parseOutboxPollingConfig({
-        defaultClaimOwner: 'consumer:default',
+        claimOwnerPrefixes: ['consumer'],
+        defaultProcessIdentity: '41:7',
         environment: { OUTBOX_WORKER_POLL_INTERVAL_MS: '0' },
       }),
     );
     expect(Schema.is(OutboxPollerConfigError)(error)).toBe(true);
+  }),
+);
+
+it.effect('rejects an empty host and a claim owner prefix hosted twice', () =>
+  Effect.gen(function* invalidHostedLoops() {
+    for (const claimOwnerPrefixes of [[], ['consumer', 'consumer'], ['']]) {
+      const error = yield* Effect.flip(
+        parseOutboxPollingConfig({ claimOwnerPrefixes, defaultProcessIdentity: '41:7', environment: {} }),
+      );
+      expect(Schema.is(OutboxPollerConfigError)(error)).toBe(true);
+    }
   }),
 );
 
@@ -96,8 +129,8 @@ it.effect('runs immediately, survives a typed cycle failure, and continues polli
         calls += 1;
         return calls === 1
           ? Effect.fail(
-              new OutboxPersistenceError({
-                code: 'outbox_persistence_failed',
+              new PersistenceFailure({
+                cause: 'controlled driver failure',
                 reason: 'controlled test failure',
               }),
             )

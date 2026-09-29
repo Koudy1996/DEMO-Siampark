@@ -88,10 +88,10 @@ const completionPlanFor = (
           Match.value(outcome).pipe(
             Match.tag('PENDING', () => Effect.fail(unavailable(request))),
             Match.tag('AUTHORITY_OBSERVATION', (terminalOutcome) =>
-              Effect.succeed(Option.some([attempt, terminalOutcome] as const)),
+              Effect.succeedSome([attempt, terminalOutcome] as const),
             ),
             Match.tag('RECOVERY_OBSERVATION', (terminalOutcome) =>
-              Effect.succeed(Option.some([attempt, terminalOutcome] as const)),
+              Effect.succeedSome([attempt, terminalOutcome] as const),
             ),
             Match.exhaustive,
           ),

@@ -84,15 +84,13 @@ const confirmationIdentityFor = (request: OutboxPayload['request']) => {
     `${request.reservation.ref.tenantId}\u0000${request.reservation.ref.resourceId}\u0000${request.reservation.origin.attemptId}\u0000reservation-confirmation`,
   );
   return Effect.all({
-    confirmationRef: Schema.decodeUnknownEffect(ReservationConfirmationRefSchema)({
+    confirmationRef: Schema.decodeEffect(ReservationConfirmationRefSchema)({
       moduleId: moduleKey,
       resourceId: confirmationId,
       resourceType: 'commerce.inventory.reservation-confirmation',
       tenantId: request.reservation.ref.tenantId,
     }),
-    effectId: Schema.decodeUnknownEffect(ReservationAuthorityEffectIdSchema)(
-      `reservation-confirmation:${confirmationId}`,
-    ),
+    effectId: Schema.decodeEffect(ReservationAuthorityEffectIdSchema)(`reservation-confirmation:${confirmationId}`),
   }).pipe(Effect.mapError((cause) => unavailable(request, cause)));
 };
 

@@ -11,7 +11,7 @@ import { and, eq, or } from 'drizzle-orm';
 import { Config, ConfigProvider, Console, Effect, FileSystem, Layer, Path, Redacted, Schema } from 'effect';
 import { isSqlError } from 'effect/unstable/sql/SqlError';
 
-import { STAFF_AUTHENTICATION_NAMESPACE_ID } from '../apps/shell-super-app/api/auth/authentication-namespace.ts';
+import { STAFF_AUTHENTICATION_NAMESPACE_ID } from '../packages/core-runtime/src/auth/staff-authentication-namespace.ts';
 import { AuthConfig } from '../apps/shell-super-app/api/auth/config.ts';
 import { AuthDatabase, AuthDatabaseLive } from '../apps/shell-super-app/api/auth/db/client.ts';
 import { account, user } from '../apps/shell-super-app/api/auth/db/schema.ts';
@@ -36,7 +36,7 @@ import {
   selectBootstrapPrincipals,
   selectBootstrapAuthBindings,
 } from '../packages/core-runtime/src/install/context-bootstrap-shared.ts';
-import { spiceDbClientSecurity } from '../packages/core-runtime/src/permissions/client.ts';
+import { spiceDbClientSecurity } from '../packages/core-runtime/src/permissions/spicedb-grpc-rpc.ts';
 import { parseSpiceDbConfig } from '../packages/core-runtime/src/permissions/config.ts';
 import {
   toLegalEntityAccessObjectId,
@@ -58,6 +58,12 @@ type Comparable = boolean | null | number | string;
 type ExactRecord = Readonly<Record<string, Comparable>>;
 
 const localDevelopmentPassword = Redacted.make(['password', '1234'].join(''));
+
+/**
+ * Party Registry's governed reads answer from the tenant's `read_party_identity` permission, which
+ * module access alone does not grant; the local principal reads the parties it works with.
+ */
+const PARTY_REGISTRY_MODULE_ID = 'party.registry';
 
 export const LOCAL_DEVELOPMENT_CONTEXT = Object.freeze({
   authBindingId: '73000000-0000-4000-8000-000000000010',
@@ -417,6 +423,15 @@ export const buildLocalDevelopmentRelationships = Effect.fn('LocalDevelopment.bu
         subjectType: 'principal',
       },
     ];
+    if (moduleIds.includes(PARTY_REGISTRY_MODULE_ID)) {
+      shared.push({
+        relation: 'party_identity_reader',
+        resourceId: context.tenantId,
+        resourceType: 'tenant',
+        subjectId: context.principalId,
+        subjectType: 'principal',
+      });
+    }
     for (const moduleId of moduleIds) {
       const moduleObjectId = toModuleAccessObjectId(context.tenantId, context.legalEntityId, moduleId);
       if (moduleObjectId === undefined) {

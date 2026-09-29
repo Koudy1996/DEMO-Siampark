@@ -18,6 +18,7 @@ import type {
 import type { defineEffectBff } from '@modern-js/bff-effect/effect-edge';
 import { Cause, Effect, Predicate, Schema } from 'effect';
 import { describe, afterEach, expect, it, rs } from 'effect-rstest';
+import { createCloudflareDataPlaneBindings } from '../../packages/shared-contracts/tooling/modern-config.ts';
 import { build as bundleSource, transform } from 'esbuild';
 
 import { MicroVerticalReadinessSchema } from '@modern-js/bff-effect/microvertical-api';
@@ -615,7 +616,7 @@ it.live(
     );
     expect(sharedContractsPackage.exports['./server/effect-bff-runtime']).toBeUndefined();
     expect(sharedContractsPackage.dependencies['@modern-js/plugin-bff']).toBe('catalog:ultramodern');
-    expect(sharedContractsPackage.dependencies.effect).toBe('npm:@bleedingdev/effect@4.0.0-rc.117');
+    expect(sharedContractsPackage.dependencies.effect).toBe('4.0.0-rc.117');
   }),
 );
 
@@ -2229,6 +2230,7 @@ const framework = {
   createRequire: () => () => ({}),
   defineConfig: configuration => configuration,
   getBuildConfigEnvironment: name => name === 'ULTRAMODERN_MF_DEV_ORIGIN' ? ${JSON.stringify(shellOrigin)} : undefined,
+  resolveDeployTarget: () => ({ explicit: false, target: 'node' }),
   i18nPlugin: () => ({}),
   moduleFederationPlugin: () => ({}),
   pluginTailwindcss: () => ({}),
@@ -2395,7 +2397,8 @@ const framework = {
   builtinModules: [], createRequire: () => name => ({ version: name === 'effect/package.json' ? '4.0.0-rc.117' : '3.9.0-ultramodern.2' }),
   defineConfig: config => config, presetUltramodern: config => config,
   createModuleFederationConfig: config => config,
-  getBuildConfigEnvironment: () => undefined, ultramodernLocalisedUrls: {},
+  getBuildConfigEnvironment: () => undefined, resolveDeployTarget: () => ({ explicit: false, target: 'node' }),
+  ultramodernLocalisedUrls: {},
 };
 const module = { exports: {} };
 const spans = [];
@@ -2486,10 +2489,12 @@ import * as nodePath from 'node:path';
 import * as nodeUrl from 'node:url';
 import { runInNewContext } from 'node:vm';
 const environment = {
-  MODERNJS_DEPLOY: ${JSON.stringify(cloudflare ? 'cloudflare' : 'node')},
+  ULTRAMODERN_CLOUDFLARE_HYPERDRIVE_ID: 'hyperdrive-id',
+  ULTRAMODERN_CLOUDFLARE_SPICEDB_VPC_SERVICE_ID: 'vpc-service-id',
   ULTRAMODERN_MF_DEV_ORIGIN: 'https://shell.example.test',
   ULTRAMODERN_PUBLIC_URL_PARTY_REGISTRY: 'https://party.example.test',
   ZE_CI_TOKEN: 'proof-token',
+  ZE_FAIL_BUILD: 'true',
 };
 const plugin = name => options => ({ name, options });
 const framework = {
@@ -2499,7 +2504,7 @@ const framework = {
   tanstackRouterPlugin: plugin('tanstack'), withZephyr: plugin('zephyr'),
   defineConfig: value => value, presetUltramodern: (value, identity) => ({ ...value, identity }),
   getBuildConfigEnvironment: name => environment[name],
-  withBuildConfigEnvironment: (_name, _value, configuration) => configuration,
+  resolveDeployTarget: () => ({ explicit: true, target: ${JSON.stringify(cloudflare ? 'cloudflare' : 'node')} }),
   ultramodernLocalisedUrls: {},
 };
 const moduleShim = { ...nodeModule, createRequire: () => Object.assign(() => ({}), { resolve: name => '/dependencies/' + name }) };
@@ -2575,6 +2580,26 @@ process.stdout.write(JSON.stringify(evidence, normalize));
 `,
   ]);
 });
+
+// OntOS's one intended extension of a generated UI vertical config: its Worker binds the private
+// data plane (Hyperdrive and the SpiceDB Workers VPC service), with the harness's placeholder IDs.
+const OntosEvaluatedConfigSchema = Schema.Struct({
+  deploy: Schema.Struct({ worker: Schema.Record(Schema.String, Schema.Json) }),
+});
+const withOntosWorkerDataPlane = (configuration: Schema.Json): Schema.Json => {
+  const { deploy } = Schema.decodeUnknownSync(OntosEvaluatedConfigSchema)(configuration);
+  const dataPlane = createCloudflareDataPlaneBindings(
+    (name) =>
+      ({
+        ULTRAMODERN_CLOUDFLARE_HYPERDRIVE_ID: 'hyperdrive-id',
+        ULTRAMODERN_CLOUDFLARE_SPICEDB_VPC_SERVICE_ID: 'vpc-service-id',
+      })[name],
+  );
+  return Schema.decodeUnknownSync(Schema.Json)({
+    ...Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(configuration),
+    deploy: { ...deploy, worker: { ...dataPlane, ...deploy.worker } },
+  });
+};
 
 it.live(
   'all published scaffold formats retain Party infrastructure behavior and source parity',
@@ -2683,7 +2708,9 @@ it.live(
                       );
                       const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
                       expect(
-                        decode(expected),
+                        cloudflare && fileName === modernConfigFile
+                          ? withOntosWorkerDataPlane(decode(expected))
+                          : decode(expected),
                         `${moduleFormat}: ${fileName} must preserve evaluated configuration, build identity and plugin behavior`,
                       ).toEqual(decode(evaluated));
                     }),
@@ -3784,6 +3811,16 @@ describe('consumer migration preserves native tooling and governed safety', () =
       expect(hasGeneratedOperationGatewayContract(gateway, partyId)).toBe(true);
       expect(hasValidGovernedHttpCompositionRoot(sharedApi, handlerRoot)).toBe(true);
       expect(yield* microVerticalApiBaselineViolation(partyId, sharedApi)).toBe(undefined);
+      // The composed API is closed exactly once, after every generated addition.
+      const closing = "  .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })\n";
+      expect(sharedApi).toContain(closing);
+      for (const opened of [
+        sharedApi.replace(closing, ''),
+        sharedApi.replace(closing, closing.replace("'error'", "'ignore'")),
+        sharedApi.replace(closing, `${closing}${closing}`),
+      ]) {
+        expect(hasValidGovernedHttpCompositionRoot(opened, handlerRoot)).toBe(false);
+      }
       for (const [before, after] of [
         [
           'makeMicroverticalHttpPrincipalAuthentication(verifyOperationPrincipal)',

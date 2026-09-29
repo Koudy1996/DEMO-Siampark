@@ -10,20 +10,37 @@
     "./auth/external-identity-admission": "./src/auth/external-identity/verifier.ts",
     "./auth/external-identity-contracts": "./src/auth/external-identity-contracts.ts",
     "./auth/gateway-assertion-redemption": "./src/auth/gateway-assertion-redemption.ts",
+    "./auth/staff-authentication-namespace": "./src/auth/staff-authentication-namespace.ts",
     "./auth/system-principal-context-provenance": "./src/auth/system-principal-context-provenance.ts",
     "./http/action-runner": "./src/http/http-instrumentation-seam.ts",
     "./http/governed-read": "./src/http/governed-read.ts",
     "./http/principal-authentication": "./src/http/principal-authentication.ts",
     "./install/stage-context-bootstrap": "./src/install/stage-context-bootstrap.ts",
+    "./module-entrypoint": "./src/modules/module-entrypoint.ts",
     "./operations/context": "./src/operations/context.ts",
     "./operations/external-authentication": "./src/operations/external-authentication.ts",
     "./outbox/core-identity-principal-binding-activated-v1": "./src/outbox/core-identity-principal-binding-activated-v1.ts",
     "./outbox/core-identity-principal-binding-reserved-v1": "./src/outbox/core-identity-principal-binding-reserved-v1.ts",
     "./outbox/core-identity-principal-binding-status-changed-v1": "./src/outbox/core-identity-principal-binding-status-changed-v1.ts",
     "./outbox/worker": "./src/outbox/worker-entrypoint.ts",
+    "./unit-service-fetch": "./src/http/unit-service-fetch.export.ts",
     "./resources/legal-entity": "./src/resources/legal-entity.ts",
     "./testing/actions": "./src/testing/actions.ts",
     "./workspace-environment": "./src/environment/workspace-environment.ts"
+  },
+  "imports": {
+    "#database-runtime": {
+      "workerd": "./src/db/database-runtime.workerd.ts",
+      "default": "./src/db/database-runtime.node.ts"
+    },
+    "#unit-service-fetch": {
+      "workerd": "./src/http/unit-service-fetch.workerd.ts",
+      "default": "./src/http/unit-service-fetch.node.ts"
+    },
+    "#spicedb-transport": {
+      "workerd": "./src/permissions/spicedb-transport.workerd.ts",
+      "default": "./src/permissions/spicedb-transport.node.ts"
+    }
   },
   "scripts": {
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",

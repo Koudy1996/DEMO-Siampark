@@ -9,6 +9,7 @@ import type {
   InstalledDeploymentResolutionInput,
   InstalledModuleCatalog,
 } from '@app/core-runtime';
+import { unitServiceFetch } from '@app/core-runtime/unit-service-fetch';
 import { Cause, Chunk, Context, Duration, Effect, Function as Fn, Layer, Schema, Semaphore } from 'effect';
 
 import type { DeploymentAllowlist } from './deployment-allowlist.ts';
@@ -70,27 +71,19 @@ export class ShellInstalledModuleCatalog extends Context.Service<
   ShellInstalledModuleCatalogService
 >()('@app/shell-super-app/api/modules/installed-module-catalog/ShellInstalledModuleCatalog') {}
 
-const unavailable = (cause?: unknown) => {
-  const error = new InstalledModuleCatalogUnavailableError({
+const unavailable = (cause?: unknown) =>
+  new InstalledModuleCatalogUnavailableError({
+    cause,
     code: 'installed_module_catalog_unavailable',
     reason: 'An allowlisted module deployment is temporarily unavailable',
   });
-  if (cause !== undefined) {
-    Object.defineProperty(error, 'cause', { configurable: true, value: cause });
-  }
-  return error;
-};
 
-const invalid = (cause?: unknown) => {
-  const error = new InstalledModuleCatalogInvalidError({
+const invalid = (cause?: unknown) =>
+  new InstalledModuleCatalogInvalidError({
+    cause,
     code: 'installed_module_catalog_invalid',
     reason: 'The installed module catalog is contradictory or malformed',
   });
-  if (cause !== undefined) {
-    Object.defineProperty(error, 'cause', { configurable: true, value: cause });
-  }
-  return error;
-};
 
 const isInvalid = Schema.is(InstalledModuleCatalogInvalidErrorSchema);
 const decodeContractDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(OntosModuleDeploymentContractSchema), {
@@ -224,10 +217,18 @@ const fetchContract = Effect.fn('ShellInstalledModuleCatalog.fetchContract')(fun
   );
 });
 
+/**
+ * A unit's contract is reached through the unit's own transport: its Worker service binding on
+ * Cloudflare (a direct call, with no public round trip and no routable hostname needed), its URL on
+ * Node.
+ */
+const unitContractFetch = (serviceBinding: string | undefined): ModuleContractFetch =>
+  serviceBinding === undefined ? globalThis.fetch : unitServiceFetch(serviceBinding);
+
 /** Creates one lazy cache for a fully healthy allowlist revision; degraded reads retry. */
 export const makeInstalledModuleCatalogLoader = (
   allowlist: DeploymentAllowlist,
-  ...[fetchContractDocument = globalThis.fetch, inputOptions = {}]: InstalledModuleCatalogLoaderArguments
+  ...[fetchContractDocument, inputOptions = {}]: InstalledModuleCatalogLoaderArguments
 ): Effect.Effect<InstalledModuleCatalog, InstalledModuleCatalogError> => {
   const options = {
     maxBytes: inputOptions.maxBytes ?? ONTOS_MODULE_CONTRACT_MAX_BYTES,
@@ -238,7 +239,8 @@ export const makeInstalledModuleCatalogLoader = (
   let loading: Effect.Effect<InstalledModuleCatalog, InstalledModuleCatalogError> | undefined;
   const loadCatalog = Effect.forEach(
     allowlist.entries,
-    ({ appId, contractUrl }) => fetchContract(appId, contractUrl, fetchContractDocument, options),
+    ({ appId, contractUrl, serviceBinding }) =>
+      fetchContract(appId, contractUrl, fetchContractDocument ?? unitContractFetch(serviceBinding), options),
     { concurrency: 8 },
   ).pipe(
     Effect.flatMap((contracts) =>

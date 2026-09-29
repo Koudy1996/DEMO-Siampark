@@ -34,6 +34,7 @@ import {
   commercePortalAuthSubjectDigest,
   emitCommercePortalAuthAudit,
 } from '../../../src/portal-auth/audit/audit.ts';
+import { failureLogSummary } from '../problems-support.ts';
 import { consumeRateLimitBudget } from '../rate-limit-service.ts';
 import type { CommercePortalAuthRecoveryRateLimitRule } from '../rate-limit-service.ts';
 import { CommercePortalAuthInstance } from '../provider/auth.ts';
@@ -149,37 +150,48 @@ const rateLimitedProblem = () =>
     type: `${PROBLEM_TYPE_PREFIX}rate-limited`,
   });
 
-/**
- * The failing provider or lifecycle value is kept as a non-enumerable `cause` for diagnostics; it
- * never reaches the encoded problem body.
- */
-const unavailableProblem = (cause?: unknown) =>
-  Object.defineProperty(
-    CommercePortalAuthSessionUnavailableProblemSchema.make({
-      code: 'authentication_unavailable',
-      detail: 'Commerce portal authentication is temporarily unavailable.',
-      retryable: true,
-      status: problemStatus.unavailable,
-      title: 'Session authentication unavailable',
-      type: `${PROBLEM_TYPE_PREFIX}unavailable`,
-    }),
-    'cause',
-    { configurable: true, value: cause },
-  );
+/** The retryable answer is exactly its schema, because the composed API encodes it closed. */
+const unavailableProblem = () =>
+  CommercePortalAuthSessionUnavailableProblemSchema.make({
+    code: 'authentication_unavailable',
+    detail: 'Commerce portal authentication is temporarily unavailable.',
+    retryable: true,
+    status: problemStatus.unavailable,
+    title: 'Session authentication unavailable',
+    type: `${PROBLEM_TYPE_PREFIX}unavailable`,
+  });
+
+/** Logs the failing provider or lifecycle value, which belongs to the operator log, then answers. */
+const answerUnavailable =
+  () =>
+  <Failure>(failure: Failure) =>
+    Effect.logWarning(
+      'Commerce portal session answered a failure with the unavailable problem',
+      failureLogSummary(failure),
+    ).pipe(Effect.andThen(Effect.fail(unavailableProblem())));
 
 const untrustedOriginProblem = () => forbiddenProblem('origin_not_trusted');
 
 /** Only sign-in carries caller input; elsewhere an owner-input rejection is an internal fault. */
-const signInFailureProblem = (error: CommercePortalAuthSessionFailure) =>
-  Schema.is(CommercePortalAuthSessionInvalidRequest)(error) ? invalidProblem() : unavailableProblem();
+const answerSignInFailure = (
+  error: CommercePortalAuthSessionFailure,
+): Effect.Effect<never, ReturnType<typeof invalidProblem> | ReturnType<typeof unavailableProblem>> =>
+  Schema.is(CommercePortalAuthSessionInvalidRequest)(error)
+    ? Effect.fail(invalidProblem())
+    : answerUnavailable()(error);
 
-const evidenceFailureProblem = (error: CommercePortalAuthSessionEvidenceFailure) => {
+const answerEvidenceFailure = (
+  error: CommercePortalAuthSessionEvidenceFailure,
+): Effect.Effect<
+  never,
+  ReturnType<typeof unavailableProblem> | ReturnType<typeof forbiddenProblem> | ReturnType<typeof authenticationProblem>
+> => {
   if (!Schema.is(CommercePortalAuthSessionEvidenceRejected)(error)) {
-    return unavailableProblem();
+    return answerUnavailable()(error);
   }
-  return error.reason.includes('disabled')
-    ? forbiddenProblem('account_disabled')
-    : authenticationProblem('session_expired');
+  return Effect.fail(
+    error.reason.includes('disabled') ? forbiddenProblem('account_disabled') : authenticationProblem('session_expired'),
+  );
 };
 
 interface AuthSessionResponse {
@@ -228,7 +240,7 @@ const readSessionResponse = (value: ProviderSessionResponse): AuthSessionRespons
 
 const encodeSessionReference = (sessionId: string) =>
   Schema.decodeEffect(CommerceSessionReferenceSchema)(`${commerceSessionReferencePrefix}${sessionId}`).pipe(
-    Effect.mapError(unavailableProblem),
+    Effect.matchEffect({ onFailure: answerUnavailable(), onSuccess: Effect.succeed }),
   );
 
 type HttpSessionReferenceInput = Omit<CommercePortalAuthSessionReferenceInput, 'expectedProviderSubjectId'> & {
@@ -267,7 +279,7 @@ const readProviderSession = Effect.fn('CommercePortalAuthSessionHttp.readProvide
     const session = readSessionResponse(parsed.value);
     return session === null ? Option.none<ReadProviderSession>() : Option.some({ headers: result.headers, session });
   },
-  (effect) => effect.pipe(Effect.mapError(unavailableProblem)),
+  (effect) => effect.pipe(Effect.matchEffect({ onFailure: answerUnavailable(), onSuccess: Effect.succeed })),
 );
 
 const referenceInput = (session: AuthSessionResponse, sessionRef: typeof CommerceSessionReferenceSchema.Type) =>
@@ -448,7 +460,9 @@ const signInAuditProviderSubjectId = (outcome: CommercePortalAuthSessionSignInOu
 const recordSignInEvidence = Effect.fn('CommercePortalAuthSessionHttp.recordSignInEvidence')(
   function* recordSignInEvidenceEffect(event: CommercePortalAuthAuditEvent) {
     const recorder = yield* CommercePortalAuthAudit;
-    yield* recorder.record(event).pipe(Effect.mapError(unavailableProblem));
+    yield* recorder
+      .record(event)
+      .pipe(Effect.matchEffect({ onFailure: answerUnavailable(), onSuccess: Effect.succeed }));
   },
 );
 
@@ -486,7 +500,9 @@ const signIn = Effect.fn('CommercePortalAuthSessionHttp.signIn')(function* signI
     subjectDigest,
   });
   const lifecycle = yield* CommercePortalAuthSessionLifecycle;
-  const result = yield* lifecycle.signIn(payload).pipe(Effect.mapError(signInFailureProblem));
+  const result = yield* lifecycle
+    .signIn(payload)
+    .pipe(Effect.matchEffect({ onFailure: answerSignInFailure, onSuccess: Effect.succeed }));
   const providerSubjectId = signInAuditProviderSubjectId(result.outcome);
   const sessionRef = signInAuditSessionRef(result.outcome);
   const evidence = yield* Effect.result(
@@ -551,7 +567,7 @@ const signOut = Effect.fn('CommercePortalAuthSessionHttp.signOut')(function* sig
     const sessionRef = yield* encodeSessionReference(providerSession.value.session.sessionId);
     yield* lifecycle
       .signOut(referenceInput(providerSession.value.session, sessionRef))
-      .pipe(Effect.mapError(unavailableProblem));
+      .pipe(Effect.matchEffect({ onFailure: answerUnavailable(), onSuccess: Effect.succeed }));
   }
   yield* forwardSetCookieHeaders(yield* providerSignOutCookies(headers));
   return { outcome: 'SESSION_REVOKED' } as const;
@@ -575,7 +591,7 @@ const refresh = Effect.fn('CommercePortalAuthSessionHttp.refresh')(function* ref
   const sessionRef = yield* encodeSessionReference(providerSession.value.session.sessionId);
   const outcome = yield* lifecycle
     .refresh(referenceInput(providerSession.value.session, sessionRef))
-    .pipe(Effect.mapError(unavailableProblem));
+    .pipe(Effect.matchEffect({ onFailure: answerUnavailable(), onSuccess: Effect.succeed }));
   // Only an admitted session hands its cookies onward, so the provider refresh runs after the
   // audited renewal has committed and the outcome is known to be a success: a rejection must never
   // renew the browser's credential.
@@ -606,7 +622,7 @@ const getSession = Effect.fn('CommercePortalAuthSessionHttp.getSession')(functio
     .evidenceForSession(referenceInput(providerSession.value.session, sessionRef))
     .pipe(Effect.result);
   if (Result.isFailure(evidence)) {
-    return yield* Effect.fail(evidenceFailureProblem(evidence.failure));
+    return yield* answerEvidenceFailure(evidence.failure);
   }
   return { session: toSessionSnapshot(evidence.success), state: 'authenticated' } as const;
 });

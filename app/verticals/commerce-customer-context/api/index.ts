@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ActionRuntime,
   ActionAuthorizationPreflight,
@@ -36,6 +37,7 @@ import { commerceEnrollmentOwnerTransitionPreparationLive } from '../src/enrollm
 import { CommerceEnrollmentPreparationSubjectResolverLive } from '../src/enrollment/orchestration/preparation-subject.ts';
 import { CommerceEnrollmentSweptContinuationLive } from '../src/workers/enrollment-continuation-sweeper.ts';
 import { CommercePortalAuthAccountCreationUnavailable } from './portal-auth/provider/account-creation-unavailable.ts';
+import { CommerceUnitTransportLive } from './unit-transport.ts';
 import { CommercePortalAuthAccountLookupService } from './portal-auth/provider/account-lookup-service.ts';
 import { CommercePortalAuthLive } from './portal-auth/provider/auth.ts';
 import {
@@ -63,7 +65,7 @@ import {
   CommerceEnrollmentCommitResolutionServiceLive,
   commerceEnrollmentCommitResolutionUnavailableLive,
 } from '../src/enrollment/commit-resolution/commit-resolution-service.ts';
-import { CommercePortalAuthenticationNamespaceRegistryLive } from './portal-auth/authentication-namespace-registry.ts';
+import { CommerceAuthenticationNamespaceRegistryLive } from './portal-auth/authentication-namespace-registry.ts';
 import { CommerceCoreIdentityClientLive } from './portal-auth/provider/core-identity-client.ts';
 import {
   CommerceCoreIdentityClientConfigLive,
@@ -914,14 +916,17 @@ export const makeCommerceCustomerContextApiRuntime = (
     // and the admission path both read it there rather than from the process environment.
     Layer.provide(
       Layer.mergeAll(
-        CommercePortalAuthenticationNamespaceRegistryLive,
+        CommerceAuthenticationNamespaceRegistryLive,
         actionPrincipalVerifierLive,
         gatewayAssertionRedemption,
         gatewayVerification,
       ),
     ),
   );
-  const resolvedApiHandlersLive = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  const resolvedApiHandlersLive = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive, CommerceUnitTransportLive)),
+    Layer.orDie,
+  );
   const transportLive = HttpRouter.cors({
     allowedHeaders: [...commerceCustomerContextCorsAllowedHeaders],
     allowedMethods: [...commerceCustomerContextCorsAllowedMethods],

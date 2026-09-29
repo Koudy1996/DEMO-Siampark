@@ -406,6 +406,11 @@ export const variantPersistenceForScope = (
     ) {
       return { _tag: 'invalid_change' };
     }
+    // Product-then-Variant lock order matches create/confirm so concurrent writers cannot deadlock.
+    const [parent] = yield* getProduct(input.currentProductRef.resourceId);
+    if (parent === undefined) {
+      return { _tag: 'not_found' };
+    }
     const [row] = yield* getVariant(input.variantRef.resourceId);
     if (row === undefined) {
       return { _tag: 'not_found' };
@@ -416,8 +421,12 @@ export const variantPersistenceForScope = (
     if (row.lifecycleState === 'RETIRED') {
       return { _tag: 'lifecycle_conflict' };
     }
-    if (row.productId !== input.currentProductRef.resourceId) {
+    if (row.productId !== parent.productId) {
       return { _tag: 'invalid_change' };
+    }
+    // A retired Product blocks new corrections of its forms, as Product correction itself does.
+    if (parent.lifecycleState === 'RETIRED') {
+      return { _tag: 'lifecycle_conflict' };
     }
     if (
       input.classification === 'EVIDENCED_PARENT_CORRECTION' ||
@@ -530,11 +539,9 @@ export const variantPersistenceForScope = (
         .pipe(
           Effect.map((assessment) => ({ assessment, kind: 'PROVEN' as const })),
           Effect.catchTags({
-            // oxlint-disable sonarjs/function-name -- Effect catchTags keys are schema-owned error tags; #441 reactivation integration. expires: 2027-03-31.
             VariantUseChangeBasisUnavailable: () => Effect.fail(basisUnavailable()),
             VariantUseChangeConflict: (failure) =>
               Effect.succeed({ kind: reactivationConflictOutcome(failure.conflict) }),
-            // oxlint-enable sonarjs/function-name
           }),
         );
       if (assessed.kind !== 'PROVEN') {
@@ -594,6 +601,10 @@ export const variantPersistenceForScope = (
     }
     if (row.currentRevision !== input.expectedVariantRevision) {
       return { _tag: 'revision_conflict', actualRevision: row.currentRevision };
+    }
+    // Confirmation is not reactivation: retired forms must pass the separate Current-use assessment.
+    if (row.lifecycleState === 'RETIRED') {
+      return { _tag: 'lifecycle_conflict' };
     }
 
     const axisReader = variantAxisPersistenceForScope(transaction, scope);

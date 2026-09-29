@@ -1,3 +1,4 @@
+import { RequestSchemaProblemLive } from '@app/shared-contracts/server/http-error-seam';
 import {
   ActionRuntimeLive,
   ContextAccessLive,
@@ -227,7 +228,7 @@ import { updateProductRecoveryReadApiLive } from './update-product-recovery-read
 import { variantHistoryReadApiLive } from './variant-history-read-server.ts';
 // </generated-governed-http-handler-imports>
 
-import { catalogApi, catalogOperationContexts } from '../shared/api.ts';
+import { catalogApi, catalogMarkerSchema, catalogOperationContexts } from '../shared/api.ts';
 import { ultramodernApiMarker } from '../shared/ultramodern-build.ts';
 import {
   catalogCorsAllowedHeaders,
@@ -238,17 +239,20 @@ import {
 
 const catalogReadinessLayer = HttpApiBuilder.group(catalogApi, 'foundation', (handlers) =>
   handlers.handle('readiness', () =>
-    Effect.succeed({
-      checks: {
-        api: 'ready' as const,
-        moduleFederation: 'ready' as const,
-        ssr: 'ready' as const,
-        translations: 'ready' as const,
-      },
-      marker: ultramodernApiMarker,
-      status: 'ready' as const,
-      versionSkew: 'none' as const,
-    }).pipe(
+    // The marker comes from JSON, so its literal fields are decoded against the published schema.
+    Schema.decodeUnknownEffect(catalogMarkerSchema)(ultramodernApiMarker).pipe(
+      Effect.orDie,
+      Effect.map((marker) => ({
+        checks: {
+          api: 'ready' as const,
+          moduleFederation: 'ready' as const,
+          ssr: 'ready' as const,
+          translations: 'ready' as const,
+        },
+        marker,
+        status: 'ready' as const,
+        versionSkew: 'none' as const,
+      })),
       Effect.withSpan('ultramodern.api.catalog.readiness', {
         attributes: microVerticalOperationAttributes(catalogOperationContexts.readiness),
         kind: 'server',
@@ -534,14 +538,18 @@ export const makeCatalogApiRuntime = (
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(actionPrincipalVerifierLive, gatewayAssertionRedemption)));
   type CatalogHandlerRequirements =
-    typeof apiHandlersLive extends Layer.Layer<infer _Services, infer _Error, infer Requirements>
-      ? Requirements
-      : never;
+    | (typeof apiHandlersLive extends Layer.Layer<infer _Services, infer _Error, infer Requirements>
+        ? Requirements
+        : never)
+    | HttpRouter.HttpRouter;
   const resolvedApiHandlersLive: EffectBffRuntimeAssembly<
     'CatalogApi',
     CatalogApiGroups,
     CatalogHandlerRequirements
-  >['handlers'] = apiHandlersLive.pipe(Layer.provide(runtimeObservabilityLive), Layer.orDie);
+  >['handlers'] = apiHandlersLive.pipe(
+    Layer.provide(Layer.mergeAll(runtimeObservabilityLive, RequestSchemaProblemLive)),
+    Layer.orDie,
+  );
   const transportLive = HttpRouter.cors({
     allowedHeaders: [...catalogCorsAllowedHeaders],
     allowedMethods: [...catalogCorsAllowedMethods],

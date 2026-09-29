@@ -1,4 +1,4 @@
-import { Clock, Context, DateTime, Effect, Option, Result, Schema } from 'effect';
+import { Clock, Context, DateTime, Effect, Layer, Option, Result, Schema } from 'effect';
 
 import {
   AuthenticationAdmissionObservationSchema,
@@ -51,7 +51,7 @@ export class AuthenticationNamespaceRegistry extends Context.Service<
 
 const invalid = (reason: string): ExternalIdentityFailure => externalIdentityFailure('identity_invalid', reason);
 const invalidWithCause = (reason: string, cause: unknown): ExternalIdentityFailure =>
-  Object.defineProperty(invalid(reason), 'cause', { configurable: true, value: cause });
+  externalIdentityFailure('identity_invalid', reason, cause);
 const unavailable = (reason: string): ExternalIdentityFailure =>
   externalIdentityFailure('identity_unavailable', reason);
 
@@ -115,12 +115,18 @@ export const makeAuthenticationNamespaceRegistryEffect = (
 ): Effect.Effect<AuthenticationNamespaceRegistryService, ExternalIdentityFailure> =>
   Effect.try({
     catch: (cause) =>
-      Object.defineProperty(unavailable('Authentication namespace registration is invalid'), 'cause', {
-        configurable: true,
-        value: cause,
-      }),
+      externalIdentityFailure('identity_unavailable', 'Authentication namespace registration is invalid', cause),
     try: () => makeAuthenticationNamespaceRegistry(registrations),
   });
+
+/** The registry Layer for a composition root's trusted registrations; invalid data fails construction. */
+export const authenticationNamespaceRegistryLayer = <E, R>(
+  registrations: Effect.Effect<readonly AuthenticationNamespaceRegistration[], E, R>,
+) =>
+  Layer.effect(
+    AuthenticationNamespaceRegistry,
+    registrations.pipe(Effect.flatMap((trusted) => makeAuthenticationNamespaceRegistryEffect(trusted))),
+  );
 
 const subjectAdmissionMarker: unique symbol = Symbol('@app/core-runtime/external-identity/subject-admission');
 const authenticationAdmissionMarker: unique symbol = Symbol(

@@ -1,4 +1,4 @@
-import { Struct, DateTime, Effect, Predicate, Schema } from 'effect';
+import { Struct, DateTime, Effect, Option, Predicate, Schema } from 'effect';
 import { describe, expect, it } from 'effect-rstest';
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
 import { TestClock } from 'effect/testing';
@@ -242,7 +242,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
       }
       return Effect.succeed(currentInvocation);
     },
-    finalizePolicyDenial: () => Effect.void,
+    finalizePolicyDenial: () => Effect.succeed(Option.none()),
     flushSuccess: (_transaction, input) => {
       flushAttempts.push(input);
       if (options.flushFailure === true) {
@@ -261,6 +261,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
       };
       return Effect.void;
     },
+    loadRecordedRejection: () => Effect.succeed(Option.some({ stage: 'authz' as const })),
     lockInvocation: () => Effect.succeed(currentInvocation),
     rejectPermissionDenied: () => {
       currentInvocation = {
@@ -268,7 +269,7 @@ const makeHarness = Effect.fn(function* makeHarness(options: HarnessOptions = {}
         completedAt: DateTime.toDateUtc(DateTime.makeUnsafe('2026-09-23T12:00:00.000Z')),
         status: 'rejected',
       };
-      return Effect.void;
+      return Effect.succeed(Option.none());
     },
     resolveInvocation: () => Effect.succeed(currentInvocation),
     transitionInvocationToRunning: () => {

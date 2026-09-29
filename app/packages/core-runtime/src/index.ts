@@ -118,6 +118,8 @@ export type {
 } from './auth/legal-entity-context.ts';
 export { DatabaseConnectionError } from './db/client.ts';
 export { DEFAULT_DATABASE_POOL_DEADLINES, configureDatabasePool } from './db/pool-configuration.ts';
+export { databaseRuntime } from '#database-runtime';
+export type { DatabaseRuntime } from './db/database-runtime.ts';
 export type { DatabasePoolDeadlines } from './db/pool-configuration.ts';
 export { CorePersistenceLive } from './runtime-infrastructure.ts';
 export {
@@ -177,6 +179,7 @@ export type {
   DatabaseDriverFailureInput,
   DatabaseDriverFailureKind,
 } from './database/driver-failure.ts';
+export { PersistenceFailure } from './database/persistence-failure.ts';
 export { findPostgresFailure } from './database/postgres-failure.ts';
 export type { PostgresFailureMetadata } from './database/postgres-failure.ts';
 export {
@@ -590,22 +593,29 @@ export {
 } from './modules/tenant-module-state-service.ts';
 export {
   ONTOS_APPLICATION_COMPOSITION_SCHEMA_VERSION,
+  ONTOS_SHELL_CONTRIBUTION_ABI,
+  ONTOS_SHELL_RUNTIME_CONTRACT_PATH,
   ApplicationCompositionArtifactReferenceSchema,
+  ApplicationCompositionBrowserFederationSchema,
   ApplicationCompositionModuleSchema,
   ApplicationCompositionSchema,
+  ApplicationCompositionServerOnlyFederationSchema,
   ApplicationCompositionSingletonSchema,
   ApplicationCompositionValidationError,
+  OntosShellRuntimeContractSchema,
   ApplicationCompositionVersionedIdentitySchema,
   canonicalizeApplicationComposition,
   validateApplicationCompositionCandidate,
 } from './modules/application-composition.ts';
 export type {
   ApplicationComposition,
+  ApplicationCompositionBrowserFederation,
   ApplicationCompositionCandidateEvidence,
   ApplicationCompositionModule,
   ApplicationCompositionVersionedIdentity,
   ObservedApplicationCompositionContract,
   ObservedModuleFederationManifest,
+  OntosShellRuntimeContract,
 } from './modules/application-composition.ts';
 export {
   ActiveApplicationCompositionConfigLive,
@@ -804,10 +814,9 @@ export {
   OutboxHandlerExecutionError,
   OutboxPayloadDecodeError,
   OutboxPollerConfigError,
-  OutboxPersistenceError,
   OutboxWorkerDescriptorError,
 } from './outbox/errors.ts';
-export type { OutboxWorkerHealth, OutboxWorkerHealthServer } from './outbox/health.ts';
+export type { OutboxWorkerHealth, OutboxWorkerHealthServer, OutboxWorkerReadiness } from './outbox/health.ts';
 export { parseOutboxPollingConfig, runOutboxPollingLoop } from './outbox/poller.ts';
 export type {
   OutboxCycleRunner,
@@ -828,7 +837,12 @@ export type {
   OutboxWorkerLegalEntityScopeFanoutService,
   OutboxWorkerLegalEntityScopeRecord,
 } from './outbox/legal-entity-scope-fanout.ts';
-export type { RunOutboxWorkerProcessInput, StartOutboxWorkerProcessInput } from './outbox/process.ts';
+export type {
+  DefineOutboxWorkerEntryInput,
+  OutboxWorkerEntry,
+  OutboxWorkerLoopInput,
+  RunOutboxWorkerHostInput,
+} from './outbox/process.ts';
 export { OutboxRuntime, OutboxRuntimeLive, matchOutboxMessages, runOutboxCycle } from './outbox/runtime.ts';
 export type {
   MatchOutboxMessagesInput,

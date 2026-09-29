@@ -20,7 +20,13 @@ const InstalledPackage = Schema.fromJsonString(Schema.Struct({ name: Schema.Stri
 const WORKSPACE_CONTRACT = 'topology/reference-topology.json';
 const GENERATOR_PACKAGE = '@modern-js/ultramodern-create';
 const BUILD_FACADE_EXPORTS = ['ultramodernApiMarker', 'ultramodernDeliveryUnit', 'ultramodernUiMarker'];
-const ROUTE_MANIFEST_EXPORTS = ['ultramodernLocalisedUrls', 'ultramodernRouteMetadata', 'ultramodernRouteNamespace'];
+const ROUTE_MANIFEST_EXPORTS = [
+  'ultramodernLocalisedUrls',
+  'ultramodernPublicRoutes',
+  'ultramodernRouteConfig',
+  'ultramodernRouteMetadata',
+  'ultramodernRouteNamespace',
+];
 const WorkspaceContract = Schema.fromJsonString(
   Schema.Struct({
     shell: Schema.Struct({
@@ -421,30 +427,6 @@ export const buildKnipRuntimeEvidence = Effect.fn('QualityAudit.buildKnipRuntime
         }
       }
     });
-    const routeScaffoldEvidence = Effect.fn('QualityAudit.routeScaffoldEvidence')(function* routeScaffoldEvidence() {
-      const file = 'scripts/scaffolding/cli.mts';
-      const source = uncomment(file, yield* read(file));
-      const target = 'scripts/generate-tanstack-routes.mts';
-      const marker = "path.join(workspaceRoot, 'scripts', 'generate-tanstack-routes.mts')";
-      if (
-        source !== undefined &&
-        source.includes(marker) &&
-        source.includes("ChildProcess.make(process.execPath, [script, '--app', appId]") &&
-        (yield* read(target)) !== undefined
-      ) {
-        evidence.push(
-          at(
-            file,
-            source,
-            source.indexOf(marker),
-            '.',
-            'file',
-            target,
-            'Codesmith route refresh invokes this app-owned script',
-          ),
-        );
-      }
-    });
     const tsgoDocumentation = Effect.fn('QualityAudit.tsgoDocumentation')(function* tsgoDocumentation() {
       const readme = yield* read('node_modules/@effect/tsgo/README.md');
       const installedText = yield* read('node_modules/@effect/tsgo/package.json');
@@ -552,14 +534,15 @@ export const buildKnipRuntimeEvidence = Effect.fn('QualityAudit.buildKnipRuntime
       }
     });
     const lefthookEvidence = Effect.fn('QualityAudit.lefthookEvidence')(function* lefthookEvidence() {
-      const file = 'lefthook.yml';
+      // Git hooks are repository-wide, so their config lives at the git root above the app workspace.
+      const file = '../lefthook.yml';
       const source = yield* read(file);
       if (source === undefined) {
         return;
       }
       for (const match of source.matchAll(/^(?:pre-commit|pre-push):\r?\n(?<body>(?:^[ \t].*(?:\r?\n|$))*)/gmu)) {
         const { body = '' } = match.groups ?? {};
-        if (/^\s+commands:\s*$/mu.test(body) && /^\s+run:\s+\S.+$/mu.test(body)) {
+        if (/^\s+(?:commands|jobs):\s*$/mu.test(body) && /^\s+-?\s*run:\s+\S.+$/mu.test(body)) {
           evidence.push(
             at(
               file,
@@ -751,7 +734,6 @@ export const buildKnipRuntimeEvidence = Effect.fn('QualityAudit.buildKnipRuntime
       yield* federationEvidence(prefix, workspace);
     }
     yield* zeropsEvidence();
-    yield* routeScaffoldEvidence();
     yield* tsgoEvidence();
     yield* readinessEvidence();
     yield* lefthookEvidence();

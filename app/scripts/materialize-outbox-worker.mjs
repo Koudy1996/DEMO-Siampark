@@ -3,8 +3,10 @@ import { isBuiltin } from 'node:module';
 import { NodeServices } from '@effect/platform-node';
 import { Config, Effect, FileSystem, ManagedRuntime, Path, Schema } from 'effect';
 import { build } from 'esbuild';
+import { parseSync } from 'oxc-parser';
 
-import { outboxWorkerDelivery } from './outbox-worker-delivery.mjs';
+import { readOutboxWorkerHost, renderOutboxWorkerHostEntry } from './generate-outbox-worker-deployment.mjs';
+import { OUTBOX_WORKER_BUNDLE, OUTBOX_WORKER_HOST, outboxWorkerDelivery } from './outbox-worker-delivery.mjs';
 
 const TopologySchema = Schema.fromJsonString(
   Schema.Struct({
@@ -30,7 +32,43 @@ const MetafileInputsSchema = Schema.Struct({
   inputs: Schema.Record(Schema.String, Schema.Unknown),
 });
 
-const WORKER_ENTRY = 'worker.mjs';
+const WORKER_ENTRY = OUTBOX_WORKER_BUNDLE;
+const CORE_WORKER_ENTRYPOINT = 'packages/core-runtime/src/outbox/worker-entrypoint.ts';
+
+const CORE_WORKER_SPECIFIERS = new Set(['@app/core-runtime', '@app/core-runtime/outbox/worker']);
+
+/**
+ * Value names a TypeScript module re-exports from `@app/core-runtime` or its `outbox/worker` subpath (both
+ * resolve to the focused worker entrypoint), read from the parsed module record so comments, strings, and
+ * type-only specifiers never count. Named imports need no check: esbuild already rejects a missing one.
+ * @param {string} filename Module path, which selects the TypeScript or TSX grammar.
+ * @param {string} source Module source.
+ * @returns {string[]} Re-exported entrypoint names.
+ */
+export const coreRuntimeValueReExports = (filename, source) =>
+  parseSync(filename, source).module.staticExports.flatMap((statement) =>
+    statement.entries
+      .filter(
+        (entry) =>
+          !entry.isType &&
+          entry.importName.name !== null &&
+          entry.moduleRequest !== null &&
+          CORE_WORKER_SPECIFIERS.has(entry.moduleRequest.value),
+      )
+      .map((entry) => entry.importName.name ?? ''),
+  );
+
+/**
+ * Value names the focused Core worker entrypoint exports, read from its parsed module record.
+ * @param {string} source Entrypoint source.
+ * @returns {Set<string>} Exported value names.
+ */
+export const focusedEntrypointValueExports = (source) =>
+  new Set(
+    parseSync(CORE_WORKER_ENTRYPOINT, source).module.staticExports.flatMap((statement) =>
+      statement.entries.filter((entry) => !entry.isType).map((entry) => entry.exportName.name ?? ''),
+    ),
+  );
 const AppIdSchema = Schema.String.pipe(Schema.brand('AppId'));
 const ServiceIdSchema = Schema.String.pipe(Schema.brand('ServiceId'));
 
@@ -100,14 +138,16 @@ const makeProductionDependenciesPlugin = ({ packages, path, workspaceRoot }) => 
         resolveDir: workspaceRoot,
       }),
     );
-    builder.onResolve({ filter: esbuildFilter(/^[^./]/u) }, (args) => {
+    // Package specifiers only: relative paths and `#` package imports (a package's own
+    // condition-mapped modules, such as Core's `#spicedb-transport`) resolve through esbuild.
+    builder.onResolve({ filter: esbuildFilter(/^[^./#]/u) }, (args) => {
       if (isBuiltin(args.path)) {
         return { external: true, path: args.path };
       }
       const name = args.path.startsWith('@') ? args.path.split('/').slice(0, 2).join('/') : args.path.split('/').at(0);
       if (args.path === '@app/core-runtime') {
         return {
-          path: path.join(workspaceRoot, 'packages/core-runtime/src/outbox/worker-entrypoint.ts'),
+          path: path.join(workspaceRoot, CORE_WORKER_ENTRYPOINT),
         };
       }
       if (name !== undefined && packages.has(name)) {
@@ -161,13 +201,43 @@ const collectProductionDependency = (importedPath, packages, dependencies) =>
  */
 
 /**
- * Bundle owner + Core code; retain exact production dependencies, never workspace links.
- * @param {MaterializeOptions} options Materialization identity and paths.
+ * @typedef {{
+ *   appId: string,
+ *   packageDir: string,
+ *   packageName: string,
+ *   workspaceRoot: string,
+ * }} WorkerIdentity
  */
-const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtimeDir, workspaceRoot }) =>
-  Effect.gen(function* materializeWorker() {
+
+/**
+ * The deployable worker an identity names: one topology owner's dedicated worker, or the Outbox Worker
+ * host that runs every owner's entry. Its service id names the runtime directory and the artifact.
+ * @param {WorkerIdentity} identity Materialization identity.
+ */
+const resolveOutboxWorkerEffect = ({ appId, packageDir, packageName, workspaceRoot }) =>
+  Effect.gen(function* resolveWorker() {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    if (appId === OUTBOX_WORKER_HOST.id) {
+      const rootPackage = yield* Schema.decodeUnknownEffect(PackageManifestSchema)(
+        yield* fs.readFileString(path.join(workspaceRoot, 'package.json')),
+      );
+      if (packageDir !== '.' || packageName !== rootPackage.name) {
+        return yield* Effect.fail(failure('Worker identity must match the generated Outbox Worker host'));
+      }
+      const host = yield* readOutboxWorkerHost(workspaceRoot);
+      if (host === undefined) {
+        return yield* Effect.fail(failure('No MicroVertical has a generated Outbox Worker entry'));
+      }
+      const hostEntryPath = path.join(workspaceRoot, host.entry);
+      const hostEntry = (yield* fs.exists(hostEntryPath)) ? yield* fs.readFileString(hostEntryPath) : null;
+      if (hostEntry !== renderOutboxWorkerHostEntry(host)) {
+        return yield* Effect.fail(
+          failure('Outbox Worker host entry drift: run node scripts/generate-outbox-worker-deployment.mjs --write'),
+        );
+      }
+      return { entryPoint: host.entry, serviceId: host.id };
+    }
     const topologySource = yield* fs.readFileString(path.join(workspaceRoot, 'topology/reference-topology.json'));
     const topology = yield* Schema.decodeUnknownEffect(TopologySchema)(topologySource);
     const vertical = topology.verticals.find((candidate) => candidate.id === appId);
@@ -180,6 +250,24 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
     if (delivery === undefined) {
       return yield* Effect.fail(failure(`${appId} has no generated Outbox Worker host`));
     }
+    return { entryPoint: path.join(packageDir, delivery.entry), serviceId: delivery.id };
+  });
+
+/**
+ * @param {WorkerIdentity} identity Materialization identity.
+ * @returns {PromiseLike<{ entryPoint: string, serviceId: string }>} The worker's bundle entry and service id.
+ */
+export const resolveOutboxWorker = (identity) => nodeRuntime.runPromise(resolveOutboxWorkerEffect(identity));
+
+/**
+ * Bundle owner + Core code; retain exact production dependencies, never workspace links.
+ * @param {MaterializeOptions} options Materialization identity and paths.
+ */
+const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtimeDir, workspaceRoot }) =>
+  Effect.gen(function* materializeWorker() {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const delivery = yield* resolveOutboxWorkerEffect({ appId, packageDir, packageName, workspaceRoot });
     /** @type {Record<string, string>} */
     const dependencies = {};
     /** @type {Map<string, { manifest: Schema.Schema.Type<typeof PackageManifestSchema> }>} */
@@ -213,7 +301,7 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
               js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
             },
             bundle: true,
-            entryPoints: [path.join(packageDir, delivery.entry)],
+            entryPoints: [delivery.entryPoint],
             format: 'esm',
             metafile: true,
             outfile: path.join(runtimeDir, WORKER_ENTRY),
@@ -230,6 +318,27 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
         ),
     });
     const { metafile } = result;
+    // esbuild rejects a missing named import from the focused Core entrypoint, but a TypeScript re-export of a
+    // missing name may be a type, so it bundles as undefined and the worker crashes at start. Reject it here.
+    const coreReExports = [];
+    for (const input of Object.keys(metafile.inputs)) {
+      if (input.startsWith('verticals/') && /\.(?:ts|tsx|mts)$/u.test(input)) {
+        const source = yield* fs.readFileString(path.join(workspaceRoot, input));
+        coreReExports.push(...coreRuntimeValueReExports(input, source).map((name) => ({ input, name })));
+      }
+    }
+    const entrypointExports =
+      coreReExports.length === 0
+        ? new Set()
+        : focusedEntrypointValueExports(yield* fs.readFileString(path.join(workspaceRoot, CORE_WORKER_ENTRYPOINT)));
+    const missingReExports = coreReExports
+      .filter(({ name }) => !entrypointExports.has(name))
+      .map(({ input, name }) => `${input} re-exports ${name}`);
+    if (missingReExports.length > 0) {
+      return yield* Effect.fail(
+        failure(`The Outbox Worker Core entrypoint does not export: ${missingReExports.join('; ')}`),
+      );
+    }
     const externalImports = Object.values(metafile.outputs).flatMap((output) =>
       output.imports.filter((item) => item.external === true),
     );
@@ -242,7 +351,7 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
     );
     const sourceRevision = yield* Config.option(Config.String('ULTRAMODERN_SOURCE_REVISION'));
     const artifactAppId = yield* Schema.decodeUnknownEffect(AppIdSchema)(appId);
-    const artifactServiceId = yield* Schema.decodeUnknownEffect(ServiceIdSchema)(delivery.id);
+    const artifactServiceId = yield* Schema.decodeUnknownEffect(ServiceIdSchema)(delivery.serviceId);
     const { inputs: sourceInputMetadata } = yield* Schema.decodeUnknownEffect(MetafileInputsSchema)(metafile);
     /** @type {string[]} */
     const sourceInputs = [];
@@ -263,7 +372,7 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
     yield* fs.writeFileString(path.join(runtimeDir, 'worker-artifact.json'), `${artifactSource}\n`);
     return {
       dependencies,
-      name: `${delivery.id}-runtime`,
+      name: `${delivery.serviceId}-runtime`,
       private: true,
       scripts: { serve: `node ${WORKER_ENTRY}` },
       type: 'module',
