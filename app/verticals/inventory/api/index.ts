@@ -17,7 +17,7 @@ import {
 } from '@app/core-runtime/actions/runtime-wiring';
 import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import type { EffectBffRuntimeAssembly } from '@modern-js/bff-effect/assembly';
-import { Effect, HttpApiBuilder, Layer } from '@modern-js/bff-effect/effect-edge';
+import { Effect, HttpApiBuilder, HttpRouter, Layer } from '@modern-js/bff-effect/effect-edge';
 import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
 import { Layer as GovernedReadLayer, Logger, References, Tracer } from 'effect';
 
@@ -172,9 +172,10 @@ export const makeInventoryApiRuntime = (
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(actionPrincipalVerifierLive, gatewayAssertionRedemption)));
   type InventoryHandlerRequirements =
-    typeof apiHandlersLive extends Layer.Layer<infer _Services, infer _Error, infer Requirements>
-      ? Requirements
-      : never;
+    | (typeof apiHandlersLive extends Layer.Layer<infer _Services, infer _Error, infer Requirements>
+        ? Requirements
+        : never)
+    | HttpRouter.HttpRouter;
   const resolvedApiHandlersLive: EffectBffRuntimeAssembly<
     'InventoryApi',
     InventoryApiGroups,
