@@ -3,6 +3,7 @@ import { isBuiltin } from 'node:module';
 import { NodeServices } from '@effect/platform-node';
 import { Config, Effect, FileSystem, ManagedRuntime, Path, Schema } from 'effect';
 import { build } from 'esbuild';
+import { parseSync } from 'oxc-parser';
 
 import { outboxWorkerDelivery } from './outbox-worker-delivery.mjs';
 
@@ -31,6 +32,42 @@ const MetafileInputsSchema = Schema.Struct({
 });
 
 const WORKER_ENTRY = 'worker.mjs';
+const CORE_WORKER_ENTRYPOINT = 'packages/core-runtime/src/outbox/worker-entrypoint.ts';
+
+const CORE_WORKER_SPECIFIERS = new Set(['@app/core-runtime', '@app/core-runtime/outbox/worker']);
+
+/**
+ * Value names a TypeScript module re-exports from `@app/core-runtime` or its `outbox/worker` subpath (both
+ * resolve to the focused worker entrypoint), read from the parsed module record so comments, strings, and
+ * type-only specifiers never count. Named imports need no check: esbuild already rejects a missing one.
+ * @param {string} filename Module path, which selects the TypeScript or TSX grammar.
+ * @param {string} source Module source.
+ * @returns {string[]} Re-exported entrypoint names.
+ */
+export const coreRuntimeValueReExports = (filename, source) =>
+  parseSync(filename, source).module.staticExports.flatMap((statement) =>
+    statement.entries
+      .filter(
+        (entry) =>
+          !entry.isType &&
+          entry.importName.name !== null &&
+          entry.moduleRequest !== null &&
+          CORE_WORKER_SPECIFIERS.has(entry.moduleRequest.value),
+      )
+      .map((entry) => entry.importName.name ?? ''),
+  );
+
+/**
+ * Value names the focused Core worker entrypoint exports, read from its parsed module record.
+ * @param {string} source Entrypoint source.
+ * @returns {Set<string>} Exported value names.
+ */
+export const focusedEntrypointValueExports = (source) =>
+  new Set(
+    parseSync(CORE_WORKER_ENTRYPOINT, source).module.staticExports.flatMap((statement) =>
+      statement.entries.filter((entry) => !entry.isType).map((entry) => entry.exportName.name ?? ''),
+    ),
+  );
 const AppIdSchema = Schema.String.pipe(Schema.brand('AppId'));
 const ServiceIdSchema = Schema.String.pipe(Schema.brand('ServiceId'));
 
@@ -109,7 +146,7 @@ const makeProductionDependenciesPlugin = ({ packages, path, workspaceRoot }) => 
       const name = args.path.startsWith('@') ? args.path.split('/').slice(0, 2).join('/') : args.path.split('/').at(0);
       if (args.path === '@app/core-runtime') {
         return {
-          path: path.join(workspaceRoot, 'packages/core-runtime/src/outbox/worker-entrypoint.ts'),
+          path: path.join(workspaceRoot, CORE_WORKER_ENTRYPOINT),
         };
       }
       if (name !== undefined && packages.has(name)) {
@@ -232,6 +269,27 @@ const materializeOutboxWorkerEffect = ({ appId, packageDir, packageName, runtime
         ),
     });
     const { metafile } = result;
+    // esbuild rejects a missing named import from the focused Core entrypoint, but a TypeScript re-export of a
+    // missing name may be a type, so it bundles as undefined and the worker crashes at start. Reject it here.
+    const coreReExports = [];
+    for (const input of Object.keys(metafile.inputs)) {
+      if (input.startsWith('verticals/') && /\.(?:ts|tsx|mts)$/u.test(input)) {
+        const source = yield* fs.readFileString(path.join(workspaceRoot, input));
+        coreReExports.push(...coreRuntimeValueReExports(input, source).map((name) => ({ input, name })));
+      }
+    }
+    const entrypointExports =
+      coreReExports.length === 0
+        ? new Set()
+        : focusedEntrypointValueExports(yield* fs.readFileString(path.join(workspaceRoot, CORE_WORKER_ENTRYPOINT)));
+    const missingReExports = coreReExports
+      .filter(({ name }) => !entrypointExports.has(name))
+      .map(({ input, name }) => `${input} re-exports ${name}`);
+    if (missingReExports.length > 0) {
+      return yield* Effect.fail(
+        failure(`The Outbox Worker Core entrypoint does not export: ${missingReExports.join('; ')}`),
+      );
+    }
     const externalImports = Object.values(metafile.outputs).flatMap((output) =>
       output.imports.filter((item) => item.external === true),
     );
