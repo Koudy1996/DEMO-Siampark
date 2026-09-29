@@ -1,20 +1,11 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
-import { Schema } from 'effect';
+import { makeProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 
 import { StockSharingEligibilityRejected } from '../domain/stock-sharing-eligibility.ts';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class StockSharingEligibilityResolutionDomainPolicyProblem extends Schema.TaggedError<StockSharingEligibilityResolutionDomainPolicyProblem>()(
+export const StockSharingEligibilityResolutionDomainPolicyProblemSchema = makeProblemDetailsSchema(
   'StockSharingEligibilityResolutionDomainPolicyProblem',
-  {
-    detail: Schema.String,
-    reasonCode: StockSharingEligibilityRejected.fields.reason,
-    status: Schema.Literal(422),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const StockSharingEligibilityResolutionDomainPolicyProblemSchema =
-  StockSharingEligibilityResolutionDomainPolicyProblem.pipe(problemDetailsRepresentation, HttpApiSchema.status(422));
+  422,
+  { reasonCode: StockSharingEligibilityRejected.fields.reason },
+);
+export type StockSharingEligibilityResolutionDomainPolicyProblem =
+  typeof StockSharingEligibilityResolutionDomainPolicyProblemSchema.Type;

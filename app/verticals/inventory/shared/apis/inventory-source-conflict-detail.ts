@@ -6,7 +6,10 @@ import { InventorySourceConflictSchema } from '../domain/inventory-source-confli
 import { InventorySourceConflictRefSchema } from '../resources/inventory-source-conflict.ts';
 import { InventorySourceConflictDetailDomainUnavailableProblemSchema } from './inventory-source-conflict-detail-domain-unavailable-problem.ts';
 
-export { InventorySourceConflictDetailDomainUnavailableProblem } from './inventory-source-conflict-detail-domain-unavailable-problem.ts';
+export {
+  type InventorySourceConflictDetailDomainUnavailableProblem,
+  InventorySourceConflictDetailDomainUnavailableProblemSchema,
+} from './inventory-source-conflict-detail-domain-unavailable-problem.ts';
 
 export const InventorySourceConflictDetailRequestSchema = Schema.Struct({
   conflictRef: InventorySourceConflictRefSchema,
@@ -64,10 +67,7 @@ export const InventorySourceConflictDetailApi = HttpApi.make('InventorySourceCon
         InventorySourceConflictDetailUnavailableProblemSchema,
         InventorySourceConflictDetailInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: InventorySourceConflictDetailRequestSchema,
-      query: {},
       success: InventorySourceConflictDetailResponseSchema,
     }),
   ),

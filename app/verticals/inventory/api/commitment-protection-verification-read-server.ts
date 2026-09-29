@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CommitmentProtectionVerificationAuthenticationProblemSchema,
-  CommitmentProtectionVerificationDomainConflictProblem,
-  CommitmentProtectionVerificationDomainUnavailableProblem,
+  type CommitmentProtectionVerificationDomainConflictProblem,
+  CommitmentProtectionVerificationDomainConflictProblemSchema,
+  type CommitmentProtectionVerificationDomainUnavailableProblem,
+  CommitmentProtectionVerificationDomainUnavailableProblemSchema,
   CommitmentProtectionVerificationForbiddenProblemSchema,
   CommitmentProtectionVerificationInternalProblemSchema,
   CommitmentProtectionVerificationInvalidProblemSchema,
@@ -37,7 +39,7 @@ export const mapCommitmentProtectionVerificationDomainError = (
 ): CommitmentProtectionVerificationDomainConflictProblem | CommitmentProtectionVerificationDomainUnavailableProblem => {
   const unavailable = Schema.is(CommitmentProtectionUnavailable)(error);
   return unavailable
-    ? new CommitmentProtectionVerificationDomainUnavailableProblem({
+    ? CommitmentProtectionVerificationDomainUnavailableProblemSchema.make({
         detail: 'Commitment Protection cannot be verified safely.',
         reasonCode: 'commitment_protection_unavailable',
         retryable: true,
@@ -46,7 +48,7 @@ export const mapCommitmentProtectionVerificationDomainError = (
         title: 'Commitment Protection unavailable',
         type: 'https://ontos.dev/problems/commitment-protection-unavailable',
       })
-    : new CommitmentProtectionVerificationDomainConflictProblem({
+    : CommitmentProtectionVerificationDomainConflictProblemSchema.make({
         detail: 'Commitment Protection does not match the requested Reservation and Attempt.',
         reasonCode: 'commitment_protection_scope_conflict',
         // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal field of the declared status-specific problem constructor; expires: 2027-03-31.

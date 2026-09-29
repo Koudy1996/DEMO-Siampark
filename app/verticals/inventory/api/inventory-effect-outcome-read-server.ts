@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryEffectOutcomeAuthenticationProblemSchema,
-  InventoryEffectOutcomeDomainConflictProblem,
-  InventoryEffectOutcomeDomainUnavailableProblem,
+  type InventoryEffectOutcomeDomainConflictProblem,
+  InventoryEffectOutcomeDomainConflictProblemSchema,
+  type InventoryEffectOutcomeDomainUnavailableProblem,
+  InventoryEffectOutcomeDomainUnavailableProblemSchema,
   InventoryEffectOutcomeForbiddenProblemSchema,
   InventoryEffectOutcomeInternalProblemSchema,
   InventoryEffectOutcomeInvalidProblemSchema,
@@ -40,7 +42,7 @@ export const mapInventoryEffectOutcomeDomainError = (
 ): InventoryEffectOutcomeDomainConflictProblem | InventoryEffectOutcomeDomainUnavailableProblem => {
   const unavailable = Schema.is(InventoryEffectLedgerUnavailable)(error);
   return unavailable
-    ? new InventoryEffectOutcomeDomainUnavailableProblem({
+    ? InventoryEffectOutcomeDomainUnavailableProblemSchema.make({
         detail: 'The inventory operation outcome cannot be resolved safely.',
         reasonCode: 'inventory_effect_ledger_unavailable',
         retryable: true,
@@ -49,7 +51,7 @@ export const mapInventoryEffectOutcomeDomainError = (
         title: 'Inventory operation outcome unavailable',
         type: 'https://ontos.dev/problems/inventory-effect-outcome-unavailable',
       })
-    : new InventoryEffectOutcomeDomainConflictProblem({
+    : InventoryEffectOutcomeDomainConflictProblemSchema.make({
         detail: 'The inventory operation identity is already bound to different owner intent.',
         reasonCode: Schema.is(InventoryEffectLedgerConflict)(error)
           ? 'inventory_effect_ledger_conflict'

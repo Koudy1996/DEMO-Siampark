@@ -1,22 +1,10 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
+import { makeRetryableProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 import { Schema } from 'effect';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class CommitmentProtectionVerificationDomainUnavailableProblem extends Schema.TaggedError<CommitmentProtectionVerificationDomainUnavailableProblem>()(
+export const CommitmentProtectionVerificationDomainUnavailableProblemSchema = makeRetryableProblemDetailsSchema(
   'CommitmentProtectionVerificationDomainUnavailableProblem',
-  {
-    detail: Schema.String,
-    reasonCode: Schema.Literal('commitment_protection_unavailable'),
-    retryable: Schema.Literal(true),
-    status: Schema.Literal(503),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const CommitmentProtectionVerificationDomainUnavailableProblemSchema =
-  CommitmentProtectionVerificationDomainUnavailableProblem.pipe(
-    problemDetailsRepresentation,
-    HttpApiSchema.status(503),
-  );
+  503,
+  { reasonCode: Schema.Literal('commitment_protection_unavailable') },
+);
+export type CommitmentProtectionVerificationDomainUnavailableProblem =
+  typeof CommitmentProtectionVerificationDomainUnavailableProblemSchema.Type;

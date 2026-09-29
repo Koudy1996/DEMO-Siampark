@@ -9,8 +9,14 @@ import { InventoryReservationRefSchema } from '../resources/inventory-reservatio
 import { CommitmentProtectionVerificationDomainConflictProblemSchema } from './commitment-protection-verification-domain-conflict-problem.ts';
 import { CommitmentProtectionVerificationDomainUnavailableProblemSchema } from './commitment-protection-verification-domain-unavailable-problem.ts';
 
-export { CommitmentProtectionVerificationDomainConflictProblem } from './commitment-protection-verification-domain-conflict-problem.ts';
-export { CommitmentProtectionVerificationDomainUnavailableProblem } from './commitment-protection-verification-domain-unavailable-problem.ts';
+export {
+  type CommitmentProtectionVerificationDomainConflictProblem,
+  CommitmentProtectionVerificationDomainConflictProblemSchema,
+} from './commitment-protection-verification-domain-conflict-problem.ts';
+export {
+  type CommitmentProtectionVerificationDomainUnavailableProblem,
+  CommitmentProtectionVerificationDomainUnavailableProblemSchema,
+} from './commitment-protection-verification-domain-unavailable-problem.ts';
 
 export const CommitmentProtectionVerificationRequestSchema = Schema.Struct({
   attemptId: OrderCommitmentAttemptIdSchema,
@@ -101,10 +107,7 @@ export const CommitmentProtectionVerificationApi = HttpApi.make('CommitmentProte
         CommitmentProtectionVerificationUnavailableProblemSchema,
         CommitmentProtectionVerificationInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: CommitmentProtectionVerificationRequestSchema,
-      query: {},
       success: CommitmentProtectionVerificationResponseSchema,
     }),
   ),

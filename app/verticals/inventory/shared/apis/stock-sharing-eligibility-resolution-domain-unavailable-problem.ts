@@ -1,22 +1,10 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
+import { makeRetryableProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 import { Schema } from 'effect';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class StockSharingEligibilityResolutionDomainUnavailableProblem extends Schema.TaggedError<StockSharingEligibilityResolutionDomainUnavailableProblem>()(
+export const StockSharingEligibilityResolutionDomainUnavailableProblemSchema = makeRetryableProblemDetailsSchema(
   'StockSharingEligibilityResolutionDomainUnavailableProblem',
-  {
-    detail: Schema.String,
-    reasonCode: Schema.Literal('stock_sharing_eligibility_unavailable'),
-    retryable: Schema.Literal(true),
-    status: Schema.Literal(503),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const StockSharingEligibilityResolutionDomainUnavailableProblemSchema =
-  StockSharingEligibilityResolutionDomainUnavailableProblem.pipe(
-    problemDetailsRepresentation,
-    HttpApiSchema.status(503),
-  );
+  503,
+  { reasonCode: Schema.Literal('stock_sharing_eligibility_unavailable') },
+);
+export type StockSharingEligibilityResolutionDomainUnavailableProblem =
+  typeof StockSharingEligibilityResolutionDomainUnavailableProblemSchema.Type;

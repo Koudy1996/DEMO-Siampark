@@ -12,15 +12,15 @@ import { InventoryReservationDetailDomainPolicyProblemSchema } from './inventory
 import { InventoryReservationDetailDomainUnavailableProblemSchema } from './inventory-reservation-detail-domain-unavailable-problem.ts';
 
 export {
-  InventoryReservationDetailDomainConflictProblem,
+  type InventoryReservationDetailDomainConflictProblem,
   InventoryReservationDetailDomainConflictProblemSchema,
 } from './inventory-reservation-detail-domain-conflict-problem.ts';
 export {
-  InventoryReservationDetailDomainPolicyProblem,
+  type InventoryReservationDetailDomainPolicyProblem,
   InventoryReservationDetailDomainPolicyProblemSchema,
 } from './inventory-reservation-detail-domain-policy-problem.ts';
 export {
-  InventoryReservationDetailDomainUnavailableProblem,
+  type InventoryReservationDetailDomainUnavailableProblem,
   InventoryReservationDetailDomainUnavailableProblemSchema,
 } from './inventory-reservation-detail-domain-unavailable-problem.ts';
 
@@ -87,10 +87,7 @@ export const InventoryReservationDetailApi = HttpApi.make('InventoryReservationD
         InventoryReservationDetailUnavailableProblemSchema,
         InventoryReservationDetailInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: InventoryReservationDetailRequestSchema,
-      query: {},
       success: InventoryReservationDetailResponseSchema,
     }),
   ),

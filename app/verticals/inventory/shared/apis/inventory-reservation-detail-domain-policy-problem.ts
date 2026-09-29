@@ -1,22 +1,11 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
-import { Schema } from 'effect';
+import { makeProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 
 import { InventoryObligationRejected } from '../domain/inventory-obligation.ts';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class InventoryReservationDetailDomainPolicyProblem extends Schema.TaggedError<InventoryReservationDetailDomainPolicyProblem>()(
+export const InventoryReservationDetailDomainPolicyProblemSchema = makeProblemDetailsSchema(
   'InventoryReservationDetailDomainPolicyProblem',
-  {
-    detail: Schema.String,
-    reasonCode: InventoryObligationRejected.fields.reason,
-    status: Schema.Literal(422),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const InventoryReservationDetailDomainPolicyProblemSchema = InventoryReservationDetailDomainPolicyProblem.pipe(
-  problemDetailsRepresentation,
-  HttpApiSchema.status(422),
+  422,
+  { reasonCode: InventoryObligationRejected.fields.reason },
 );
+export type InventoryReservationDetailDomainPolicyProblem =
+  typeof InventoryReservationDetailDomainPolicyProblemSchema.Type;

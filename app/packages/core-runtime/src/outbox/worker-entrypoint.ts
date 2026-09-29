@@ -1,6 +1,7 @@
 /** Focused server-only entrypoint used to bundle the combined Outbox Worker host and its MicroVertical entries. */
 export { defineTenantModuleEntrypoint } from '../modules/module-entrypoint.ts';
 export { defineScopedRoutine } from '../db/scoped-routine.ts';
+export { findPostgresFailure } from '../database/postgres-failure.ts';
 export { BusinessPermissionCodeSchema, defineBusinessPermissionCatalog } from '../permissions/business-permission.ts';
 export { AuthorizationMutationReconciliationUnavailable } from '../permissions/authorization-reconciler.ts';
 export {

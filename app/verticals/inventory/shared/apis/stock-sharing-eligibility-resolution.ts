@@ -11,11 +11,11 @@ import { StockSharingEligibilityResolutionDomainPolicyProblemSchema } from './st
 import { StockSharingEligibilityResolutionDomainUnavailableProblemSchema } from './stock-sharing-eligibility-resolution-domain-unavailable-problem.ts';
 
 export {
-  StockSharingEligibilityResolutionDomainPolicyProblem,
+  type StockSharingEligibilityResolutionDomainPolicyProblem,
   StockSharingEligibilityResolutionDomainPolicyProblemSchema,
 } from './stock-sharing-eligibility-resolution-domain-policy-problem.ts';
 export {
-  StockSharingEligibilityResolutionDomainUnavailableProblem,
+  type StockSharingEligibilityResolutionDomainUnavailableProblem,
   StockSharingEligibilityResolutionDomainUnavailableProblemSchema,
 } from './stock-sharing-eligibility-resolution-domain-unavailable-problem.ts';
 
@@ -78,10 +78,7 @@ export const StockSharingEligibilityResolutionApi = HttpApi.make('StockSharingEl
         StockSharingEligibilityResolutionUnavailableProblemSchema,
         StockSharingEligibilityResolutionInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: StockSharingEligibilityResolutionRequestSchema,
-      query: {},
       success: StockSharingEligibilityResolutionResponseSchema,
     }),
   ),

@@ -32,11 +32,16 @@ services:
   - hostname: pricegroupcatalog
     type: nodejs@24
     enableSubdomainAccess: true
+  - hostname: inventory
+    type: nodejs@24
+    enableSubdomainAccess: true
   - hostname: partyregistryworker
     type: nodejs@24
   - hostname: commercecstmrcntxtworker
     type: nodejs@24
   - hostname: pricegroupcatalogworker
+    type: nodejs@24
+  - hostname: inventoryworker
     type: nodejs@24
   - hostname: outboxworkerhost
     type: nodejs@24

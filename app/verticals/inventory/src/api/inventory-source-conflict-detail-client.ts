@@ -40,9 +40,7 @@ export const executeInventorySourceConflictDetailWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: InventorySourceConflictDetailAuthorizedInvocation
 ) =>
   inventorySourceConflictDetailClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.inventorySourceConflictDetail.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.inventorySourceConflictDetail.execute({ payload })),
   );
 
 export const executeInventorySourceConflictDetail = (

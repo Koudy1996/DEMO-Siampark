@@ -40,9 +40,7 @@ export const executeCurrentStockEvidenceForAvailabilityWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: CurrentStockEvidenceForAvailabilityAuthorizedInvocation
 ) =>
   currentStockEvidenceForAvailabilityClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.currentStockEvidenceForAvailability.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.currentStockEvidenceForAvailability.execute({ payload })),
   );
 
 export const executeCurrentStockEvidenceForAvailability = (

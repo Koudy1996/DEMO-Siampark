@@ -6,7 +6,8 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventorySourceConflictDetailAuthenticationProblemSchema,
-  InventorySourceConflictDetailDomainUnavailableProblem,
+  type InventorySourceConflictDetailDomainUnavailableProblem,
+  InventorySourceConflictDetailDomainUnavailableProblemSchema,
   InventorySourceConflictDetailForbiddenProblemSchema,
   InventorySourceConflictDetailInternalProblemSchema,
   InventorySourceConflictDetailInvalidProblemSchema,
@@ -37,7 +38,7 @@ const mapInventorySourceConflictDetailDomainError = (
   const reasonCode = Schema.is(InventorySourceConflictUnavailable)(error)
     ? error.code
     : 'inventory_source_conflict_unavailable';
-  return new InventorySourceConflictDetailDomainUnavailableProblem({
+  return InventorySourceConflictDetailDomainUnavailableProblemSchema.make({
     detail: 'Inventory Source Conflict evidence cannot be read safely.',
     reasonCode,
     retryable: true,

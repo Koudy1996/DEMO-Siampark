@@ -40,9 +40,7 @@ export const executeInventoryReservationDetailWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: InventoryReservationDetailAuthorizedInvocation
 ) =>
   inventoryReservationDetailClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.inventoryReservationDetail.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.inventoryReservationDetail.execute({ payload })),
   );
 
 export const executeInventoryReservationDetail = (

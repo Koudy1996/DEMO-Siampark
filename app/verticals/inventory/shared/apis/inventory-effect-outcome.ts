@@ -10,8 +10,14 @@ import {
 import { InventoryEffectOutcomeDomainConflictProblemSchema } from './inventory-effect-outcome-domain-conflict-problem.ts';
 import { InventoryEffectOutcomeDomainUnavailableProblemSchema } from './inventory-effect-outcome-domain-unavailable-problem.ts';
 
-export { InventoryEffectOutcomeDomainConflictProblem } from './inventory-effect-outcome-domain-conflict-problem.ts';
-export { InventoryEffectOutcomeDomainUnavailableProblem } from './inventory-effect-outcome-domain-unavailable-problem.ts';
+export {
+  type InventoryEffectOutcomeDomainConflictProblem,
+  InventoryEffectOutcomeDomainConflictProblemSchema,
+} from './inventory-effect-outcome-domain-conflict-problem.ts';
+export {
+  type InventoryEffectOutcomeDomainUnavailableProblem,
+  InventoryEffectOutcomeDomainUnavailableProblemSchema,
+} from './inventory-effect-outcome-domain-unavailable-problem.ts';
 
 export const InventoryEffectOutcomeRequestSchema = Schema.Struct({
   effectId: InventoryEffectLedgerEffectIdSchema,
@@ -112,10 +118,7 @@ export const InventoryEffectOutcomeApi = HttpApi.make('InventoryEffectOutcomeApi
         InventoryEffectOutcomeUnavailableProblemSchema,
         InventoryEffectOutcomeInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: InventoryEffectOutcomeRequestSchema,
-      query: {},
       success: InventoryEffectOutcomeResponseSchema,
     }),
   ),

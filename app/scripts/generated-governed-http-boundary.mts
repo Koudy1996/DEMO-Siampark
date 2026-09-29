@@ -1818,7 +1818,7 @@ export const hasGeneratedActionRegistrationBinding = (
   const actionName = escapeRegExp(`${camel}Action`);
   const direct = new RegExp(`^export const ${actionName} = defineAction\\(`, 'mu');
   const typed = new RegExp(
-    `^export const ${actionName}\\s*:\\s*ActionRegistration<\\s*typeof ${escapeRegExp(type)}PayloadSchema\\s*,\\s*typeof ${escapeRegExp(type)}ResultSchema\\s*,\\s*typeof (?<error>[A-Z][A-Za-z0-9]*ErrorSchema)\\s*,\\s*Readonly<Record<string, never>>\\s*,\\s*['"]${escapeRegExp(moduleId)}['"]\\s*,\\s*(?<services>[A-Z][A-Za-z0-9]*Services)(?:\\s*,\\s*(?<requirements>[A-Z][A-Za-z0-9]*))?\\s*>\\s*=\\s*defineAction\\(`,
+    `^export const ${actionName}\\s*:\\s*ActionRegistration<\\s*typeof ${escapeRegExp(type)}PayloadSchema\\s*,\\s*typeof ${escapeRegExp(type)}ResultSchema\\s*,\\s*typeof (?<error>[A-Z][A-Za-z0-9]*ErrorSchema)\\s*,\\s*(?<events>Readonly<Record<string, never>>|typeof domainEvents)\\s*,\\s*['"]${escapeRegExp(moduleId)}['"]\\s*,\\s*(?<services>[A-Z][A-Za-z0-9]*Services)(?:\\s*,\\s*(?<requirements>[A-Z][A-Za-z0-9]*))?\\s*>\\s*=\\s*defineAction\\(`,
     'mu',
   );
   const directMatch = direct.exec(source);
@@ -1830,6 +1830,7 @@ export const hasGeneratedActionRegistrationBinding = (
     typedMatch !== null &&
     isCodePosition(source, typedMatch.index) &&
     source.includes(`domainErrorSchema: ${typedMatch.groups?.error},`) &&
+    (typedMatch.groups?.events !== 'typeof domainEvents' || source.includes('domainEvents,')) &&
     source.includes(`payloadSchema: ${type}PayloadSchema,`) &&
     source.includes(`resultSchema: ${type}ResultSchema,`)
   );

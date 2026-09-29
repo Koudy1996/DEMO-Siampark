@@ -128,6 +128,7 @@ export const inventoryApi: InventoryApi = HttpApi.make('InventoryApi')
   .addHttpApi(StockReceiptActionApi)
   .addHttpApi(StockSharingEligibilityResolutionApi)
   // </generated-governed-http-api-additions>
+  .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
   .pipe(identity);
 
 export const inventoryOperationContexts = {

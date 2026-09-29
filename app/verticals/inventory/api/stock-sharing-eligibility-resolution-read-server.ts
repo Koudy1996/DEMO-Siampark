@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   StockSharingEligibilityResolutionAuthenticationProblemSchema,
-  StockSharingEligibilityResolutionDomainPolicyProblem,
-  StockSharingEligibilityResolutionDomainUnavailableProblem,
+  type StockSharingEligibilityResolutionDomainPolicyProblem,
+  StockSharingEligibilityResolutionDomainPolicyProblemSchema,
+  type StockSharingEligibilityResolutionDomainUnavailableProblem,
+  StockSharingEligibilityResolutionDomainUnavailableProblemSchema,
   StockSharingEligibilityResolutionForbiddenProblemSchema,
   StockSharingEligibilityResolutionInternalProblemSchema,
   StockSharingEligibilityResolutionInvalidProblemSchema,
@@ -37,7 +39,7 @@ export const mapStockSharingEligibilityResolutionDomainError = (
   error: StockSharingEligibilityResolutionDomainError,
 ): StockSharingEligibilityResolutionDomainPolicyProblem | StockSharingEligibilityResolutionDomainUnavailableProblem => {
   if (Schema.is(StockSharingEligibilityRejected)(error)) {
-    return new StockSharingEligibilityResolutionDomainPolicyProblem({
+    return StockSharingEligibilityResolutionDomainPolicyProblemSchema.make({
       detail: 'Stock sharing eligibility was not established for the requested Position and Commerce context.',
       reasonCode: error.reason,
       // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal field of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -49,7 +51,7 @@ export const mapStockSharingEligibilityResolutionDomainError = (
   const reasonCode = Schema.is(StockSharingEligibilityUnavailable)(error)
     ? error.code
     : 'stock_sharing_eligibility_unavailable';
-  return new StockSharingEligibilityResolutionDomainUnavailableProblem({
+  return StockSharingEligibilityResolutionDomainUnavailableProblemSchema.make({
     detail: 'Stock sharing eligibility cannot be resolved safely.',
     reasonCode,
     retryable: true,

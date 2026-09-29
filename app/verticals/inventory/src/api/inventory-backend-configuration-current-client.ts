@@ -40,9 +40,7 @@ export const executeInventoryBackendConfigurationCurrentWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: InventoryBackendConfigurationCurrentAuthorizedInvocation
 ) =>
   inventoryBackendConfigurationCurrentClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.inventoryBackendConfigurationCurrent.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.inventoryBackendConfigurationCurrent.execute({ payload })),
   );
 
 export const executeInventoryBackendConfigurationCurrent = (

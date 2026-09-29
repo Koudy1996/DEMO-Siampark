@@ -1,20 +1,11 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
-import { Schema } from 'effect';
+import { makeProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 
 import { ReservationConfirmationRejected } from '../domain/reservation-confirmation.ts';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class ReservationConfirmationVerificationDomainPolicyProblem extends Schema.TaggedError<ReservationConfirmationVerificationDomainPolicyProblem>()(
+export const ReservationConfirmationVerificationDomainPolicyProblemSchema = makeProblemDetailsSchema(
   'ReservationConfirmationVerificationDomainPolicyProblem',
-  {
-    detail: Schema.String,
-    reasonCode: ReservationConfirmationRejected.fields.reason,
-    status: Schema.Literal(422),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const ReservationConfirmationVerificationDomainPolicyProblemSchema =
-  ReservationConfirmationVerificationDomainPolicyProblem.pipe(problemDetailsRepresentation, HttpApiSchema.status(422));
+  422,
+  { reasonCode: ReservationConfirmationRejected.fields.reason },
+);
+export type ReservationConfirmationVerificationDomainPolicyProblem =
+  typeof ReservationConfirmationVerificationDomainPolicyProblemSchema.Type;

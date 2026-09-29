@@ -6,7 +6,10 @@ import { InventoryBackendConfigurationSchema } from '../domain/inventory-backend
 import { CustomerConfigurationIdSchema } from '../inventory-launch-scope.ts';
 import { InventoryBackendConfigurationCurrentDomainUnavailableProblemSchema } from './inventory-backend-configuration-current-domain-unavailable-problem.ts';
 
-export { InventoryBackendConfigurationCurrentDomainUnavailableProblem } from './inventory-backend-configuration-current-domain-unavailable-problem.ts';
+export {
+  type InventoryBackendConfigurationCurrentDomainUnavailableProblem,
+  InventoryBackendConfigurationCurrentDomainUnavailableProblemSchema,
+} from './inventory-backend-configuration-current-domain-unavailable-problem.ts';
 
 export const InventoryBackendConfigurationCurrentRequestSchema = Schema.Struct({
   customerConfigurationId: CustomerConfigurationIdSchema,
@@ -65,10 +68,7 @@ export const InventoryBackendConfigurationCurrentApi = HttpApi.make('InventoryBa
         InventoryBackendConfigurationCurrentUnavailableProblemSchema,
         InventoryBackendConfigurationCurrentInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: InventoryBackendConfigurationCurrentRequestSchema,
-      query: {},
       success: InventoryBackendConfigurationCurrentResponseSchema,
     }),
   ),

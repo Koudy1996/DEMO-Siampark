@@ -40,9 +40,7 @@ export const executeInventoryReconciliationEvidenceWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: InventoryReconciliationEvidenceAuthorizedInvocation
 ) =>
   inventoryReconciliationEvidenceClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.inventoryReconciliationEvidence.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.inventoryReconciliationEvidence.execute({ payload })),
   );
 
 export const executeInventoryReconciliationEvidence = (

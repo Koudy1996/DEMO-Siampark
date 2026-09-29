@@ -27,11 +27,11 @@ import { InventoryReconciliationEvidenceDomainPolicyProblemSchema } from './inve
 import { InventoryReconciliationEvidenceDomainUnavailableProblemSchema } from './inventory-reconciliation-evidence-domain-unavailable-problem.ts';
 
 export {
-  InventoryReconciliationEvidenceDomainPolicyProblem,
+  type InventoryReconciliationEvidenceDomainPolicyProblem,
   InventoryReconciliationEvidenceDomainPolicyProblemSchema,
 } from './inventory-reconciliation-evidence-domain-policy-problem.ts';
 export {
-  InventoryReconciliationEvidenceDomainUnavailableProblem,
+  type InventoryReconciliationEvidenceDomainUnavailableProblem,
   InventoryReconciliationEvidenceDomainUnavailableProblemSchema,
 } from './inventory-reconciliation-evidence-domain-unavailable-problem.ts';
 
@@ -243,10 +243,7 @@ export const InventoryReconciliationEvidenceApi = HttpApi.make('InventoryReconci
         InventoryReconciliationEvidenceUnavailableProblemSchema,
         InventoryReconciliationEvidenceInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: InventoryReconciliationEvidenceRequestSchema,
-      query: {},
       success: InventoryReconciliationEvidenceResponseSchema,
     }),
   ),

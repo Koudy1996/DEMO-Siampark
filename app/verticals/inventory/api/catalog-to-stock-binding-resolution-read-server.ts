@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CatalogToStockBindingResolutionAuthenticationProblemSchema,
-  CatalogToStockBindingResolutionDomainPolicyProblem,
-  CatalogToStockBindingResolutionDomainUnavailableProblem,
+  type CatalogToStockBindingResolutionDomainPolicyProblem,
+  CatalogToStockBindingResolutionDomainPolicyProblemSchema,
+  type CatalogToStockBindingResolutionDomainUnavailableProblem,
+  CatalogToStockBindingResolutionDomainUnavailableProblemSchema,
   CatalogToStockBindingResolutionForbiddenProblemSchema,
   CatalogToStockBindingResolutionInternalProblemSchema,
   CatalogToStockBindingResolutionInvalidProblemSchema,
@@ -38,7 +40,7 @@ export const mapCatalogToStockBindingResolutionDomainError = (
   error: CatalogToStockBindingResolutionDomainError,
 ): CatalogToStockBindingResolutionDomainPolicyProblem | CatalogToStockBindingResolutionDomainUnavailableProblem => {
   if (Schema.is(CatalogToStockBindingResolutionFailure)(error)) {
-    return new CatalogToStockBindingResolutionDomainPolicyProblem({
+    return CatalogToStockBindingResolutionDomainPolicyProblemSchema.make({
       detail:
         error.outcome === 'CONFLICTING'
           ? 'The exact Catalog Selection has more than one Current Stock Item binding.'
@@ -59,7 +61,7 @@ export const mapCatalogToStockBindingResolutionDomainError = (
   } else {
     reasonCode = 'catalog_to_stock_binding_unavailable';
   }
-  return new CatalogToStockBindingResolutionDomainUnavailableProblem({
+  return CatalogToStockBindingResolutionDomainUnavailableProblemSchema.make({
     detail: 'Catalog-to-Stock Binding resolution is temporarily unavailable.',
     outcome: 'UNAVAILABLE',
     reasonCode,

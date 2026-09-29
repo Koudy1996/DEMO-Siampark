@@ -1148,7 +1148,10 @@ const validateManifestImports = (
     const manifestImports = new Set(
       readImportedModuleSpecifiers(sourceOrEmpty(state.sourceMap, normalizedFile))
         .filter((specifier) => specifier.startsWith('./'))
-        .map((specifier) => `${path.join(manifestDirectory, specifier).replaceAll('\\', '/')}.ts`),
+        .map((specifier) => {
+          const importedFile = path.join(manifestDirectory, specifier).replaceAll('\\', '/');
+          return importedFile.endsWith('.ts') ? importedFile : `${importedFile}.ts`;
+        }),
     );
     const missing = [...sourceFiles].filter((file) => !manifestImports.has(file));
     const stale = [...manifestImports].filter((file) => !sourceFiles.has(file));

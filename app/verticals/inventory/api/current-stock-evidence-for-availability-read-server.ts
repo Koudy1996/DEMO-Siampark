@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   CurrentStockEvidenceForAvailabilityAuthenticationProblemSchema,
-  CurrentStockEvidenceForAvailabilityDomainPolicyProblem,
-  CurrentStockEvidenceForAvailabilityDomainUnavailableProblem,
+  type CurrentStockEvidenceForAvailabilityDomainPolicyProblem,
+  CurrentStockEvidenceForAvailabilityDomainPolicyProblemSchema,
+  type CurrentStockEvidenceForAvailabilityDomainUnavailableProblem,
+  CurrentStockEvidenceForAvailabilityDomainUnavailableProblemSchema,
   CurrentStockEvidenceForAvailabilityForbiddenProblemSchema,
   CurrentStockEvidenceForAvailabilityInternalProblemSchema,
   CurrentStockEvidenceForAvailabilityInvalidProblemSchema,
@@ -41,7 +43,7 @@ export const mapCurrentStockEvidenceForAvailabilityDomainError = (
   | CurrentStockEvidenceForAvailabilityDomainPolicyProblem
   | CurrentStockEvidenceForAvailabilityDomainUnavailableProblem => {
   if (Schema.is(CurrentStockEvidenceForAvailabilityRejected)(error)) {
-    return new CurrentStockEvidenceForAvailabilityDomainPolicyProblem({
+    return CurrentStockEvidenceForAvailabilityDomainPolicyProblemSchema.make({
       detail: 'Current stock evidence cannot be used for the requested Position.',
       reasonCode: error.reason,
       // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal field of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -53,7 +55,7 @@ export const mapCurrentStockEvidenceForAvailabilityDomainError = (
   const reasonCode = Schema.is(CurrentStockEvidenceForAvailabilityUnavailable)(error)
     ? error.code
     : 'current_stock_evidence_for_availability_unavailable';
-  return new CurrentStockEvidenceForAvailabilityDomainUnavailableProblem({
+  return CurrentStockEvidenceForAvailabilityDomainUnavailableProblemSchema.make({
     detail: 'Current stock evidence cannot be read safely.',
     reasonCode,
     retryable: true,

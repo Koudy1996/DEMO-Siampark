@@ -6,9 +6,12 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryReservationDetailAuthenticationProblemSchema,
-  InventoryReservationDetailDomainConflictProblem,
-  InventoryReservationDetailDomainPolicyProblem,
-  InventoryReservationDetailDomainUnavailableProblem,
+  type InventoryReservationDetailDomainConflictProblem,
+  InventoryReservationDetailDomainConflictProblemSchema,
+  type InventoryReservationDetailDomainPolicyProblem,
+  InventoryReservationDetailDomainPolicyProblemSchema,
+  type InventoryReservationDetailDomainUnavailableProblem,
+  InventoryReservationDetailDomainUnavailableProblemSchema,
   InventoryReservationDetailForbiddenProblemSchema,
   InventoryReservationDetailInternalProblemSchema,
   InventoryReservationDetailInvalidProblemSchema,
@@ -49,7 +52,7 @@ export const mapInventoryReservationDetailDomainError = (
         'RESERVATION_NOT_PROVISIONAL',
       ]).has(error.reason)
     ) {
-      return new InventoryReservationDetailDomainConflictProblem({
+      return InventoryReservationDetailDomainConflictProblemSchema.make({
         detail: 'The requested Reservation conflicts with its durable Inventory state.',
         reasonCode: error.reason,
         // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -58,7 +61,7 @@ export const mapInventoryReservationDetailDomainError = (
         type: 'https://ontos.dev/problems/inventory-reservation-conflict',
       });
     }
-    return new InventoryReservationDetailDomainPolicyProblem({
+    return InventoryReservationDetailDomainPolicyProblemSchema.make({
       detail: 'The requested Reservation cannot be represented safely.',
       reasonCode: error.reason,
       // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -70,7 +73,7 @@ export const mapInventoryReservationDetailDomainError = (
   const reasonCode = Schema.is(InventoryObligationPersistenceUnavailable)(error)
     ? error.code
     : 'inventory_obligation_persistence_unavailable';
-  return new InventoryReservationDetailDomainUnavailableProblem({
+  return InventoryReservationDetailDomainUnavailableProblemSchema.make({
     detail: 'Inventory Reservation state is temporarily unavailable.',
     reasonCode,
     retryable: true,

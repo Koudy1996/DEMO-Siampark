@@ -6,8 +6,10 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryReconciliationEvidenceAuthenticationProblemSchema,
-  InventoryReconciliationEvidenceDomainPolicyProblem,
-  InventoryReconciliationEvidenceDomainUnavailableProblem,
+  type InventoryReconciliationEvidenceDomainPolicyProblem,
+  InventoryReconciliationEvidenceDomainPolicyProblemSchema,
+  type InventoryReconciliationEvidenceDomainUnavailableProblem,
+  InventoryReconciliationEvidenceDomainUnavailableProblemSchema,
   InventoryReconciliationEvidenceForbiddenProblemSchema,
   InventoryReconciliationEvidenceInternalProblemSchema,
   InventoryReconciliationEvidenceInvalidProblemSchema,
@@ -37,7 +39,7 @@ export const mapInventoryReconciliationEvidenceDomainError = (
   error: InventoryReconciliationEvidenceDomainError,
 ): InventoryReconciliationEvidenceDomainPolicyProblem | InventoryReconciliationEvidenceDomainUnavailableProblem => {
   if (Schema.is(InventoryReconciliationEvidenceRejected)(error)) {
-    return new InventoryReconciliationEvidenceDomainPolicyProblem({
+    return InventoryReconciliationEvidenceDomainPolicyProblemSchema.make({
       detail: 'The requested Inventory evidence is not eligible for this historical lookup.',
       reasonCode: error.reason,
       // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal field of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -49,7 +51,7 @@ export const mapInventoryReconciliationEvidenceDomainError = (
   const reasonCode = Schema.is(InventoryReconciliationEvidenceUnavailable)(error)
     ? error.code
     : 'inventory_reconciliation_evidence_unavailable';
-  return new InventoryReconciliationEvidenceDomainUnavailableProblem({
+  return InventoryReconciliationEvidenceDomainUnavailableProblemSchema.make({
     detail: 'Inventory reconciliation evidence cannot be read safely.',
     reasonCode,
     retryable: true,

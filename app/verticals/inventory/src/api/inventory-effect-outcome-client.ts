@@ -40,7 +40,7 @@ export const executeInventoryEffectOutcomeWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: InventoryEffectOutcomeAuthorizedInvocation
 ) =>
   inventoryEffectOutcomeClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) => client.inventoryEffectOutcome.execute({ headers: {}, params: {}, payload, query: {} })),
+    Effect.flatMap((client) => client.inventoryEffectOutcome.execute({ payload })),
   );
 
 export const executeInventoryEffectOutcome = (

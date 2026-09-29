@@ -40,9 +40,7 @@ export const executeStockSharingEligibilityResolutionWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: StockSharingEligibilityResolutionAuthorizedInvocation
 ) =>
   stockSharingEligibilityResolutionClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.stockSharingEligibilityResolution.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.stockSharingEligibilityResolution.execute({ payload })),
   );
 
 export const executeStockSharingEligibilityResolution = (

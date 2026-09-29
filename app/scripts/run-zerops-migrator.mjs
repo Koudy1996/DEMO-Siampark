@@ -161,6 +161,7 @@ const main = Effect.scoped(
     yield* migrate('verticals/commerce-customer-context', 'drizzle.config.ts');
     yield* migrate('verticals/commerce-market-catalog', 'drizzle.config.ts');
     yield* migrate('verticals/catalog', 'drizzle.config.ts');
+    yield* migrate('verticals/inventory', 'drizzle.config.ts');
     yield* migrate('verticals/pricing', 'drizzle.config.ts');
     yield* migrate('verticals/storefront-registry', 'drizzle.config.ts');
     yield* runAppScript('scripts/postgres/bootstrap-runtime-role.mts');

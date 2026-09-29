@@ -7,8 +7,14 @@ import { StockPositionRefSchema } from '../resources/stock-position.ts';
 import { CurrentStockEvidenceForAvailabilityDomainPolicyProblemSchema } from './current-stock-evidence-for-availability-domain-policy-problem.ts';
 import { CurrentStockEvidenceForAvailabilityDomainUnavailableProblemSchema } from './current-stock-evidence-for-availability-domain-unavailable-problem.ts';
 
-export { CurrentStockEvidenceForAvailabilityDomainPolicyProblem } from './current-stock-evidence-for-availability-domain-policy-problem.ts';
-export { CurrentStockEvidenceForAvailabilityDomainUnavailableProblem } from './current-stock-evidence-for-availability-domain-unavailable-problem.ts';
+export {
+  type CurrentStockEvidenceForAvailabilityDomainPolicyProblem,
+  CurrentStockEvidenceForAvailabilityDomainPolicyProblemSchema,
+} from './current-stock-evidence-for-availability-domain-policy-problem.ts';
+export {
+  type CurrentStockEvidenceForAvailabilityDomainUnavailableProblem,
+  CurrentStockEvidenceForAvailabilityDomainUnavailableProblemSchema,
+} from './current-stock-evidence-for-availability-domain-unavailable-problem.ts';
 
 export const CurrentStockEvidenceForAvailabilityRequestSchema = Schema.Struct({
   positionRef: StockPositionRefSchema,
@@ -67,10 +73,7 @@ export const CurrentStockEvidenceForAvailabilityApi = HttpApi.make('CurrentStock
         CurrentStockEvidenceForAvailabilityUnavailableProblemSchema,
         CurrentStockEvidenceForAvailabilityInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: CurrentStockEvidenceForAvailabilityRequestSchema,
-      query: {},
       success: CurrentStockEvidenceForAvailabilityResponseSchema,
     }),
   ),

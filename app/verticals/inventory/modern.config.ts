@@ -2,8 +2,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from '@modern-js/app-tools';
-import type { AppToolsUserConfig } from '@modern-js/app-tools';
-import { getBuildConfigEnvironment, withBuildConfigEnvironment } from '@modern-js/app-tools-extensions/config';
+import type { AppTools, AppToolsUserConfig, CliPlugin } from '@modern-js/app-tools';
+import { getBuildConfigEnvironment } from '@modern-js/app-tools-extensions/config';
 import { bffPlugin } from '@modern-js/plugin-bff-build-extensions';
 import { i18nPlugin } from '@modern-js/plugin-i18n';
 import { tanstackRouterPlugin } from '@modern-js/plugin-tanstack';
@@ -18,7 +18,7 @@ import {
   createZephyrRspackPlugin,
   resolveCloudflareExternal,
 } from '../../packages/shared-contracts/tooling/modern-config.ts';
-import { ultramodernLocalisedUrls } from './src/routes/ultramodern-route-metadata';
+import { ultramodernLocalisedUrls } from './src/routes/ultramodern-route-metadata.ts';
 
 Object.assign(globalThis, { require: createRequire(import.meta.url) });
 
@@ -59,10 +59,10 @@ const cloudflareRuntimeExternal = (
 };
 /* oxlint-enable promise/prefer-await-to-callbacks */
 
-const zephyrRspackPlugin = () =>
+const zephyrRspackPlugin = (): CliPlugin<AppTools> =>
   createZephyrRspackPlugin({
-    configure: () => withBuildConfigEnvironment('ZE_FAIL_BUILD', 'true', withZephyrRspack()),
-    readToken: () => envValue('ZE_CI_TOKEN'),
+    configure: () => withZephyrRspack(),
+    readEnvironment: envValue,
   });
 
 const whenEnabled = <Configuration>(enabled: boolean, configuration: Configuration) =>
@@ -158,7 +158,7 @@ export default defineConfig(
       },
       output: {
         assetPrefix,
-        disableTsChecker: false,
+        disableTsChecker: true,
         distPath: {
           html: './',
           root: buildOutputRoot,

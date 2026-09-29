@@ -40,9 +40,7 @@ export const executeReservationConfirmationVerificationWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: ReservationConfirmationVerificationAuthorizedInvocation
 ) =>
   reservationConfirmationVerificationClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.reservationConfirmationVerification.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.reservationConfirmationVerification.execute({ payload })),
   );
 
 export const executeReservationConfirmationVerification = (

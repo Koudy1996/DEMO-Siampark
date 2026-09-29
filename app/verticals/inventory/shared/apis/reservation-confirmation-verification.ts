@@ -15,15 +15,15 @@ import { ReservationConfirmationVerificationDomainPolicyProblemSchema } from './
 import { ReservationConfirmationVerificationDomainUnavailableProblemSchema } from './reservation-confirmation-verification-domain-unavailable-problem.ts';
 
 export {
-  ReservationConfirmationVerificationDomainConflictProblem,
+  type ReservationConfirmationVerificationDomainConflictProblem,
   ReservationConfirmationVerificationDomainConflictProblemSchema,
 } from './reservation-confirmation-verification-domain-conflict-problem.ts';
 export {
-  ReservationConfirmationVerificationDomainPolicyProblem,
+  type ReservationConfirmationVerificationDomainPolicyProblem,
   ReservationConfirmationVerificationDomainPolicyProblemSchema,
 } from './reservation-confirmation-verification-domain-policy-problem.ts';
 export {
-  ReservationConfirmationVerificationDomainUnavailableProblem,
+  type ReservationConfirmationVerificationDomainUnavailableProblem,
   ReservationConfirmationVerificationDomainUnavailableProblemSchema,
 } from './reservation-confirmation-verification-domain-unavailable-problem.ts';
 
@@ -112,10 +112,7 @@ export const ReservationConfirmationVerificationApi = HttpApi.make('ReservationC
         ReservationConfirmationVerificationUnavailableProblemSchema,
         ReservationConfirmationVerificationInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: ReservationConfirmationVerificationRequestSchema,
-      query: {},
       success: ReservationConfirmationVerificationResponseSchema,
     }),
   ),

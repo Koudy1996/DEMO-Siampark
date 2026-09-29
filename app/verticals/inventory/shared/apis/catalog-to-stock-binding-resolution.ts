@@ -8,11 +8,11 @@ import { CatalogToStockBindingResolutionDomainPolicyProblemSchema } from './cata
 import { CatalogToStockBindingResolutionDomainUnavailableProblemSchema } from './catalog-to-stock-binding-resolution-domain-unavailable-problem.ts';
 
 export {
-  CatalogToStockBindingResolutionDomainPolicyProblem,
+  type CatalogToStockBindingResolutionDomainPolicyProblem,
   CatalogToStockBindingResolutionDomainPolicyProblemSchema,
 } from './catalog-to-stock-binding-resolution-domain-policy-problem.ts';
 export {
-  CatalogToStockBindingResolutionDomainUnavailableProblem,
+  type CatalogToStockBindingResolutionDomainUnavailableProblem,
   CatalogToStockBindingResolutionDomainUnavailableProblemSchema,
 } from './catalog-to-stock-binding-resolution-domain-unavailable-problem.ts';
 
@@ -76,10 +76,7 @@ export const CatalogToStockBindingResolutionApi = HttpApi.make('CatalogToStockBi
         CatalogToStockBindingResolutionUnavailableProblemSchema,
         CatalogToStockBindingResolutionInternalProblemSchema,
       ],
-      headers: {},
-      params: {},
       payload: CatalogToStockBindingResolutionRequestSchema,
-      query: {},
       success: CatalogToStockBindingResolutionResponseSchema,
     }),
   ),

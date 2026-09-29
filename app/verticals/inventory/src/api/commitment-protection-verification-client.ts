@@ -40,9 +40,7 @@ export const executeCommitmentProtectionVerificationWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: CommitmentProtectionVerificationAuthorizedInvocation
 ) =>
   commitmentProtectionVerificationClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.commitmentProtectionVerification.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.commitmentProtectionVerification.execute({ payload })),
   );
 
 export const executeCommitmentProtectionVerification = (

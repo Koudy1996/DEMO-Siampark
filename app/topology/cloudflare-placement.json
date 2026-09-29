@@ -11,6 +11,7 @@
     "pricing",
     "storefront-registry",
     "price-group-catalog",
+    "inventory",
     "shell-super-app"
   ],
   "unitServiceBindings": {

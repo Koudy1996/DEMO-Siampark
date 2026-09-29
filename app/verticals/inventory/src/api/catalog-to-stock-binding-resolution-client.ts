@@ -40,9 +40,7 @@ export const executeCatalogToStockBindingResolutionWithAuthorization = (
   ...[credential, requestCorrelation, options = {}]: CatalogToStockBindingResolutionAuthorizedInvocation
 ) =>
   catalogToStockBindingResolutionClient(Redacted.make(credential), requestCorrelation, options).pipe(
-    Effect.flatMap((client) =>
-      client.catalogToStockBindingResolution.execute({ headers: {}, params: {}, payload, query: {} }),
-    ),
+    Effect.flatMap((client) => client.catalogToStockBindingResolution.execute({ payload })),
   );
 
 export const executeCatalogToStockBindingResolution = (

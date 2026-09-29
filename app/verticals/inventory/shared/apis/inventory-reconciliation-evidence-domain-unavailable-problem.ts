@@ -1,19 +1,10 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
+import { makeRetryableProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 import { Schema } from 'effect';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class InventoryReconciliationEvidenceDomainUnavailableProblem extends Schema.TaggedError<InventoryReconciliationEvidenceDomainUnavailableProblem>()(
+export const InventoryReconciliationEvidenceDomainUnavailableProblemSchema = makeRetryableProblemDetailsSchema(
   'InventoryReconciliationEvidenceDomainUnavailableProblem',
-  {
-    detail: Schema.String,
-    reasonCode: Schema.Literal('inventory_reconciliation_evidence_unavailable'),
-    retryable: Schema.Literal(true),
-    status: Schema.Literal(503),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const InventoryReconciliationEvidenceDomainUnavailableProblemSchema =
-  InventoryReconciliationEvidenceDomainUnavailableProblem.pipe(problemDetailsRepresentation, HttpApiSchema.status(503));
+  503,
+  { reasonCode: Schema.Literal('inventory_reconciliation_evidence_unavailable') },
+);
+export type InventoryReconciliationEvidenceDomainUnavailableProblem =
+  typeof InventoryReconciliationEvidenceDomainUnavailableProblemSchema.Type;

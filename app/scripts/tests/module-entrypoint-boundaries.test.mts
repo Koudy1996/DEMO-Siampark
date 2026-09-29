@@ -399,13 +399,15 @@ it('governed servers bind the trusted handler, authentication, registration, and
     )
     .replace(
       "StockListInternalProblemSchema } from '../shared/apis/stock-list.ts';",
-      "StockListInternalProblemSchema, StockListDomainPolicyProblem } from '../shared/apis/stock-list.ts';",
+      "StockListInternalProblemSchema, StockListDomainPolicyProblemSchema } from '../shared/apis/stock-list.ts';",
     )
     .replace(
       'const problems = makeGovernedReadProblems({',
-      `export const mapStockListDomainError = (error: unknown): StockListDomainPolicyProblem => {
+      `export const mapStockListDomainError = (
+  error: unknown,
+): typeof StockListDomainPolicyProblemSchema.Type => {
   Schema.is(Schema.Unknown)(error);
-  return new StockListDomainPolicyProblem({ detail: 'Rejected' });
+  return StockListDomainPolicyProblemSchema.make({ detail: 'Rejected' });
 };
 const problems = makeGovernedReadProblems({`,
     )

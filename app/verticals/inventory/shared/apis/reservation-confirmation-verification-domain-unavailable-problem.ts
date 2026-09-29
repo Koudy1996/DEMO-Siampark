@@ -1,22 +1,10 @@
-import { HttpApiSchema } from '@modern-js/bff-effect/effect-client';
+import { makeRetryableProblemDetailsSchema } from '@app/shared-contracts/problem-details';
 import { Schema } from 'effect';
 
-const problemDetailsRepresentation = HttpApiSchema.asJson({ contentType: 'application/problem+json' });
-
-export class ReservationConfirmationVerificationDomainUnavailableProblem extends Schema.TaggedError<ReservationConfirmationVerificationDomainUnavailableProblem>()(
+export const ReservationConfirmationVerificationDomainUnavailableProblemSchema = makeRetryableProblemDetailsSchema(
   'ReservationConfirmationVerificationDomainUnavailableProblem',
-  {
-    detail: Schema.String,
-    reasonCode: Schema.Literal('reservation_confirmation_unavailable'),
-    retryable: Schema.Literal(true),
-    status: Schema.Literal(503),
-    title: Schema.String,
-    type: Schema.String,
-  },
-) {}
-
-export const ReservationConfirmationVerificationDomainUnavailableProblemSchema =
-  ReservationConfirmationVerificationDomainUnavailableProblem.pipe(
-    problemDetailsRepresentation,
-    HttpApiSchema.status(503),
-  );
+  503,
+  { reasonCode: Schema.Literal('reservation_confirmation_unavailable') },
+);
+export type ReservationConfirmationVerificationDomainUnavailableProblem =
+  typeof ReservationConfirmationVerificationDomainUnavailableProblemSchema.Type;

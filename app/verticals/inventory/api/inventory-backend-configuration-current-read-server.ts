@@ -6,7 +6,8 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   InventoryBackendConfigurationCurrentAuthenticationProblemSchema,
-  InventoryBackendConfigurationCurrentDomainUnavailableProblem,
+  type InventoryBackendConfigurationCurrentDomainUnavailableProblem,
+  InventoryBackendConfigurationCurrentDomainUnavailableProblemSchema,
   InventoryBackendConfigurationCurrentForbiddenProblemSchema,
   InventoryBackendConfigurationCurrentInternalProblemSchema,
   InventoryBackendConfigurationCurrentInvalidProblemSchema,
@@ -37,7 +38,7 @@ const mapInventoryBackendConfigurationCurrentDomainError = (
   const reasonCode = Schema.is(InventoryBackendConfigurationPersistenceUnavailable)(_error)
     ? _error.code
     : 'inventory_backend_configuration_persistence_unavailable';
-  return new InventoryBackendConfigurationCurrentDomainUnavailableProblem({
+  return InventoryBackendConfigurationCurrentDomainUnavailableProblemSchema.make({
     detail: 'The selected Inventory Backend cannot be read safely.',
     reasonCode,
     retryable: true,

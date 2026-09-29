@@ -6,9 +6,12 @@ import { Schema } from 'effect';
 import { inventoryApi } from '../shared/api.ts';
 import {
   ReservationConfirmationVerificationAuthenticationProblemSchema,
-  ReservationConfirmationVerificationDomainConflictProblem,
-  ReservationConfirmationVerificationDomainPolicyProblem,
-  ReservationConfirmationVerificationDomainUnavailableProblem,
+  type ReservationConfirmationVerificationDomainConflictProblem,
+  ReservationConfirmationVerificationDomainConflictProblemSchema,
+  type ReservationConfirmationVerificationDomainPolicyProblem,
+  ReservationConfirmationVerificationDomainPolicyProblemSchema,
+  type ReservationConfirmationVerificationDomainUnavailableProblem,
+  ReservationConfirmationVerificationDomainUnavailableProblemSchema,
   ReservationConfirmationVerificationForbiddenProblemSchema,
   ReservationConfirmationVerificationInternalProblemSchema,
   ReservationConfirmationVerificationInvalidProblemSchema,
@@ -52,7 +55,7 @@ export const mapReservationConfirmationVerificationDomainError = (
         'TERMINAL_HEALTH_STATE',
       ]).has(error.reason)
     ) {
-      return new ReservationConfirmationVerificationDomainConflictProblem({
+      return ReservationConfirmationVerificationDomainConflictProblemSchema.make({
         detail: 'The Confirmation does not belong to the requested Reservation and Attempt state.',
         reasonCode: error.reason,
         // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -61,7 +64,7 @@ export const mapReservationConfirmationVerificationDomainError = (
         type: 'https://ontos.dev/problems/reservation-confirmation-conflict',
       });
     }
-    return new ReservationConfirmationVerificationDomainPolicyProblem({
+    return ReservationConfirmationVerificationDomainPolicyProblemSchema.make({
       detail: 'The Reservation Confirmation cannot be verified safely.',
       reasonCode: error.reason,
       // oxlint-disable-next-line effect-native/no-hand-built-problem-details -- Checked literal of the declared status-specific problem constructor; expires: 2027-03-31.
@@ -73,7 +76,7 @@ export const mapReservationConfirmationVerificationDomainError = (
   const reasonCode = Schema.is(ReservationConfirmationUnavailable)(error)
     ? error.code
     : 'reservation_confirmation_unavailable';
-  return new ReservationConfirmationVerificationDomainUnavailableProblem({
+  return ReservationConfirmationVerificationDomainUnavailableProblemSchema.make({
     detail: 'Reservation Confirmation evidence is temporarily unavailable.',
     reasonCode,
     retryable: true,
