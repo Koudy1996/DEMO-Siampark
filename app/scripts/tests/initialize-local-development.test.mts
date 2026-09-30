@@ -9,6 +9,7 @@ import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
 
 import { makeModuleContractFixture } from '../../packages/core-runtime/src/testing/module-contract.ts';
 import { makeTestDatabase } from '../../packages/core-runtime/tests/support/database.ts';
+import { SPICEDB_TEST_CERTIFICATE } from '../../packages/core-runtime/tests/support/spicedb-test-certificate.ts';
 import type { deriveOntosModuleDeploymentContract } from '../generate-ontos-module-contract.mts';
 import {
   LOCAL_DEVELOPMENT_VERTICALS,
@@ -34,8 +35,8 @@ const localEnvironment = {
   BETTER_AUTH_URL: 'http://localhost:3020',
   DATABASE_ADMIN_URL: 'postgres://ontos_admin:admin@localhost:5432/ontos',
   DATABASE_URL: 'postgres://ontos_runtime:runtime@localhost:5432/ontos',
+  SPICEDB_CA_CERT: SPICEDB_TEST_CERTIFICATE,
   SPICEDB_ENDPOINT: 'localhost:50051',
-  SPICEDB_INSECURE: 'true',
   SPICEDB_PRESHARED_KEY: 'local-spicedb-key',
   ULTRAMODERN_DEPLOYMENT_ENVIRONMENT: 'development',
 } as const;
@@ -83,8 +84,8 @@ it.effect('accepts only a development configuration with local service endpoints
         {
           ...localEnvironment,
           SPICEDB_ENDPOINT: 'spicedb.example.com:50051',
-          SPICEDB_INSECURE: 'false',
         },
+        { ...localEnvironment, SPICEDB_CA_CERT: '' },
       ].map((environment) =>
         Effect.gen(function* testEffect2() {
           expect(
@@ -265,9 +266,19 @@ it.effect('generates stable module state IDs and complete access relationships',
     expect(moduleStateIdFor(PARTY_REGISTRY_MODULE_ID)).toBe(moduleStateIdFor(PARTY_REGISTRY_MODULE_ID));
     expect(moduleStateIdFor(PARTY_REGISTRY_MODULE_ID)).not.toBe(moduleStateIdFor(INVENTORY_MODULE_ID));
     const relationships = yield* buildLocalDevelopmentRelationships([PARTY_REGISTRY_MODULE_ID, INVENTORY_MODULE_ID]);
-    expect(relationships.length).toBe(7);
+    expect(relationships.length).toBe(8);
     expect(relationships.filter(({ relation }) => relation === 'accessor').length).toBe(2);
     expect(relationships.filter(({ relation }) => relation === 'legal_entity').length).toBe(2);
+    // Party Registry's governed reads need the tenant read permission, not only module access.
+    expect(relationships).toContainEqual({
+      relation: 'party_identity_reader',
+      resourceId: LOCAL_DEVELOPMENT_CONTEXT.tenantId,
+      resourceType: 'tenant',
+      subjectId: LOCAL_DEVELOPMENT_CONTEXT.principalId,
+      subjectType: 'principal',
+    });
+    const withoutPartyRegistry = yield* buildLocalDevelopmentRelationships([INVENTORY_MODULE_ID]);
+    expect(withoutPartyRegistry.some(({ relation }) => relation === 'party_identity_reader')).toBe(false);
   }),
 );
 

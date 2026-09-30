@@ -4,14 +4,19 @@ import { HttpClient, HttpClientRequest } from 'effect/unstable/http';
 import { ZeropsApiError } from './zerops-public-api-error.mts';
 
 /**
- * Minimal adapter over the Zerops public REST API for the operations zcli does not expose: project
- * variables, service restarts, and subdomain access. Responses are decoded, never logged, because
+ * Minimal adapter over the Zerops public REST API for the operations the deploy runs without zcli: project
+ * variables, service restarts and stops, and subdomain access. Responses are decoded, never logged, because
  * project variable listings can contain secrets. The token is read per request, so commands that
  * never call Zerops need no credentials.
  */
 export const ZEROPS_PUBLIC_API_URL = 'https://api.app-prg1.zerops.io/api/rest/public';
 
 const REQUEST_TIMEOUT = Duration.seconds(30);
+/**
+ * The project env file lists service-scoped variables such as `<hostname>_zeropsSubdomain` only when service
+ * isolation is overridden, exactly as `zcli project env` requests it; without it only project variables return.
+ */
+const PROJECT_ENV_FILE_QUERY = 'name=&overrideEnvIsolation=none&userOnly=false&reveal=false';
 const PROCESS_POLL_INTERVAL = Duration.seconds(3);
 const PROCESS_TIMEOUT = Duration.minutes(15);
 
@@ -35,9 +40,17 @@ const ProjectSearchSchema = Schema.Struct({
 });
 const ServiceStackSchema = Schema.Struct({
   name: Schema.NonEmptyString,
+  /** Zerops lifecycle status, such as `ACTIVE` for a running service or `STOPPED`. */
+  status: Schema.String,
   subdomainAccess: Schema.Boolean,
 });
 const EnvFileSchema = Schema.Struct({ envFile: Schema.String });
+const ServiceUserDataPageSchema = Schema.Struct({
+  list: Schema.Array(Schema.Struct({ content: Schema.String, key: Schema.String })),
+  total: Schema.Number,
+});
+/** The page size for service user data listings; `total` tells whether another page follows. */
+const SERVICE_USER_DATA_PAGE = 100;
 
 export type ZeropsProjectEnv = typeof ProjectEnvSchema.Type;
 export type ZeropsServiceStack = typeof ServiceStackSchema.Type;
@@ -70,11 +83,23 @@ export const parseZeropsEnvFile = (envFile: string): ReadonlyMap<string, string>
   );
 
 export interface ZeropsPublicApiService {
+  /** Creates a sensitive secret on one service (a Zerops service "user data" entry) and waits until Zerops applied it. */
+  readonly createServiceSecret: (
+    serviceId: string,
+    key: string,
+    content: string,
+  ) => Effect.Effect<void, ZeropsApiError>;
   readonly enableSubdomainAccess: (serviceId: string) => Effect.Effect<void, ZeropsApiError>;
   readonly projectEnvFile: (projectId: string) => Effect.Effect<ReadonlyMap<string, string>, ZeropsApiError>;
   readonly projectEnvs: (projectId: string) => Effect.Effect<readonly ZeropsProjectEnv[], ZeropsApiError>;
   readonly restartService: (serviceId: string) => Effect.Effect<void, ZeropsApiError>;
+  /**
+   * Reads every secret on one service (its "user data" entries) with their values. Unlike `zcli project env`,
+   * which prints `REDACTED` for sensitive secrets, the API returns the stored values to the owning token.
+   */
+  readonly serviceSecrets: (serviceId: string) => Effect.Effect<ReadonlyMap<string, Redacted.Redacted>, ZeropsApiError>;
   readonly serviceStack: (serviceId: string) => Effect.Effect<ZeropsServiceStack, ZeropsApiError>;
+  readonly stopService: (serviceId: string) => Effect.Effect<void, ZeropsApiError>;
   /** Creates the project variable, or updates it in place when it exists, and waits until Zerops applied it. */
   readonly upsertProjectEnv: (
     projectId: string,
@@ -188,9 +213,45 @@ const makeZeropsPublicApi = Effect.gen(function* makeZeropsPublicApi() {
     yield* awaitProcess(process, `project variable ${key}`);
   });
 
+  const createServiceSecret = Effect.fn('ZeropsPublicApi.createServiceSecret')(function* writeServiceSecret(
+    serviceId: string,
+    key: string,
+    content: string,
+  ) {
+    const process = yield* withJson(
+      HttpClientRequest.post(`${ZEROPS_PUBLIC_API_URL}/service-stack/${serviceId}/user-data`),
+      { content, key, sensitive: true },
+      ProcessSchema,
+      'service secret create',
+    );
+    yield* awaitProcess(process, `service secret ${key}`);
+  });
+
+  const serviceSecrets = Effect.fn('ZeropsPublicApi.serviceSecrets')(function* readServiceSecrets(serviceId: string) {
+    const secrets = new Map<string, Redacted.Redacted>();
+    let offset = 0;
+    let total = 1;
+    while (offset < total) {
+      const page = yield* get(
+        `/service-stack/${serviceId}/user-data?limit=${String(SERVICE_USER_DATA_PAGE)}&offset=${String(offset)}`,
+        ServiceUserDataPageSchema,
+        'service secret list',
+      );
+      for (const { content, key } of page.list) {
+        secrets.set(key, Redacted.make(content));
+      }
+      if (page.list.length === 0) {
+        break;
+      }
+      offset += page.list.length;
+      ({ total } = page);
+    }
+    return secrets;
+  });
+
   const serviceAction = Effect.fn('ZeropsPublicApi.serviceAction')(function* runServiceAction(
     serviceId: string,
-    action: 'enable-subdomain-access' | 'restart',
+    action: 'enable-subdomain-access' | 'restart' | 'stop',
   ) {
     const process = yield* send(
       HttpClientRequest.put(`${ZEROPS_PUBLIC_API_URL}/service-stack/${serviceId}/${action}`),
@@ -201,14 +262,17 @@ const makeZeropsPublicApi = Effect.gen(function* makeZeropsPublicApi() {
   });
 
   return ZeropsPublicApi.of({
+    createServiceSecret,
     enableSubdomainAccess: (serviceId) => serviceAction(serviceId, 'enable-subdomain-access'),
     projectEnvFile: (projectId) =>
-      get(`/project/${projectId}/env-file`, EnvFileSchema, 'project env file').pipe(
+      get(`/project/${projectId}/env-file?${PROJECT_ENV_FILE_QUERY}`, EnvFileSchema, 'project env file').pipe(
         Effect.map(({ envFile }) => parseZeropsEnvFile(envFile)),
       ),
     projectEnvs,
     restartService: (serviceId) => serviceAction(serviceId, 'restart'),
+    serviceSecrets,
     serviceStack: (serviceId) => get(`/service-stack/${serviceId}`, ServiceStackSchema, 'service read'),
+    stopService: (serviceId) => serviceAction(serviceId, 'stop'),
     upsertProjectEnv,
   });
 });

@@ -1,8 +1,15 @@
 import { readFileSync } from 'node:fs';
 
-import { Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import { expect, it } from 'effect-rstest';
 import { parse } from 'yaml';
+
+import {
+  DEPLOYMENT_ENVIRONMENT_VARIABLE,
+  materializeZeropsEnvironment,
+  SPICEDB_ENDPOINT_VARIABLE,
+} from '../materialize-zerops-environment.mts';
+import { OUTBOX_WORKER_HOST } from '../outbox-worker-delivery.mjs';
 
 const runtimeDatabaseUrl = `DATABASE_URL: postgresql://ontos_runtime:\${db18_password}@\${db18_hostname}:\${db18_port}/\${db18_dbName}`;
 const commerceCustomerContextSetup = 'commerce-customer-context';
@@ -24,7 +31,7 @@ const ZeropsImportSchema = Schema.Struct({
 });
 const DeployWorkflowSchema = Schema.Struct({
   jobs: Schema.Struct({
-    'deploy-stage': Schema.Struct({
+    'deploy-zerops': Schema.Struct({
       steps: Schema.Array(
         Schema.Struct({
           'continue-on-error': Schema.optional(Schema.Boolean),
@@ -102,15 +109,38 @@ it('declares Price Group Cloudflare proof variables and resolves every provider 
   expect(workflow).toContain('ULTRAMODERN_PUBLIC_URL_PRICE_GROUP_CATALOG: https://price-group-catalog.invalid');
   expect(workflow).toContain(`STAGE_VARIABLES_JSON: \${{ toJSON(vars) }}`);
   expect(workflow).toContain('app/scripts/push-zerops-units.sh');
-  expect(readFileSync(new URL('../push-zerops-units.sh', import.meta.url), 'utf-8')).toContain(
-    'active-composition:publish stage-service-id --setup "$unit"',
-  );
+  const pushUnits = readFileSync(new URL('../push-zerops-units.sh', import.meta.url), 'utf-8');
+  expect(pushUnits).toContain('active-composition:publish stage-service-id --setup "$unit"');
+  // Neither dedicated workers nor the combined host may be given a public subdomain.
+  expect(pushUnits).toContain(`    *-worker | ${OUTBOX_WORKER_HOST.stageSetup}) ;;`);
   const providerVariables = workflow.match(/^ +ZEROPS_[A-Z_]+_SERVICE_ID: /gmu)?.map((line) => line.trim()) ?? [];
   expect(providerVariables).toEqual([
     'ZEROPS_MIGRATOR_SERVICE_ID:',
     'ZEROPS_SHELL_SERVICE_ID:',
     'ZEROPS_SPICEDB_SERVICE_ID:',
   ]);
+});
+
+it("stops the other Outbox Worker mode's workers after this mode's workers deploy", () => {
+  const workflow = Schema.decodeUnknownSync(DeployWorkflowSchema)(parse(readFileSync(workflowPath, 'utf-8')));
+  const deployZerops = workflow.jobs['deploy-zerops'];
+  const steps = deployZerops.steps.map((step) => step.name);
+  const stop = deployZerops.steps.find((step) => step.name === "Stop the other Outbox Worker mode's workers");
+
+  expect(stop?.run).toContain('active-composition:publish stop-service --setup "$setup"');
+  // A mode switch changes no source, so running workers of the other mode make the plan reconcile.
+  const drift = deployZerops.steps.find(
+    (step) => step.name === 'Detect Outbox Workers that do not match the Outbox Worker mode',
+  );
+  expect(drift?.run).toContain('active-composition:publish worker-mode-drift');
+  expect(steps.indexOf('Detect Outbox Workers that do not match the Outbox Worker mode')).toBeLessThan(
+    steps.indexOf('Generate topology-driven deployment impact plan'),
+  );
+  const plan = deployZerops.steps.find((step) => step.name === 'Generate topology-driven deployment impact plan');
+  expect(plan?.run).toContain('plan_arguments+=(--reconcile-workers)');
+  expect(steps.indexOf("Stop the other Outbox Worker mode's workers")).toBeGreaterThan(
+    steps.indexOf('Publish the complete active Application Composition and restart its consumers'),
+  );
 });
 
 it('starts a dedicated Price Group worker that drains durable pending projections after restart', () => {
@@ -123,7 +153,26 @@ it('starts a dedicated Price Group worker that drains durable pending projection
   expect(worker).toContain(`OUTBOX_WORKER_HEALTH_PORT: '4108'`);
   expect(worker).toContain(runtimeDatabaseUrl);
   expect(worker).toContain(`path: '/ready'`);
-  expect(worker).toContain(`exec npm run serve`);
+  expect(worker).toContain(`exec node worker.mjs`);
+  expect(worker).not.toContain('npm run serve');
+});
+
+it('runs every owner worker in one Outbox Worker host service beside the dedicated workers', () => {
+  const zeropsYaml = readFileSync(zeropsYamlPath, 'utf-8');
+  const host = serviceBlock(zeropsYaml, 'outbox-worker-host');
+
+  expect(host).toContain(`zerops:materialize --app 'outbox-worker-host' --package 'app' --package-dir '.' --worker`);
+  expect(host).toContain(`- 'app/.zerops/runtime/outbox-worker-host'`);
+  expect(host).toContain(`OUTBOX_WORKER_HEALTH_PORT: '4100'`);
+  expect(host).toContain(runtimeDatabaseUrl);
+  // Commerce's worker reaches Price Group Catalog, so the host carries its binding too.
+  expect(host).toContain(`ONTOS_PRICE_GROUP_CATALOG_BASE_URL: 'http://pricegroupcatalog:4108/price-group-catalog-api'`);
+  expect(host).toContain(`test -n "$ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON"`);
+  expect(host.match(/path: '\/ready'/gu)).toHaveLength(2);
+  // The dedicated Outbox Worker mode keeps deploying each owner's own worker.
+  for (const worker of ['party-registry-worker', 'commerce-customer-context-worker', 'price-group-catalog-worker']) {
+    expect(serviceBlock(zeropsYaml, worker)).toContain('--worker');
+  }
 });
 
 it('builds every Node service with the pinned toolchain and ships Node instead of downloading it at start', () => {
@@ -172,16 +221,29 @@ it('ships every package the migrator runs drizzle-kit in', () => {
 });
 
 // Zerops caps hostnames at 25 characters, so stage runs this worker under an abbreviated name.
+// Units that serve no public route: the migrator, the Outbox Worker host and the Cloudflare Tunnel connector.
+const PRIVATE_SETUPS = new Set(['cloudflared', 'migrator', 'outbox-worker-host']);
+const INFRASTRUCTURE_HOSTNAMES = new Set(['db18', 'spicedb']);
+
 const hostnameOf = (setup: string) =>
   setup === 'commerce-customer-context-worker' ? 'commercecstmrcntxtworker' : setup.replaceAll('-', '');
 
 it('declares a public subdomain at service creation for every non-worker unit and never for a worker', () => {
   const units = Schema.decodeUnknownSync(ZeropsYamlSchema)(parse(readFileSync(zeropsYamlPath, 'utf-8'))).zerops.filter(
-    ({ setup }) => setup !== 'migrator' && setup !== 'spicedb',
+    ({ setup }) => setup !== 'spicedb',
   );
-  const { services } = Schema.decodeUnknownSync(ZeropsImportSchema)(
+  const { services: declared } = Schema.decodeUnknownSync(ZeropsImportSchema)(
     parse(readFileSync(new URL('../../zerops-import.yaml', import.meta.url), 'utf-8')),
   );
+  // The shared data plane: PostgreSQL has no unit, and SpiceDB's Docker VM runs the image its unit pins.
+  expect(
+    declared
+      .filter(({ hostname }) => INFRASTRUCTURE_HOSTNAMES.has(hostname))
+      .map(
+        ({ enableSubdomainAccess = false, hostname, type }) => `${hostname} ${type} ${String(enableSubdomainAccess)}`,
+      ),
+  ).toStrictEqual(['db18 postgresql:single@18 false', 'spicedb docker@26.1.5 false']);
+  const services = declared.filter(({ hostname }) => !INFRASTRUCTURE_HOSTNAMES.has(hostname));
   expect(services).toHaveLength(units.length);
   expect(
     new Set(
@@ -190,7 +252,12 @@ it('declares a public subdomain at service creation for every non-worker unit an
       ),
     ),
   ).toEqual(
-    new Set(units.map(({ run, setup }) => `${hostnameOf(setup)} ${run.base} ${String(!setup.endsWith('-worker'))}`)),
+    new Set(
+      units.map(
+        ({ run, setup }) =>
+          `${hostnameOf(setup)} ${run.base} ${String(!setup.endsWith('-worker') && !PRIVATE_SETUPS.has(setup))}`,
+      ),
+    ),
   );
   for (const service of services) {
     expect(service.hostname).toMatch(/^[a-z0-9]{1,25}$/u);
@@ -204,7 +271,7 @@ it('declares a public subdomain at service creation for every non-worker unit an
 
 it('lets stage deploy failures fail the job, tolerating only best-effort log collection', () => {
   const { steps } = Schema.decodeUnknownSync(DeployWorkflowSchema)(parse(readFileSync(workflowPath, 'utf-8'))).jobs[
-    'deploy-stage'
+    'deploy-zerops'
   ];
 
   for (const step of steps) {
@@ -240,3 +307,51 @@ it('binds every browser MicroVertical origin into the Shell build from its Zerop
     expect(shellBuild).toContain(`${cloudflare.publicUrlEnv}: \${${id.replaceAll('-', '')}_zeropsSubdomain}`);
   }
 });
+
+it.effect('pushes every Zerops setup with the deploying environment named in its builds and runtimes', () =>
+  Effect.gen(function* materializedEnvironment() {
+    const zeropsYaml = readFileSync(zeropsYamlPath, 'utf-8');
+    const stageLine = `${DEPLOYMENT_ENVIRONMENT_VARIABLE}: stage`;
+    const stageCount = zeropsYaml.split(stageLine).length - 1;
+    expect(stageCount).toBeGreaterThan(0);
+    // The committed file is stage's, byte for byte.
+    expect(yield* materializeZeropsEnvironment(zeropsYaml, { environment: 'stage' })).toBe(zeropsYaml);
+    // Production names itself and reaches its TLS SpiceDB endpoint, and changes nothing else.
+    const productionEndpoint = 'spicedb.production.example:443';
+    const production = yield* materializeZeropsEnvironment(zeropsYaml, {
+      environment: 'production',
+      spiceDbEndpoint: productionEndpoint,
+    });
+    const stageEndpointLine = `${SPICEDB_ENDPOINT_VARIABLE}: 'spicedb:50051'`;
+    const productionEndpointLine = `${SPICEDB_ENDPOINT_VARIABLE}: '${productionEndpoint}'`;
+    const certificateLine = `SPICEDB_CA_CERT: \${spicedb_SPICEDB_GRPC_TLS_CERT}`;
+    expect(production.includes(stageLine)).toBe(false);
+    expect(production.includes(stageEndpointLine)).toBe(false);
+    // Every runtime keeps pinning the gRPC certificate; nothing reaches SpiceDB in plaintext.
+    expect(production.split(certificateLine).length - 1).toBe(zeropsYaml.split(stageEndpointLine).length - 1);
+    expect(production.includes('SPICEDB_INSECURE')).toBe(false);
+    expect(production.split(`${DEPLOYMENT_ENVIRONMENT_VARIABLE}: production`).length - 1).toBe(stageCount);
+    expect(production.split(productionEndpointLine).length - 1).toBe(zeropsYaml.split(stageEndpointLine).length - 1);
+    expect(
+      production
+        .replaceAll(`${DEPLOYMENT_ENVIRONMENT_VARIABLE}: production`, stageLine)
+        .replaceAll(productionEndpointLine, stageEndpointLine),
+    ).toBe(zeropsYaml);
+    const missing = yield* Effect.flip(
+      materializeZeropsEnvironment('zerops:\n  - setup: api\n', { environment: 'stage' }),
+    );
+    expect(missing.message).toContain(DEPLOYMENT_ENVIRONMENT_VARIABLE);
+    const schemeEndpoint = yield* Effect.flip(
+      materializeZeropsEnvironment(zeropsYaml, { environment: 'production', spiceDbEndpoint: 'https://spicedb:443' }),
+    );
+    expect(schemeEndpoint.message).toContain('host:port');
+
+    const workflow = readFileSync(workflowPath, 'utf-8');
+    expect(workflow).not.toContain('--zerops-yaml-path app/zerops.yaml');
+    expect(workflow).toContain('zerops:materialize-environment');
+    expect(workflow).toContain('--environment "$DEPLOY_ENVIRONMENT"');
+    expect(workflow).toContain('--spicedb-endpoint "$PRODUCTION_SPICEDB_ENDPOINT"');
+    const pushUnits = readFileSync(new URL('../push-zerops-units.sh', import.meta.url), 'utf-8');
+    expect(pushUnits).toContain('--zerops-yaml-path "$ZEROPS_YAML_PATH"');
+  }),
+);

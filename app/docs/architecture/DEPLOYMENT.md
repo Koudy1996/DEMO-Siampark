@@ -4,7 +4,7 @@ This playbook is the authoritative release guidance for OntOS application delive
 
 > [!IMPORTANT] Explicit `implementationId`, dependency-closure selection, public-contract hashes, migration-set identity, and full artifact metadata are accepted target architecture, not fields in the current manifest/catalog schema. Requirements below that name them become mandatory with that contract. Until then, releases use one implicit `standard` implementation per `moduleId` and the current generated `buildMarker`; do not simulate missing fields with ad hoc configuration.
 
-Application Composition validation and stage publication are implemented; live Shell loading is not. After providers and Shell deploy, the stage workflow observes the deployed artifacts and publishes the active snapshot as the `ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON` Zerops project variable, deploys the composition consumers on it, then publishes the complete inventory and restarts them; a scheduled workflow re-publishes it before it expires (see ADR-0020). Until #374–#377 wire those paths in, remote URL and generated lazy-registry changes still require Shell regeneration and redeployment. The composition promotion sequence below is the target flow.
+Application Composition validation and stage publication are implemented; live Shell loading is not. After the delivery units deploy, the deploy workflow observes the deployed artifacts and publishes the active snapshot as the `ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON` Zerops project variable, deploys the composition consumers on it, then publishes the complete inventory and restarts them; a scheduled workflow re-publishes it before it expires (see ADR-0020). Until #374–#377 wire those paths in, remote URL and generated lazy-registry changes still require Shell regeneration and redeployment. The composition promotion sequence below is the target flow.
 
 The rules exist because the first Zerops stage rollout was merged after source-level validation and then required 43 linear repair commits. Stage had become the first production-shaped integration test. Future releases must prove the target artifact and the distributed user journey before promotion.
 
@@ -208,6 +208,79 @@ Use this sequence for a new or changed MicroVertical:
 
 Do not report release success before all required smoke checks pass.
 
+### Deploy target per environment
+
+One workflow deploys every GitHub deployment environment. Each environment chooses where its
+delivery units run with its `DEPLOY_TARGET` variable, and how its Outbox Workers run on Zerops with
+its required `OUTBOX_WORKER_MODE` variable (`dedicated` or `host`, see
+[Outbox Workers](./OUTBOX_WORKERS.md)). The two are independent:
+
+| Environment  | `DEPLOY_TARGET`   | What deploys                                                                                                                                                                                                                          |
+| ------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stage`      | unset or `zerops` | The whole Zerops topology: migrator, SpiceDB, every vertical, its outbox worker and the Shell, each with its own `ZEROPS_*_SERVICE_ID`. Placed units also deploy as Workers when the edge deploy is configured (a shadow deployment). |
+| `stage`      | `cloudflare`      | On Zerops only the migrator, SpiceDB and the outbox workers; every placed unit as a Cloudflare Worker (`deploy-cloudflare`).                                                                                                          |
+| `production` | unset or `zerops` | The whole Zerops topology from `production`'s own variables and secrets. `cloudflare` is rejected: only stage has an edge deploy history (`stage-edge`) and a reviewed edge build environment.                                        |
+
+The deployment planner always emits both plans from the same topology: the Zerops phases (`phases`,
+`units.providers` with each vertical's outbox worker, `units.shell`, `units.workers`) and the edge
+units (`units.cloudflare`). The workflow picks by target, so neither path depends on the other and
+tests assert both for the same diffs. Nothing on the Zerops path is removed for the Cloudflare
+target: `zerops.yaml`, `zerops-import.yaml`, the generators, the materializers and the push script
+keep deploying every environment that targets Zerops.
+
+| Environment  | `OUTBOX_WORKER_MODE` | Outbox Workers on Zerops                                                         |
+| ------------ | -------------------- | -------------------------------------------------------------------------------- |
+| `stage`      | `host`               | Every owner's worker in the one `outbox-worker-host` process, the cheap choice.  |
+| `production` | `dedicated`          | One `<owner>-worker` service per owner, deployed and failing independently (HA). |
+
+Before the Cloudflare cut-over stage runs `dedicated`, the workers it has today; `cloudflare-stage-cutover.mts
+activate` switches it to `host` beside `DEPLOY_TARGET=cloudflare`. A preview or demo environment on
+Zerops can equally run `host`.
+
+`deploy-target` reads `DEPLOY_TARGET`, `OUTBOX_WORKER_MODE`, `ZEROPS_PROJECT_ID` and the `ZEROPS_TOKEN`
+secret from the deploying environment without creating a deployment. An invalid target or mode fails
+the run, and so does a configured environment without `OUTBOX_WORKER_MODE`: it has no default. An
+environment without its Zerops project or token deploys nothing and records nothing. `deploy-zerops`
+then runs in that environment: it plans from the environment's last successful deployment and
+promotes authorization for that environment (`--authorization-environment`), so production needs its
+own enforced authorization evidence and context. Pushes to `main` deploy `stage`. Production deploys
+only on an explicit dispatch:
+
+```sh
+gh workflow run ultramodern-workspace-gates.yml --ref main -f environment=production -f full=true
+```
+
+Create `production` once, outside CI, before the first dispatch, with the operator script in
+[Create production](#create-production). Leave `DEPLOY_TARGET` unset or `zerops`, and keep
+`OUTBOX_WORKER_MODE=dedicated`, which the script records. The first production deploy has no base, so dispatch it with `full=true`.
+
+`zerops.yaml` describes stage. Before any push, `deploy-zerops` writes a copy that sets
+`ULTRAMODERN_DEPLOYMENT_ENVIRONMENT` to the deploying environment in every build and runtime that
+names it (`pnpm zerops:materialize-environment`), and every `zcli push` reads that copy. Production
+therefore never runs stage-only behaviour. Every runtime reaches SpiceDB over TLS gRPC and pins
+`SPICEDB_CA_CERT`, which `zerops.yaml` takes from the `spicedb` service's `SPICEDB_GRPC_TLS_CERT`
+secret; there is no plaintext mode. Production's copy sets every `SPICEDB_ENDPOINT` to production's
+`SPICEDB_ENDPOINT` variable, so production's SpiceDB gRPC certificate must name that host. A
+production deploy without that variable fails before it pushes anything. The
+scheduled composition refresh has a `refresh-production` lane beside `refresh-stage`, in production's
+own environment and `zerops-production` concurrency group; it publishes nothing until production is
+configured and has deployed once.
+
+The composition publisher resolves each unit's public origin by target: the Zerops subdomain of its
+service on `zerops`, and on `cloudflare` the Worker URL its edge build is given
+(`ULTRAMODERN_PUBLIC_URL_<UNIT>` in the placement `buildEnvironment`). On `cloudflare` it restarts
+only the consumers that remain on Zerops (the Outbox Workers of the environment's mode). `deploy-zerops` does not publish
+on `cloudflare`, because a new or moved Worker is unobservable until `deploy-cloudflare` ships it;
+`publish-edge-composition` publishes from the new Workers afterwards. A placed Worker that consumes
+the snapshot (Commerce Customer Context) has no Zerops project variable, so `sync-edge-composition`,
+and `refresh-stage-edge` after each scheduled refresh, put every publication as its
+`ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON` Worker secret from `stage-edge`
+(`scripts/put-edge-composition-snapshot.sh`).
+
+Switching stage between targets is one variable: set `DEPLOY_TARGET` on `stage` and dispatch
+`full=true`. Its other variables and secrets never change. A stage on `cloudflare` whose edge deploy
+is not configured fails in `edge-deploy-readiness`, before `deploy-zerops` changes anything on Zerops.
+
 ### Edge units on Cloudflare Workers
 
 `topology/cloudflare-placement.json` lists the delivery units CI also ships as Cloudflare Workers;
@@ -216,12 +289,16 @@ deployable on its own. Every vertical (UI and headless API) and the Shell are pl
 Worker the Shell binds as a service is placed too. The deployment planner emits the placed,
 impacted units as `units.cloudflare` in dependency order (providers before Shell).
 
-The edge deploy is additive. The Zerops deploy (`deploy-stage`: migrator, SpiceDB, providers,
-workers and Shell) is unchanged and keeps working for every environment that targets Zerops. The
-edge deploy runs only for an environment configured for Cloudflare (below); which target an
-environment serves is decided per GitHub environment, not by this job.
+The edge deploy runs only for `stage`, and only when it is configured (below). On the `zerops` target
+it is additive; on the `cloudflare` target it is how the placed units reach stage.
+In the `host` Outbox Worker mode, whatever the target, `deploy-zerops` deploys the one
+`outbox-worker-host` service (`ZEROPS_OUTBOX_WORKER_HOST_SERVICE_ID`) instead of each owner's
+dedicated worker service; see [Outbox Workers](./OUTBOX_WORKERS.md). The run that deploys one mode's
+workers stops the other mode's. A switch changes no source, so each deploy first checks whether the
+other mode's workers still run or this mode's do not (`active-composition:publish worker-mode-drift`);
+when either holds, the plan deploys every worker of this mode, whatever the diff, and stops the others.
 
-The `deploy-cloudflare` job runs after `deploy-stage` has migrated the database, in its own
+The `deploy-cloudflare` job runs after `deploy-zerops` has migrated the database, in its own
 `stage-edge` environment. It resolves the last successful `stage-edge` deployment, plans the diff
 from there, and ships the planned units in three passes: build and verify every unit (each unit's
 `cloudflare:deploy` up to its final `wrangler deploy`), deploy them with Wrangler in plan order, then
@@ -298,6 +375,215 @@ after `pnpm cloudflare:build`, `pnpm db:migrate` and `pnpm local:initialize`. Th
 The first edge deploy has no previous edge deployment, so seed it with a full run:
 `gh workflow run ultramodern-workspace-gates.yml --ref main -f full=true`. Placement adds the Worker
 delivery; it never removes a Zerops service or any GitHub environment variable or secret.
+
+## Stage cut-over and Zerops service retirement
+
+Two operator scripts own the one-time account and service changes around the Cloudflare stage. Run
+them from `app/` on a clean `main`. Both read before they write, so a re-run after a partial failure
+converges, and `--dry-run` performs every read and prints each mutation instead of running it. Zerops
+is reached through the locally authenticated `zcli` and GitHub through `gh`. Secret values stay in
+memory: they reach Cloudflare in request bodies, Wrangler and `zcli` on standard input, and never
+appear in a command line or in the output.
+
+`node scripts/ops/cloudflare-stage-cutover.mts <step> [--dry-run] [--env-file <path>]` reads
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `STAGE_ZONE` and `STAGE_SHELL_HOSTNAME` from the
+environment, or else from the dotenv file `~/.cloudflare-ontos-stage-token`. The optional
+`CLOUDFLARE_STAGE_EDGE_API_TOKEN` is the narrower token CI receives. Without it, CI receives
+`CLOUDFLARE_API_TOKEN`. The SpiceDB TLS step also needs `ZEROPS_TOKEN`, because `zcli` cannot set
+service secrets, and a `CLOUDFLARE_API_TOKEN` with the stage zone permission "SSL and
+Certificates: Edit" for the Origin CA.
+
+- `spicedb-tls` creates the SpiceDB TLS material as sensitive secrets on the Zerops `spicedb` service,
+  and `provision` runs it first. The gRPC pair `SPICEDB_GRPC_TLS_CERT`/`SPICEDB_GRPC_TLS_KEY` is a
+  self-signed certificate for `spicedb`, `localhost` and `127.0.0.1` that Node clients pin. The HTTP
+  gateway pair `SPICEDB_HTTP_TLS_CERT`/`SPICEDB_HTTP_TLS_KEY` is a Cloudflare Origin CA certificate
+  for `ontos-stage-spicedb.<STAGE_ZONE>`, the server name Workers VPC verifies; it needs no DNS record.
+  A pair that exists and holds is kept. A partial pair, a wrong name, a mismatched key or a
+  certificate expiring within 30 days fails with the pair to remove, instead of rotating silently.
+- `provision` runs every step in dependency order. It creates or reuses the remotely managed Tunnel
+  `ontos-stage`. It imports `cloudflared` from `zerops-import.yaml`, with the tunnel connector token
+  as its `TUNNEL_TOKEN` secret, and imports `outboxworkerhost`. It records their `ZEROPS_*_SERVICE_ID`
+  stage variables and deploys `cloudflared`, then waits until the tunnel is healthy. Next it creates
+  the Workers VPC services `ontos-stage-db18` (tcp `db18:5432`) and `ontos-stage-spicedb` (HTTPS
+  `spicedb:8443`, certificate verification `verify_full`), and Hyperdrive `ontos-stage-runtime`: role `ontos_runtime`, caching disabled,
+  origin connection limit 40, and the password read from Zerops `db18_password`. It writes the IDs
+  and stage origins into this placement's `buildEnvironment` for a reviewed PR. It sets the
+  `stage-edge` variable `CLOUDFLARE_ACCOUNT_ID` and secret `CLOUDFLARE_API_TOKEN`. Last, it sets every
+  placed Worker's secrets with `wrangler secret bulk`, from the Zerops values the Node services use
+  today, plus `ULTRAMODERN_DEPLOYMENT_ENVIRONMENT=stage`, because the Worker build's environment never
+  reaches the Worker's runtime. A Worker's `SPICEDB_ENDPOINT` is the gateway name
+  `ontos-stage-spicedb.<STAGE_ZONE>`, which the VPC service verifies. An existing object that differs from the runbook fails the step instead of being reused.
+- `cost-guards` repeats only the cost-guard step, which `provision` runs after the `stage-edge`
+  settings (see [Stage cost guards](#stage-cost-guards)).
+- `resume` turns the cost kill switch off again.
+- `worker-secrets` repeats only the Worker secrets step.
+- `verify` runs the cut-over checklist and changes nothing. The tunnel must be healthy, and both
+  SpiceDB TLS pairs must exist and hold. Both VPC
+  services and Hyperdrive must match the runbook, and the reviewed `buildEnvironment` must name
+  them. Every placed Worker must exist and hold each runtime secret `provision` plans for it, and the latest `stage-edge` deployment, which includes
+  `cloudflare:proof`, must have succeeded for the checked-out revision. Once `stage` targets
+  Cloudflare, every Worker that consumes the active application composition must also hold the
+  `ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON` secret, which the stage deploy's composition
+  sync writes. Before activation `verify` only reports that check as waiting, so run it again after
+  `activate` and the full deploy, and move DNS only when it passes.
+- `activate` runs `verify` and, only when every item holds, sets `OUTBOX_WORKER_MODE=host` and
+  `DEPLOY_TARGET=cloudflare` on `stage`. `provision` created the host service it needs.
+
+### Stage cost guards
+
+Stage runs on Workers Paid ($5 a month, which includes 10M requests and 30M CPU ms). That allowance
+covers the whole Cloudflare account, which also runs other projects' Workers, and the stage zone is
+shared with them. So the guards measure account-wide usage but only ever change OntOS stage objects. The cut-over script also reads `STAGE_ACCESS_EMAILS` (required, a comma-separated
+list of the people Access admits and the usage notification emails) and `STAGE_ACCESS_ENFORCE_SHELL`
+(default `false`).
+
+- Every Worker config sets `workers_dev: false` and `preview_urls: false`, so the only way in is the
+  zone routes the guards cover, and caps CPU per request at 200 ms for the Shell and 100 ms for a
+  vertical (`CLOUDFLARE_WORKER_CPU_MS` in `packages/shared-contracts/tooling/modern-config.ts`).
+  Nothing has been measured yet; raise a cap when a real request hits it.
+- A WAF custom rule `ontos_stage_kill_switch` blocks exactly the placed OntOS stage hostnames. It is
+  added next to any rules other projects keep in the zone, created disabled, and re-runs keep its
+  current state. The WAF answers before a Worker runs, so blocked requests are never billed. There is
+  no rate-limit rule: on the Free plan a rate-limit expression cannot match a hostname, so it would
+  throttle every other project in the zone. `cost-guards` also records the zone as the `stage-edge` variable
+  `CLOUDFLARE_STAGE_ZONE_ID`.
+- The hourly `.github/workflows/stage-edge-cost-guard.yml` runs
+  `node scripts/ops/cloudflare-stage-cost-guard.mts check` once that variable exists. It sums the
+  whole account's Workers requests and CPU time since the billing cycle started, and logs each OntOS
+  Worker's share and the other Workers' total (`STAGE_BILLING_CYCLE_DAY`,
+  1-28, default 1). Past `STAGE_WORKERS_REQUEST_LIMIT` (default 8M) or `STAGE_WORKERS_CPU_MS_LIMIT`
+  (default 24M), it enables the kill switch and fails the run. All three are optional `stage-edge`
+  variables. The kill switch only stops OntOS stage traffic: if the breakdown shows other projects
+  drive the usage, they need their own action.
+- The Workers requests usage notification `ontos-stage-workers-requests` emails the Access people at
+  5M requests. Cloudflare offers usage notifications to Pay-as-you-go accounts, which a Workers Paid
+  account is. If the API still rejects the policy, `cost-guards` and `provision` stop there with the
+  Cloudflare error; the notification is the last guard, so the kill switch and Access are already in
+  place.
+- Access: a reusable people policy `ontos-stage-people`, a service token `ontos-stage-ci` (one-year
+  duration) and a policy `ontos-stage-ci-token` for it. `stage-edge` holds the token as the secrets
+  `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET`; when they are missing, a
+  re-run rotates the token to recover the secret. Enable Zero Trust once in the dashboard (the Free
+  plan covers 50 people) before the first run; until then Cloudflare answers
+  `access.api.error.not_enabled`, `cost-guards` stops with that to-do, and `verify` reports it.
+
+Only with `STAGE_ACCESS_ENFORCE_SHELL=true` does `cost-guards` put the Shell hostname behind the
+Access application `ontos-stage-shell`, with `ontos-stage-shell-gateway` bypassing
+`/shell-super-app-api/auth/api-key/gateway-context`, which verticals call with an API key. Keep it
+off for now: `cloudflare:proof` probes the Shell with plain `fetch`, cannot send the service token
+headers, and would fail every stage deploy. Vertical hostnames stay outside Access for good, since the
+browser loads their federated remotes cross-origin without credentials; the CPU caps and the kill
+switch cover them.
+
+To resume after the kill switch trips, find out why, then run
+`node scripts/ops/cloudflare-stage-cutover.mts resume` (the check trips it again within the hour if
+usage is still over the limit, so raise the limit variables or wait for the next cycle). To undo the
+guards, delete the kill switch rule and the notification in the dashboard and remove the Access
+applications; deleting `CLOUDFLARE_STAGE_ZONE_ID` stops the hourly check.
+
+The cut-over token needs these permissions. Account: Cloudflare Tunnel Edit, Workers Scripts Edit,
+Hyperdrive Edit, Connectivity Directory Admin, Access: Apps and Policies Edit, Access: Service Tokens
+Edit, Notifications Edit, Account Analytics Read and Account Settings Read. Zone: Zone Read, DNS
+Edit, Workers Routes Edit and Zone WAF Edit. The narrower `stage-edge` token additionally needs
+Account Analytics Read and Zone WAF Edit for the hourly check.
+
+### Zerops service retirement
+
+`node scripts/ops/stage-zerops-services.mts retire|restore [--dry-run]` handles the 9 stage
+application services that Cloudflare mode no longer uses. The migrator, SpiceDB, `outboxworkerhost`
+and the 3 per-vertical outbox workers stay: the workers remain stopped, and the deploy workflow reads
+their status to reconcile Outbox Workers after an Outbox Worker mode switch. The script never changes
+`zerops.yaml`, `zerops-import.yaml`, a deploy script, or a GitHub variable.
+
+- `retire` records each service in the versioned file `scripts/ops/stage-zerops-retirement.json`:
+  its ID, status, `zerops-import.yaml` entry and stage service-ID variable. It also records the KEYS
+  of its variables, split three ways: keys the setup's `run.envVariables` declares, keys inherited
+  from the project, and service-level secrets. Values are never recorded. Commit the file. With
+  `--confirm`, `retire` then deletes each service with `zcli service delete`. It refuses to delete
+  until `stage` deploys with `DEPLOY_TARGET=cloudflare` and `--dns-cut-over` confirms the stage
+  hostnames already route to the Workers, which `cloudflare-stage-cutover.mts verify` checked first. `DEPLOY_TARGET`
+  only chooses where CI deploys; moving the hostnames is a DNS step outside this repository.
+  A re-run keeps the records of services that are already gone.
+- `restore --secrets-file <vault export>` re-imports every recorded service that `zerops-import.yaml`
+  still declares. It passes each service's secrets as import `envSecrets`, read from a dotenv export
+  of the vault keyed `<hostname>_<KEY>`, the names `zcli project env` shows. The export is parsed with dotenv rules, so JSON values such as the private JWK belong in single quotes. Today those secrets are
+  `ONTOS_GATEWAY_PUBLIC_JWKS` on each vertical, plus `BETTER_AUTH_SECRET`,
+  `BETTER_AUTH_TRUSTED_ORIGINS`, `BETTER_AUTH_URL` and `ONTOS_GATEWAY_PRIVATE_JWK` on the Shell. If
+  the file lacks any recorded secret, `restore` changes nothing. Otherwise it points every stage
+  `ZEROPS_*_SERVICE_ID` at the new service (and fails, changing no variable, if Zerops does not list one), sets `DEPLOY_TARGET=zerops` and dispatches the full
+  Zerops deploy. Moving the Shell hostname back to Zerops remains a DNS step.
+
+## Create production
+
+Stage stays cheap: `zerops-import.yaml` declares its services in single-container mode
+(`postgresql:single@18`, one container per runtime). Production runs the same topology in high
+availability. `node scripts/ops/production-environment.mts` derives production's import from
+`zerops-import.yaml` instead of keeping a second copy:
+
+- every managed service switches from `:single` to `:ha` (`db18` becomes `postgresql:ha@18`);
+- every runtime service runs at least 2 containers, except the migrator, which runs once per deploy;
+- `cloudflared` and `outboxworkerhost` are left out: they serve only stage's Cloudflare target, and
+  production runs each owner's dedicated outbox worker.
+
+`render-import` prints that import without secrets, for review. `provision` builds production. Run
+it from `app/` on a clean `main`. Like the stage scripts, it reads before it writes, so a re-run after
+a partial failure converges, and `--dry-run` performs every read and prints each mutation instead of
+running it. It reaches Zerops through the locally authenticated `zcli` and GitHub through `gh`. It
+never deletes a service, variable or secret, and never touches `stage` or `stage-edge`.
+
+Before running it:
+
+1. Log `zcli` in with an account that may create projects in the stage project's organization.
+2. Create a Zerops access token for production CI.
+3. Export the supplied service secrets from the vault as a dotenv file keyed `<hostname>_<KEY>`,
+   with JSON values in single quotes: `shellsuperapp_BETTER_AUTH_URL`,
+   `shellsuperapp_BETTER_AUTH_TRUSTED_ORIGINS`, `shellsuperapp_ONTOS_GATEWAY_PRIVATE_JWK`, and
+   `<vertical>_ONTOS_GATEWAY_PUBLIC_JWKS` for each vertical with a public subdomain. Production needs
+   its own gateway key pair and auth origin, not stage's.
+
+```sh
+cd app
+printf %s "$PRODUCTION_ZEROPS_TOKEN" | node scripts/ops/production-environment.mts provision \
+  --spicedb-endpoint <host:port> --secrets-file <vault export> --zerops-token-stdin --dry-run
+# review the plan, then run the same command without --dry-run
+```
+
+`provision` does this, in order:
+
+1. Creates the GitHub environment `production` when it is missing, deployable only from `main`, with
+   no required reviewers.
+2. Finds the production project: the one `ZEROPS_PROJECT_ID` names, else the one named
+   `ontos-production`, else creates `ontos-production` in Serious core mode, in the stage project's
+   organization (`--org-id` overrides). It refuses a `ZEROPS_PROJECT_ID` that names the stage project.
+3. Imports the services the project lacks, with their secrets. Zerops generates
+   `BETTER_AUTH_SECRET` on the Shell and `SPICEDB_DATABASE_PASSWORD` and
+   `SPICEDB_GRPC_PRESHARED_KEY` on SpiceDB at import (`#yamlPreprocessor=on`); the rest come from the
+   vault export. If the export lacks one, nothing is imported. A service-ID variable that already
+   names a different service fails the run.
+4. Sets only the `production` variables that differ, once Zerops lists every service:
+
+   | Variable                                                  | Value                                                                           |
+   | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+   | `ZEROPS_PROJECT_ID`                                       | the production project                                                          |
+   | `ZEROPS_MIGRATOR_SERVICE_ID`, `ZEROPS_SPICEDB_SERVICE_ID` | the migrator and SpiceDB                                                        |
+   | `ZEROPS_SHELL_SERVICE_ID`                                 | the Shell                                                                       |
+   | `ZEROPS_<SETUP>_SERVICE_ID`                               | each vertical and each outbox worker, named after its `zerops.yaml` setup       |
+   | `SPICEDB_ENDPOINT`                                        | `--spicedb-endpoint`, the `host:port` of production's TLS SpiceDB gRPC endpoint |
+   | `DEPLOY_TARGET`                                           | `zerops`                                                                        |
+   | `OUTBOX_WORKER_MODE`                                      | `dedicated`, one worker service per owner                                       |
+
+5. Sets the `ZEROPS_TOKEN` secret from standard input when `--zerops-token-stdin` is given. Until
+   `production` holds that secret, the flag is required and the run fails before changing anything.
+
+`provision` does not set Zerops project variables. Before the first deploy, set on the production
+project the values stage holds at project scope, with production's own origins:
+`MODERN_PUBLIC_SITE_URL`, `ONTOS_GATEWAY_ISSUER` and `ULTRAMODERN_MF_DEV_ORIGIN`. Production also needs its own enforced authorization evidence and
+context (see [Fail-closed authorization promotion](#fail-closed-authorization-promotion)). Then
+dispatch the first production deploy:
+
+```sh
+gh workflow run ultramodern-workspace-gates.yml --ref main -f environment=production -f full=true
+```
 
 ## Required smoke suite
 

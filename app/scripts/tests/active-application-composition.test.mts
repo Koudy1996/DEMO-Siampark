@@ -22,7 +22,16 @@ import type {
   ObservedArtifact,
   ObservedModuleDeployment,
 } from '../active-application-composition.mts';
-import { compositionConsumerSetups, serviceIdVariable } from '../publish-active-application-composition.mts';
+import {
+  cloudflareOrigin,
+  cloudflarePublicUrlVariable,
+  compositionConsumerSetups,
+  edgeCompositionConsumers,
+  modeWorkerSetups,
+  otherModeWorkerSetups,
+  serviceIdVariable,
+  targetConsumerSetups,
+} from '../publish-active-application-composition.mts';
 import { shellRuntimeContract } from '../generate-ontos-shell-runtime-contract.mts';
 import { parseZeropsEnvFile } from '../zerops-public-api.mts';
 
@@ -114,10 +123,18 @@ const governedShared = shared([
 const PARTY_REGISTRY = 'party-registry';
 const PARTY_REMOTE = 'verticalPartyRegistry';
 const CUSTOMER_CONTEXT = 'commerce-customer-context';
+const OUTBOX_WORKER_HOST_SETUP = 'outbox-worker-host';
+const PRICE_GROUP_CATALOG = 'price-group-catalog';
+const CUSTOMER_CONTEXT_WORKER = 'commerce-customer-context-worker';
 const PARTY_MODULE = 'party.registry';
 const PAGE_EXPOSE = './PageContacts';
 const SHELL_MANIFEST_URL = 'https://shell.example/mf-manifest.json';
+const refreshWorkflowUrl = new URL(
+  '../../../.github/workflows/active-application-composition-refresh.yml',
+  import.meta.url,
+);
 const SHELL_REMOTE = 'shellSuperApp';
+const SHELL_APP = 'shell-super-app';
 
 const partyRegistry: ObservedModuleDeployment = {
   appId: PARTY_REGISTRY,
@@ -319,17 +336,103 @@ it.effect('rejects conflicting writes under one revision and forged revisions', 
   }),
 );
 
-it.effect('restarts exactly the services whose start preflight requires the snapshot', () =>
+const readReferenceTopology = () =>
+  Schema.decodeUnknownSync(
+    Schema.fromJsonString(
+      Schema.Struct({
+        verticals: Schema.Array(
+          Schema.Struct({
+            cloudflare: Schema.optionalKey(Schema.Struct({ workerName: Schema.optionalKey(Schema.String) })),
+            id: Schema.String,
+            package: Schema.optionalKey(Schema.String),
+          }),
+        ),
+      }),
+    ),
+  )(readFileSync(new URL('../../topology/reference-topology.json', import.meta.url), 'utf-8'));
+
+it.effect('restarts exactly the Outbox Worker mode services whose start preflight requires the snapshot', () =>
   Effect.gen(function* consumers() {
     const zeropsYaml = readFileSync(new URL('../../zerops.yaml', import.meta.url), 'utf-8');
-    expect(yield* compositionConsumerSetups(zeropsYaml)).toEqual([
-      'commerce-customer-context',
-      'commerce-customer-context-worker',
+    const topology = readReferenceTopology();
+    expect(yield* compositionConsumerSetups(zeropsYaml, topology, 'dedicated')).toEqual([
+      CUSTOMER_CONTEXT,
+      CUSTOMER_CONTEXT_WORKER,
     ]);
-    expect(serviceIdVariable('commerce-customer-context-worker')).toBe(
-      'ZEROPS_COMMERCE_CUSTOMER_CONTEXT_WORKER_SERVICE_ID',
+    // The host mode runs the Commerce worker in the Outbox Worker host in place of its dedicated service.
+    expect(yield* compositionConsumerSetups(zeropsYaml, topology, 'host')).toEqual([
+      CUSTOMER_CONTEXT,
+      OUTBOX_WORKER_HOST_SETUP,
+    ]);
+    // A mode switch leaves these running; the deploy detects them to reconcile the workers of both modes.
+    expect(yield* otherModeWorkerSetups(zeropsYaml, topology, 'dedicated')).toEqual([OUTBOX_WORKER_HOST_SETUP]);
+    expect(yield* otherModeWorkerSetups(zeropsYaml, topology, 'host')).toEqual([
+      'party-registry-worker',
+      CUSTOMER_CONTEXT_WORKER,
+      'price-group-catalog-worker',
+    ]);
+    // A switch also shows as this mode's workers not running yet.
+    expect(yield* modeWorkerSetups(zeropsYaml, topology, 'host')).toEqual([OUTBOX_WORKER_HOST_SETUP]);
+    expect(yield* modeWorkerSetups(zeropsYaml, topology, 'dedicated')).toEqual(
+      yield* otherModeWorkerSetups(zeropsYaml, topology, 'host'),
     );
+    expect(serviceIdVariable(OUTBOX_WORKER_HOST_SETUP)).toBe('ZEROPS_OUTBOX_WORKER_HOST_SERVICE_ID');
+    expect(serviceIdVariable(CUSTOMER_CONTEXT_WORKER)).toBe('ZEROPS_COMMERCE_CUSTOMER_CONTEXT_WORKER_SERVICE_ID');
     expect(serviceIdVariable('shellsuperapp')).toBe('ZEROPS_SHELL_SERVICE_ID');
+  }),
+);
+
+it.effect('restarts only the Zerops-hosted consumers of each deploy target in either Outbox Worker mode', () =>
+  Effect.gen(function* consumersPerTarget() {
+    const zeropsYaml = readFileSync(new URL('../../zerops.yaml', import.meta.url), 'utf-8');
+    const topology = readReferenceTopology();
+    const deliveryUnits = new Set([CUSTOMER_CONTEXT, 'shellsuperapp']);
+    const consumersOf = (target: 'cloudflare' | 'zerops', mode: 'dedicated' | 'host') =>
+      compositionConsumerSetups(zeropsYaml, topology, mode).pipe(
+        Effect.map((consumers) => targetConsumerSetups(consumers, target, deliveryUnits)),
+      );
+    // On Zerops every consumer is a Zerops service; on Cloudflare the vertical runs as a Worker, and
+    // only the mode's Outbox Workers stay on Zerops to be restarted. The mode is independent of the target.
+    expect(yield* consumersOf('zerops', 'dedicated')).toEqual([CUSTOMER_CONTEXT, CUSTOMER_CONTEXT_WORKER]);
+    expect(yield* consumersOf('zerops', 'host')).toEqual([CUSTOMER_CONTEXT, OUTBOX_WORKER_HOST_SETUP]);
+    expect(yield* consumersOf('cloudflare', 'host')).toEqual([OUTBOX_WORKER_HOST_SETUP]);
+    expect(yield* consumersOf('cloudflare', 'dedicated')).toEqual([CUSTOMER_CONTEXT_WORKER]);
+  }),
+);
+
+it('hands each publication to the placed Worker consumers, which have no Zerops project variable', () => {
+  const topology = readReferenceTopology();
+  const placement = { buildEnvironment: {}, units: [CUSTOMER_CONTEXT, PRICE_GROUP_CATALOG] };
+
+  expect(edgeCompositionConsumers([CUSTOMER_CONTEXT, OUTBOX_WORKER_HOST_SETUP], topology, placement)).toEqual([
+    { packageName: '@app/commerce-customer-context', workerName: 'app-commerce-customer-context' },
+  ]);
+  // A consumer that is not placed stays a Zerops service and reads the project variable.
+  expect(edgeCompositionConsumers([CUSTOMER_CONTEXT], topology, { buildEnvironment: {}, units: [] })).toEqual([]);
+});
+
+it.effect('observes a placed unit on Cloudflare at the Worker URL its edge build is given', () =>
+  Effect.gen(function* cloudflareOrigins() {
+    const placement = {
+      buildEnvironment: {
+        ULTRAMODERN_PUBLIC_URL_PRICE_GROUP_CATALOG: 'https://price-group-catalog.example.workers.dev',
+        ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP: 'https://stage.example.test',
+      },
+      units: [PRICE_GROUP_CATALOG, SHELL_APP],
+    };
+    expect(cloudflarePublicUrlVariable(SHELL_APP)).toBe('ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP');
+    expect(yield* cloudflareOrigin(placement, PRICE_GROUP_CATALOG)).toBe(
+      'https://price-group-catalog.example.workers.dev',
+    );
+    expect(yield* cloudflareOrigin(placement, SHELL_APP)).toBe('https://stage.example.test');
+    // An unplaced unit, or a placed one without its public URL, has no Worker to observe.
+    for (const appId of ['catalog', 'pricing']) {
+      const failure = yield* Effect.flip(
+        cloudflareOrigin({ ...placement, units: [...placement.units, 'pricing'] }, appId),
+      );
+      expect(failure.reason).toBe('invalid_observation');
+      expect(failure.message).toContain(`buildEnvironment.${cloudflarePublicUrlVariable(appId)}`);
+    }
   }),
 );
 
@@ -338,16 +441,75 @@ it('refreshes well inside the validity window on the configured schedule', () =>
   expect(Duration.toMillis(validity)).toBeGreaterThanOrEqual(3 * Duration.toMillis(refreshInterval));
   const workflow = Schema.decodeUnknownSync(
     Schema.Struct({ on: Schema.Struct({ schedule: Schema.Array(Schema.Struct({ cron: Schema.String })) }) }),
-  )(
-    parse(
-      readFileSync(
-        new URL('../../../.github/workflows/active-application-composition-refresh.yml', import.meta.url),
-        'utf-8',
-      ),
-    ),
-  );
+  )(parse(readFileSync(refreshWorkflowUrl, 'utf-8')));
   expect(workflow.on.schedule).toEqual([{ cron: refreshCron }]);
   expect(refreshCron).toMatch(/^\d+ \*\/6 \* \* \*$/u);
+});
+
+it('leaves the refresh to the deploy while the Outbox Workers drift from the Outbox Worker mode', () => {
+  const workflow = Schema.decodeUnknownSync(
+    Schema.Struct({
+      jobs: Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          steps: Schema.Array(
+            Schema.Struct({ id: Schema.optional(Schema.String), if: Schema.optional(Schema.String) }),
+          ),
+        }),
+      ),
+    }),
+  )(parse(readFileSync(refreshWorkflowUrl, 'utf-8')));
+  const steps = Object.values(workflow.jobs).flatMap((job) => job.steps);
+  const gates = steps.flatMap((step) => (step.if?.includes('steps.worker-drift') === true ? [step.if] : []));
+  expect(steps.some((step) => step.id === 'worker-drift')).toBe(true);
+  const refreshes = "steps.worker-drift.outputs.drift != 'true'";
+  expect(gates).toEqual([
+    "steps.worker-drift.outputs.drift == 'true'",
+    refreshes,
+    refreshes,
+    refreshes,
+    `env.DEPLOY_TARGET == 'cloudflare' && ${refreshes}`,
+    // Production waits for its own deploy the same way.
+    "steps.worker-drift.outputs.drift == 'true'",
+    `steps.base.outputs.base != '' && ${refreshes}`,
+    `steps.base.outputs.base != '' && ${refreshes}`,
+    `steps.base.outputs.base != '' && ${refreshes}`,
+  ]);
+});
+
+it('refreshes the production composition on Zerops, in its own environment and concurrency group', () => {
+  const workflow = Schema.decodeUnknownSync(
+    Schema.Struct({
+      jobs: Schema.Struct({
+        'refresh-production': Schema.Struct({
+          concurrency: Schema.Struct({ group: Schema.String }),
+          env: Schema.Record(Schema.String, Schema.String),
+          environment: Schema.Struct({ deployment: Schema.Boolean, name: Schema.String }),
+          steps: Schema.Array(
+            Schema.Struct({ if: Schema.optional(Schema.String), run: Schema.optional(Schema.String) }),
+          ),
+        }),
+      }),
+    }),
+  )(parse(readFileSync(refreshWorkflowUrl, 'utf-8')));
+  const production = workflow.jobs['refresh-production'];
+  expect(production.environment).toEqual({ deployment: false, name: 'production' });
+  expect(production.concurrency.group).toBe('zerops-production');
+  expect(production.env.DEPLOY_TARGET).toBe('zerops');
+  // Production names its own Outbox Worker mode; the publisher has no default for it.
+  expect(production.env.OUTBOX_WORKER_MODE).toBe(`\${{ vars.OUTBOX_WORKER_MODE }}`);
+  const runs = production.steps.map(({ run }) => run ?? '').join('\n');
+  expect(runs).toContain('deployment-base:resolve --environment production --optional');
+  expect(runs).toContain('--environment production');
+  expect(runs).not.toContain('--environment stage');
+  // An unconfigured or never-deployed production has no snapshot, so the lane publishes nothing.
+  // A pending production mode switch is left to the production deploy, as on stage.
+  const drift = production.steps.find(
+    ({ run }) => run?.includes('active-composition:publish worker-mode-drift') === true,
+  );
+  expect(drift?.if).toBe("steps.base.outputs.base != ''");
+  const publish = production.steps.find(({ run }) => run?.includes('active-composition:publish publish') === true);
+  expect(publish?.if).toBe("steps.base.outputs.base != '' && steps.worker-drift.outputs.drift != 'true'");
 });
 
 it('reads quoted Zerops env-file values', () => {
@@ -355,4 +517,10 @@ it('reads quoted Zerops env-file values', () => {
   expect(environment.get('catalog_zeropsSubdomain')).toBe('https://catalog.example');
   expect(environment.get('PLAIN')).toBe('value');
   expect(environment.has('invalid')).toBe(false);
+});
+
+it('serves the Shell runtime contract without a locale redirect', () => {
+  const shellConfig = readFileSync(new URL('../../apps/shell-super-app/modern.config.ts', import.meta.url), 'utf-8');
+  const ignored = /ignoreRedirectRoutes: \[(?<routes>[^\]]*)\]/u.exec(shellConfig)?.groups?.routes ?? '';
+  expect(ignored).toContain("'/.well-known'");
 });

@@ -137,7 +137,8 @@
     "./resources/retail-customer-profile": "./shared/resources/retail-customer-profile.ts",
     "./resources/retail-portal-profile-binding": "./shared/resources/retail-portal-profile-binding.ts",
     "./resources/saved-address": "./shared/resources/saved-address.ts",
-    "./ports/price-group-catalog-gateway-credential": "./shared/domain/price-group-catalog-gateway-credential.ts"
+    "./ports/price-group-catalog-gateway-credential": "./shared/domain/price-group-catalog-gateway-credential.ts",
+    "./outbox-worker-host": "./src/worker-host/entry.ts"
   },
   "scripts": {
     "build": "modern build --deploy-target node && node ../../scripts/generate-ontos-module-contract.mts --vertical commerce-customer-context --target dist && ultramodern-create ultramodern public-surface --app commerce-customer-context --target dist && modern deploy --skip-build --deploy-target node",
@@ -152,7 +153,6 @@
     "db:test": "rstest run tests/unit/database-schema-contract.test.ts --config rstest.config.ts",
     "db:verify": "node scripts/verify-db-schema.mts",
     "dev": "node ../../scripts/prepare-dev-module-contract.mts commerce-customer-context && modern dev",
-    "dev:worker": "node --experimental-strip-types ./src/worker-host/main.ts",
     "serve": "modern serve",
     "test:integration": "rstest --project integration",
     "test:unit": "rstest --project unit",

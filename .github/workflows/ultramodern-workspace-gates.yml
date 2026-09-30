@@ -21,9 +21,16 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: Deploy the whole stage topology instead of the diff since the last successful stage deployment (seeding or rewritten history).
+        description: Deploy the whole topology instead of the diff since the environment's last successful deployment (seeding or rewritten history).
         type: boolean
         default: false
+      environment:
+        description: GitHub deployment environment to deploy. Its DEPLOY_TARGET variable selects Zerops or Cloudflare; pushes to main deploy stage.
+        type: choice
+        options:
+          - stage
+          - production
+        default: stage
 
 permissions:
   contents: read
@@ -192,7 +199,6 @@ jobs:
       SPICEDB_ENDPOINT: localhost:50051
       SPICEDB_GRPC_PORT: "50051"
       SPICEDB_HTTP_PORT: "8443"
-      SPICEDB_INSECURE: "true"
       SPICEDB_PRESHARED_KEY: ontos-ci-spicedb-key
     steps:
       - name: Harden Runner
@@ -210,6 +216,17 @@ jobs:
         uses: ./.github/actions/install-app
         with:
           save-store: "true"
+
+      - name: Create the local SpiceDB TLS certificate
+        working-directory: app
+        # SpiceDB serves TLS only; every client pins this certificate as SPICEDB_CA_CERT.
+        run: |
+          mise exec -- pnpm spicedb:tls:local
+          {
+            echo 'SPICEDB_CA_CERT<<SPICEDB_CA_CERT_EOF'
+            cat .spicedb-tls/cert.pem
+            echo 'SPICEDB_CA_CERT_EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Start fresh PostgreSQL and SpiceDB services
         working-directory: app
@@ -255,6 +272,13 @@ jobs:
         run: |
           mise exec -- pnpm db:migrate
           mise exec -- pnpm db:verify
+
+      # Stage-shaped on the Cloudflare target: the host is materialized by its zerops.yaml build command,
+      # ships only its deployFiles, polls every hosted owner's outbox against the freshly migrated
+      # database until /ready, then drains on SIGTERM.
+      - name: Build and run the Outbox Worker host artifact against the fresh database
+        working-directory: app
+        run: mise exec -- sh scripts/prove-outbox-worker-host-artifact.sh "$RUNNER_TEMP/outbox-worker-host-artifact"
 
       - name: Run database, RLS, Action, authorization, identity, Outbox, module-state, Shell, and Contacts integration tests, including Party Registry
         working-directory: app
@@ -347,7 +371,6 @@ jobs:
       SPICEDB_ENDPOINT: localhost:50051
       SPICEDB_GRPC_PORT: "50051"
       SPICEDB_HTTP_PORT: "8443"
-      SPICEDB_INSECURE: "true"
       SPICEDB_PRESHARED_KEY: ontos-ci-spicedb-key
       BETTER_AUTH_SECRET: ontos-ci-better-auth-secret-at-least-32-characters
       BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3020,http://127.0.0.1:3020
@@ -392,6 +415,17 @@ jobs:
       # The built Workers, run together in workerd against real PostgreSQL and SpiceDB, prove the
       # Cloudflare topology end to end: Hyperdrive across requests, SpiceDB over HTTP, module
       # discovery and API calls over service bindings, and SSR.
+      - name: Create the local SpiceDB TLS certificate
+        working-directory: app
+        # SpiceDB serves TLS only; every client pins this certificate as SPICEDB_CA_CERT.
+        run: |
+          mise exec -- pnpm spicedb:tls:local
+          {
+            echo 'SPICEDB_CA_CERT<<SPICEDB_CA_CERT_EOF'
+            cat .spicedb-tls/cert.pem
+            echo 'SPICEDB_CA_CERT_EOF'
+          } >> "$GITHUB_ENV"
+
       - name: Start fresh PostgreSQL and SpiceDB services for the Worker topology
         working-directory: app
         run: |
@@ -403,7 +437,9 @@ jobs:
         # The migrations and local initialization read the app .env; write it from this job's
         # development-only service values so every tool sees the same database and SpiceDB.
         run: |
-          printenv | grep -E '^(BETTER_AUTH_|DATABASE_|ONTOS_|POSTGRES_|SPICEDB_)' > .env
+          # SPICEDB_CA_CERT spans lines, so it goes in as one double-quoted dotenv value.
+          printenv | grep -E '^(BETTER_AUTH_|DATABASE_|ONTOS_|POSTGRES_|SPICEDB_)' | grep -v '^SPICEDB_CA_CERT=' > .env
+          awk 'BEGIN { printf "SPICEDB_CA_CERT=\"" } NF { printf "%s\\n", $0 } END { print "\"" }' .spicedb-tls/cert.pem >> .env
           mise exec -- pnpm db:migrate
           mise exec -- pnpm local:initialize
 
@@ -429,23 +465,106 @@ jobs:
           mise exec -- pnpm --filter @app/commerce-customer-context run cloudflare:build:full-catalog-client-guard
           grep -qF '"CatalogApiFoundation"' verticals/commerce-customer-context/dist-cloudflare/worker/__modern_bff_effect.js
 
-  deploy-stage:
-    name: Deploy stage to Zerops after merge to main
+  # Each GitHub deployment environment chooses where its delivery units run with its DEPLOY_TARGET
+  # variable: `zerops` (also when unset) deploys the whole topology to Zerops; `cloudflare` keeps only
+  # the migrator, SpiceDB and the outbox workers on Zerops and ships the placed units as Workers in
+  # deploy-cloudflare. Its OUTBOX_WORKER_MODE variable, required and independent of the target, chooses
+  # how the Outbox Workers run on Zerops: `dedicated` (one service per owner, highly available) or `host`
+  # (every owner in the one outbox-worker-host process, cheap). There is no default, so an environment
+  # never inherits another's mode. Pushes to main deploy stage; production deploys only on an explicit dispatch.
+  # Environment variables and secrets are unreadable in a job-level `if`, so this job reads them
+  # without creating a deployment (`deployment: false`). An environment without its Zerops project
+  # and token deploys nothing and records nothing.
+  deploy-target:
+    name: Resolve the deploy target of the deployment environment
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-    needs: [workspace-gate, static-contracts, service-integration, node-runtime, cloudflare-runtime]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: ${{ inputs.environment || 'stage' }}
+      deployment: false
+    permissions: {}
+    outputs:
+      configured: ${{ steps.target.outputs.configured }}
+      environment: ${{ steps.target.outputs.environment }}
+      outbox-worker-mode: ${{ steps.target.outputs.outbox_worker_mode }}
+      target: ${{ steps.target.outputs.target }}
+    steps:
+      - name: Resolve the deploy target and Outbox Worker mode and check the Zerops project and token
+        id: target
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'stage' }}
+          DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET }}
+          OUTBOX_WORKER_MODE: ${{ vars.OUTBOX_WORKER_MODE }}
+          ZEROPS_PROJECT_ID: ${{ vars.ZEROPS_PROJECT_ID }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: |
+          target="${DEPLOY_TARGET:-zerops}"
+          if [[ "$target" != zerops && "$target" != cloudflare ]]; then
+            echo "::error title=Invalid deploy target::$DEPLOY_ENVIRONMENT DEPLOY_TARGET must be zerops or cloudflare, not '$target'."
+            exit 1
+          fi
+          if [[ -n "$OUTBOX_WORKER_MODE" && "$OUTBOX_WORKER_MODE" != dedicated && "$OUTBOX_WORKER_MODE" != host ]]; then
+            echo "::error title=Invalid Outbox Worker mode::$DEPLOY_ENVIRONMENT OUTBOX_WORKER_MODE must be dedicated or host, not '$OUTBOX_WORKER_MODE'."
+            exit 1
+          fi
+          # The edge deploy keeps its history in stage-edge and builds from the stage build
+          # environment in topology/cloudflare-placement.json, so only stage can target Cloudflare.
+          if [[ "$target" == cloudflare && "$DEPLOY_ENVIRONMENT" != stage ]]; then
+            echo "::error title=Invalid deploy target::Only stage can target Cloudflare; set $DEPLOY_ENVIRONMENT DEPLOY_TARGET to zerops."
+            exit 1
+          fi
+          {
+            echo "environment=$DEPLOY_ENVIRONMENT"
+            echo "outbox_worker_mode=$OUTBOX_WORKER_MODE"
+            echo "target=$target"
+          } >>"$GITHUB_OUTPUT"
+          if [[ -n "$ZEROPS_PROJECT_ID" && -n "$ZEROPS_TOKEN" ]]; then
+            # A configured environment deploys Outbox Workers, so it must have chosen how they run.
+            if [[ -z "$OUTBOX_WORKER_MODE" ]]; then
+              echo "::error title=Outbox Worker mode not set::Set the $DEPLOY_ENVIRONMENT OUTBOX_WORKER_MODE variable to dedicated or host."
+              exit 1
+            fi
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo "::notice title=Zerops deploy not configured::Set the $DEPLOY_ENVIRONMENT ZEROPS_PROJECT_ID variable and ZEROPS_TOKEN secret to deploy $DEPLOY_ENVIRONMENT."
+          fi
+
+  # On the Cloudflare target this job migrates the database while the placed units ship as Workers, so it
+  # runs only once the edge deploy that ships the placed units is configured too. edge-deploy-readiness
+  # checks only stage, the one environment that can target Cloudflare, so it is skipped for production.
+  deploy-zerops:
+    name: Deploy the environment's Zerops services after merge to main
+    if: >-
+      !cancelled()
+      && needs.workspace-gate.result == 'success'
+      && needs.static-contracts.result == 'success'
+      && needs.service-integration.result == 'success'
+      && needs.node-runtime.result == 'success'
+      && needs.cloudflare-runtime.result == 'success'
+      && needs.deploy-target.outputs.configured == 'true'
+      && (needs.deploy-target.outputs.target == 'zerops' || needs.edge-deploy-readiness.outputs.configured == 'true')
+    needs:
+      [workspace-gate, static-contracts, service-integration, node-runtime, cloudflare-runtime, deploy-target, edge-deploy-readiness]
     runs-on: ubuntu-latest
     # Each Zerops push builds its unit remotely for about 12 minutes and units deploy one after another in
     # plan order, so a full topology deploy (12 units plus migrations and publication) needs about 3 hours.
     timeout-minutes: 240
-    environment: stage
+    environment: ${{ needs.deploy-target.outputs.environment }}
     # Serializes with the scheduled composition refresh so no publication interleaves with a deploy.
     concurrency:
-      group: zerops-stage
+      group: zerops-${{ inputs.environment || 'stage' }}
       cancel-in-progress: false
     permissions:
       contents: read
       deployments: read
     env:
+      DEPLOY_ENVIRONMENT: ${{ needs.deploy-target.outputs.environment }}
+      DEPLOY_TARGET: ${{ needs.deploy-target.outputs.target }}
+      # `host` runs every Outbox Worker in the one outbox-worker-host service instead of each owner's
+      # dedicated worker service; the planner and the composition publisher both read it.
+      OUTBOX_WORKER_MODE: ${{ needs.deploy-target.outputs.outbox-worker-mode }}
       ZEROPS_MIGRATOR_SERVICE_ID: ${{ vars.ZEROPS_MIGRATOR_SERVICE_ID }}
       ZEROPS_PROJECT_ID: ${{ vars.ZEROPS_PROJECT_ID }}
       ZEROPS_SHELL_SERVICE_ID: ${{ vars.ZEROPS_SHELL_SERVICE_ID }}
@@ -471,13 +590,24 @@ jobs:
           ULTRAMODERN_SOURCE_REVISION: ${{ github.sha }}
         run: mise exec -- pnpm authorization:inventory:check
 
-      - name: Resolve the last successful stage deployment
+      - name: Resolve the environment's last successful deployment
         id: base
         if: ${{ !inputs.full }}
         working-directory: app
         env:
           GH_TOKEN: ${{ github.token }}
-        run: mise exec -- pnpm deployment-base:resolve --environment stage
+        run: mise exec -- pnpm deployment-base:resolve --environment "$DEPLOY_ENVIRONMENT"
+
+      # An OUTBOX_WORKER_MODE switch changes no source, so the diff cannot show it. The other mode's workers
+      # still running, or this mode's workers not running, is that switch, and the plan then deploys every
+      # worker of this mode and stops the other mode's.
+      - name: Detect Outbox Workers that do not match the Outbox Worker mode
+        id: worker-drift
+        working-directory: app
+        env:
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: mise exec -- pnpm --silent active-composition:publish worker-mode-drift
 
       - name: Generate topology-driven deployment impact plan
         id: impact
@@ -485,14 +615,19 @@ jobs:
         env:
           BASE_SHA: ${{ steps.base.outputs.base }}
           FULL_PLAN: ${{ inputs.full }}
+          WORKER_DRIFT: ${{ steps.worker-drift.outputs.drift }}
         run: |
-          base_arguments=()
+          plan_arguments=()
           if [[ "$FULL_PLAN" != 'true' ]]; then
-            base_arguments=(--base "$BASE_SHA")
+            plan_arguments=(--base "$BASE_SHA")
+          fi
+          if [[ "$WORKER_DRIFT" == 'true' ]]; then
+            plan_arguments+=(--reconcile-workers)
           fi
           mise exec -- pnpm deployment-impact:plan \
-            --authorization-environment stage \
-            "${base_arguments[@]}" \
+            --authorization-environment "$DEPLOY_ENVIRONMENT" \
+            --outbox-worker-mode "$OUTBOX_WORKER_MODE" \
+            "${plan_arguments[@]}" \
             --head "$GITHUB_SHA"
 
       - name: Record reviewed deployment impact plan
@@ -500,24 +635,70 @@ jobs:
           DEPLOYMENT_PLAN_JSON: ${{ steps.impact.outputs.plan }}
         run: |
           {
-            echo '## Reviewed deployment impact plan'
+            echo "## Reviewed deployment impact plan ($DEPLOY_ENVIRONMENT, $DEPLOY_TARGET target, $OUTBOX_WORKER_MODE Outbox Workers)"
             echo '```json'
             jq . <<<"$DEPLOYMENT_PLAN_JSON"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The plan carries both targets. On Zerops every planned provider, outbox worker and the Shell
+      # deploy here. On Cloudflare the placed units ship as Workers in deploy-cloudflare, and only the
+      # outbox workers, which drain PostgreSQL outboxes, stay on Zerops beside the infrastructure.
+      - name: Select the Zerops units of the deploy target
+        id: units
+        env:
+          MIGRATOR: ${{ steps.impact.outputs.migrator }}
+          PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
+          SHELL: ${{ steps.impact.outputs.shell }}
+          SPICEDB: ${{ steps.impact.outputs.spicedb }}
+          WORKERS_JSON: ${{ steps.impact.outputs.workers }}
+        run: |
+          if [[ "$DEPLOY_TARGET" == cloudflare ]]; then
+            providers="$WORKERS_JSON"
+            shell=false
+          else
+            providers="$PROVIDERS_JSON"
+            shell="$SHELL"
+          fi
+          any=false
+          if [[ "$MIGRATOR" == true || "$SPICEDB" == true || "$providers" != '[]' || "$shell" == true ]]; then
+            any=true
+          fi
+          {
+            echo "any=$any"
+            echo "providers=$providers"
+            echo "shell=$shell"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Install Zerops CLI
-        if: steps.impact.outputs.any == 'true'
+        if: steps.units.outputs.any == 'true'
         # mise owns Node, so its shims must learn the globally installed zcli binary.
         run: |
           npm install --global @zerops/zcli@1.1.0
           mise reshim
 
       - name: Authenticate to Zerops
-        if: steps.impact.outputs.any == 'true'
+        if: steps.units.outputs.any == 'true'
         env:
           ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
         run: zcli login "$ZEROPS_TOKEN"
+
+      # app/zerops.yaml describes stage. Every push reads a copy that names the deploying environment, so
+      # another environment's builds and runtimes never run stage-only behaviour. Production's copy also
+      # points every runtime at its TLS SpiceDB endpoint, the production environment variable SPICEDB_ENDPOINT.
+      - name: Materialize the environment's zerops.yaml
+        if: steps.units.outputs.any == 'true'
+        working-directory: app
+        env:
+          PRODUCTION_SPICEDB_ENDPOINT: ${{ vars.SPICEDB_ENDPOINT }}
+          ZEROPS_YAML_PATH: ${{ runner.temp }}/zerops.yaml
+        run: |
+          materialize_arguments=(--environment "$DEPLOY_ENVIRONMENT" --input zerops.yaml --output "$ZEROPS_YAML_PATH")
+          if [[ "$DEPLOY_ENVIRONMENT" == 'production' ]]; then
+            materialize_arguments+=(--spicedb-endpoint "$PRODUCTION_SPICEDB_ENDPOINT")
+          fi
+          mise exec -- pnpm --silent zerops:materialize-environment "${materialize_arguments[@]}"
+          echo "ZEROPS_YAML_PATH=$ZEROPS_YAML_PATH" >>"$GITHUB_ENV"
 
       - name: Run verified database migrations
         if: steps.impact.outputs.migrator == 'true'
@@ -525,7 +706,7 @@ jobs:
         run: >-
           zcli push
           --working-dir .
-          --zerops-yaml-path app/zerops.yaml
+          --zerops-yaml-path "$ZEROPS_YAML_PATH"
           --workspace-state clean
           --deploy-git-folder
           --project-id "$ZEROPS_PROJECT_ID"
@@ -557,7 +738,7 @@ jobs:
         run: >-
           zcli push
           --working-dir .
-          --zerops-yaml-path app/zerops.yaml
+          --zerops-yaml-path "$ZEROPS_YAML_PATH"
           --workspace-state clean
           --deploy-git-folder
           --project-id "$ZEROPS_PROJECT_ID"
@@ -577,15 +758,15 @@ jobs:
 
       - name: Resolve active Application Composition consumers
         id: composition
-        if: steps.impact.outputs.any == 'true'
+        if: steps.units.outputs.any == 'true'
         working-directory: app
         run: mise exec -- pnpm --silent active-composition:publish consumers
 
       - name: Deploy affected providers that do not consume the active composition
-        if: steps.impact.outputs.providers != '[]'
+        if: steps.units.outputs.providers != '[]'
         env:
           CONSUMERS_JSON: ${{ steps.composition.outputs.consumers }}
-          PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
+          PROVIDERS_JSON: ${{ steps.units.outputs.providers }}
           STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
           ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
         run: |
@@ -594,7 +775,7 @@ jobs:
           app/scripts/push-zerops-units.sh
 
       - name: Deploy Shell after affected providers
-        if: steps.impact.outputs.shell == 'true'
+        if: steps.units.outputs.shell == 'true'
         id: shell
         env:
           STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
@@ -606,11 +787,11 @@ jobs:
       # about to be deployed, so they start on a current snapshot, then observe them and publish it complete.
       - name: Publish the active Application Composition before its consumers deploy
         id: planned-consumers
-        if: steps.impact.outputs.any == 'true'
+        if: steps.units.outputs.any == 'true'
         working-directory: app
         env:
           CONSUMERS_JSON: ${{ steps.composition.outputs.consumers }}
-          PROVIDERS_JSON: ${{ steps.impact.outputs.providers }}
+          PROVIDERS_JSON: ${{ steps.units.outputs.providers }}
           STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
           ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
         run: |
@@ -620,11 +801,17 @@ jobs:
             echo 'No composition consumer is planned; the complete publication follows.'
             exit 0
           fi
+          # On Cloudflare a new or moved Worker is unobservable until deploy-cloudflare ships it, so the
+          # consumers start on the current snapshot and publish-edge-composition publishes after the edge deploy.
+          if [[ "$DEPLOY_TARGET" == cloudflare ]]; then
+            echo 'The Cloudflare target publishes after the edge deploy; consumers start on the current snapshot.'
+            exit 0
+          fi
           exclusions=()
           while IFS= read -r unit; do
             exclusions+=(--exclude-app "$unit")
           done < <(jq -r '.[]' <<<"$planned")
-          mise exec -- pnpm active-composition:publish publish --environment stage "${exclusions[@]}"
+          mise exec -- pnpm active-composition:publish publish --environment "$DEPLOY_ENVIRONMENT" "${exclusions[@]}"
 
       - name: Deploy affected composition consumers
         if: steps.planned-consumers.outputs.units != '' && steps.planned-consumers.outputs.units != '[]'
@@ -634,13 +821,28 @@ jobs:
           ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
         run: app/scripts/push-zerops-units.sh
 
+      # On Cloudflare, publish-edge-composition publishes and restarts the consumers after the edge deploy.
       - name: Publish the complete active Application Composition and restart its consumers
-        if: steps.impact.outputs.any == 'true'
+        if: steps.units.outputs.any == 'true' && env.DEPLOY_TARGET == 'zerops'
         working-directory: app
         env:
           STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
           ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
-        run: mise exec -- pnpm active-composition:publish publish --environment stage --restart-consumers
+        run: mise exec -- pnpm active-composition:publish publish --environment "$DEPLOY_ENVIRONMENT" --restart-consumers
+
+      # Switching OUTBOX_WORKER_MODE leaves the other mode's Outbox Workers running. The plan names them in every
+      # run that deploys this mode's workers, so exactly one set of workers delivers the outbox.
+      - name: Stop the other Outbox Worker mode's workers
+        if: steps.impact.outputs.stopped_workers != '' && steps.impact.outputs.stopped_workers != '[]'
+        working-directory: app
+        env:
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          STOPPED_WORKERS_JSON: ${{ steps.impact.outputs.stopped_workers }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: |
+          while IFS= read -r setup; do
+            mise exec -- pnpm --silent active-composition:publish stop-service --setup "$setup"
+          done < <(jq -r '.[]' <<<"$STOPPED_WORKERS_JSON")
 
       - name: Show bounded Shell logs after failure
         if: failure() && steps.shell.outcome == 'failure'
@@ -659,7 +861,8 @@ jobs:
   # creating a deployment (`deployment: false`); only a real edge deploy enters its history.
   edge-deploy-readiness:
     name: Check the Cloudflare edge deploy configuration
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: needs.deploy-target.outputs.environment == 'stage'
+    needs: [deploy-target]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment:
@@ -682,6 +885,7 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_TARGET: ${{ needs.deploy-target.outputs.target }}
         run: |
           missing=()
           [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || missing+=('the CLOUDFLARE_ACCOUNT_ID variable')
@@ -694,11 +898,17 @@ jobs:
           done < <(jq -r '.buildEnvironment as $environment | (["ULTRAMODERN_MF_DEV_ORIGIN", "ULTRAMODERN_CLOUDFLARE_HYPERDRIVE_ID", "ULTRAMODERN_CLOUDFLARE_SPICEDB_VPC_SERVICE_ID"] + [.units[] | "ULTRAMODERN_PUBLIC_URL_" + (ascii_upcase | gsub("-"; "_"))])[] | select(($environment[.] // "") == "")' app/topology/cloudflare-placement.json)
           if [[ ${#missing[@]} -eq 0 ]]; then
             echo 'configured=true' >>"$GITHUB_OUTPUT"
-          else
-            echo 'configured=false' >>"$GITHUB_OUTPUT"
-            joined="$(IFS=','; echo "${missing[*]}")"
-            echo "::notice title=Edge deploy not configured::Missing ${joined//,/, }; edge units were not deployed."
+            exit 0
           fi
+          echo 'configured=false' >>"$GITHUB_OUTPUT"
+          joined="$(IFS=','; echo "${missing[*]}")"
+          # Without the edge deploy the Cloudflare target would migrate and swap the outbox workers
+          # while the old Workers keep serving, so a Cloudflare stage fails before any Zerops change.
+          if [[ "$DEPLOY_TARGET" == cloudflare ]]; then
+            echo "::error title=Edge deploy not configured::Stage targets Cloudflare but misses ${joined//,/, }; nothing was deployed."
+            exit 1
+          fi
+          echo "::notice title=Edge deploy not configured::Missing ${joined//,/, }; edge units were not deployed."
 
   # Edge units (topology/cloudflare-placement.json) ship as Cloudflare Workers after the Zerops
   # deploy has migrated the database, so Worker code never runs against an older schema. The
@@ -708,7 +918,7 @@ jobs:
   deploy-cloudflare:
     name: Deploy edge units to Cloudflare Workers after the stage migration
     if: needs.edge-deploy-readiness.outputs.configured == 'true'
-    needs: [deploy-stage, edge-deploy-readiness]
+    needs: [deploy-target, deploy-zerops, edge-deploy-readiness]
     runs-on: ubuntu-latest
     # Step timeouts leave the restore step its own budget inside the job deadline, so a hung
     # deploy or proof still ends with every changed Worker restored.
@@ -773,6 +983,7 @@ jobs:
         env:
           BASE_SHA: ${{ steps.base.outputs.base }}
           FULL_PLAN: ${{ inputs.full }}
+          OUTBOX_WORKER_MODE: ${{ needs.deploy-target.outputs.outbox-worker-mode }}
         run: |
           base_arguments=()
           if [[ -n "$BASE_SHA" ]]; then
@@ -783,6 +994,7 @@ jobs:
           fi
           mise exec -- pnpm deployment-impact:plan \
             --authorization-environment stage \
+            --outbox-worker-mode "$OUTBOX_WORKER_MODE" \
             "${base_arguments[@]}" \
             --head "$GITHUB_SHA"
 
@@ -955,3 +1167,95 @@ jobs:
             echo "::error title=Edge Worker not restored::$worker_state is still serving $GITHUB_SHA"
           done
           [[ ${#unrestored[@]} -eq 0 ]]
+
+  # On the Cloudflare target the snapshot observes the Workers, so it is published again once the edge
+  # deploy has replaced them, and the consumers left on Zerops (the outbox workers) restart on it.
+  publish-edge-composition:
+    name: Publish the active Application Composition after the edge deploy
+    if: needs.deploy-target.outputs.target == 'cloudflare'
+    needs: [deploy-target, deploy-cloudflare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Publishing is not a deployment: it must not become the stage deploy's diff base.
+    environment:
+      name: stage
+      deployment: false
+    concurrency:
+      group: zerops-stage
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      edge-consumers: ${{ steps.edge-consumers.outputs.edge_consumers }}
+      snapshot: ${{ steps.publish.outputs.snapshot }}
+    env:
+      DEPLOY_TARGET: cloudflare
+      OUTBOX_WORKER_MODE: ${{ needs.deploy-target.outputs.outbox-worker-mode }}
+      ZEROPS_PROJECT_ID: ${{ vars.ZEROPS_PROJECT_ID }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout main revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
+
+      - name: Publish the observed Workers and restart the Zerops consumers
+        id: publish
+        working-directory: app
+        env:
+          SNAPSHOT_FILE: ${{ runner.temp }}/active-application-composition.json
+          STAGE_VARIABLES_JSON: ${{ toJSON(vars) }}
+          ZEROPS_TOKEN: ${{ secrets.ZEROPS_TOKEN }}
+        run: |
+          mise exec -- pnpm active-composition:publish publish --environment stage --restart-consumers \
+            --snapshot-file "$SNAPSHOT_FILE"
+          # The encoded snapshot is one JSON line, and it holds no secret.
+          echo "snapshot=$(<"$SNAPSHOT_FILE")" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve the placed Workers that consume the snapshot
+        id: edge-consumers
+        working-directory: app
+        run: mise exec -- pnpm --silent active-composition:publish edge-consumers
+
+  # A placed Worker has no Zerops project variable, so each snapshot consumer among them receives the
+  # publication as the Worker secret it reads. Only stage-edge holds the Cloudflare token, so this runs
+  # there, without creating a deployment. Putting a secret deploys the Worker's current version with it.
+  sync-edge-composition:
+    name: Hand the published Application Composition to its Worker consumers
+    if: needs.publish-edge-composition.outputs.edge-consumers != '' && needs.publish-edge-composition.outputs.edge-consumers != '[]'
+    needs: [publish-edge-composition]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: stage-edge
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout main revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install the app workspace
+        uses: ./.github/actions/install-app
+
+      - name: Put the snapshot as each consumer Worker's secret
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          EDGE_CONSUMERS_JSON: ${{ needs.publish-edge-composition.outputs.edge-consumers }}
+          SNAPSHOT_JSON: ${{ needs.publish-edge-composition.outputs.snapshot }}
+        run: app/scripts/put-edge-composition-snapshot.sh
