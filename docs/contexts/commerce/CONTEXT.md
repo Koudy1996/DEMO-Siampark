@@ -1106,9 +1106,13 @@ merely because ordinary Current Prices moved.
 
 **Inventory** — Domain owning Stock Items, Stock Locations/Positions, Catalog-to-Stock Binding, Stock Requirements/Allocations, stock evidence, and Inventory-recognized obligations. It consumes Purchase Demand Occurrence identity without changing its exact Catalog Selection, Quantity or Unit; Reservation and authority lifecycle semantics are owned by the Inventory context and accepted ADRs.
 
-**Availability** — Current promise that an exact Catalog Selection and Quantity can be sold and
-delivered in a Commerce Purchasing Context. It may derive from Inventory or an External Business
-System that owns the relevant fact. Catalog-ready or Assortment-eligible does not mean Available.
+**Availability** — Domain owning the Current prospective promise for one exact Catalog Selection and
+requested Quantity + Unit in one trusted Commerce Purchasing Context. Launch stock-dependent evidence
+is consumed through the Inventory public boundary; direct External Business System Availability and
+automatic backend fallback are not Launch modes. Catalog-ready or Assortment-eligible does not mean
+Available, and Availability does not own Inventory Reservation guarantees, exact Delivery
+Destination/carrier/method decisions, or Order acceptance. Detailed canonical language lives in
+[Availability](../availability/CONTEXT.md).
 
 **Cart** — Mutable prospective collection of Catalog Selections, Quantities and Current choices in
 one Commerce Purchasing Context. Incomplete preparation may be retained but is not a validated
