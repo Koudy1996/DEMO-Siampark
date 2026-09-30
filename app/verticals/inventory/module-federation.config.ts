@@ -1,7 +1,20 @@
+import { createRequire } from 'node:module';
+
 import { resolveEffectTsgoCompiler } from '@modern-js/app-tools-extensions/config';
 import { createModuleFederationConfig } from '@module-federation/modern-js-v3';
+import { decodeUnknownSync, String as SchemaString, Struct } from 'effect/Schema';
 
+import { createSharedRuntimeConfig } from '../../module-federation.shared.ts';
 import { dependencies } from './package.json';
+
+const require = createRequire(import.meta.url);
+const PackageVersionSchema = Struct({ version: SchemaString });
+const packageVersion = (specifier: string): string =>
+  decodeUnknownSync(PackageVersionSchema)(require(specifier)).version;
+const i18nVersion = packageVersion('@modern-js/plugin-i18n/package.json');
+const runtimeVersion = packageVersion('@modern-js/runtime/package.json');
+const reactVersion = packageVersion('react/package.json');
+const reactDomVersion = packageVersion('react-dom/package.json');
 
 const tsgoCompilerInstance = resolveEffectTsgoCompiler({ from: import.meta.url });
 
@@ -22,48 +35,13 @@ const moduleFederationConfig: Parameters<typeof createModuleFederationConfig>[0]
   },
   filename: 'remoteEntry.js',
   name: 'verticalInventory',
-  shared: {
-    '@modern-js/plugin-i18n/runtime/no-react-i18next': {
-      requiredVersion: dependencies['@modern-js/plugin-i18n'],
-      singleton: true,
-      treeShaking: false,
-    },
-    '@modern-js/plugin-i18n/runtime/no-react-i18next/consumer': {
-      requiredVersion: dependencies['@modern-js/plugin-i18n'],
-      singleton: true,
-      treeShaking: false,
-    },
-    '@modern-js/plugin-tanstack/runtime': {
-      requiredVersion: dependencies['@modern-js/plugin-tanstack'],
-      singleton: true,
-      treeShaking: false,
-    },
-    '@modern-js/runtime': {
-      requiredVersion: dependencies['@modern-js/runtime'],
-      singleton: true,
-      treeShaking: false,
-    },
-    '@tanstack/react-router': {
-      requiredVersion: dependencies['@tanstack/react-router'],
-      singleton: true,
-      treeShaking: false,
-    },
-    react: {
-      requiredVersion: dependencies.react,
-      singleton: true,
-      treeShaking: false,
-    },
-    'react-dom': {
-      requiredVersion: dependencies['react-dom'],
-      singleton: true,
-      treeShaking: false,
-    },
-    'react-dom/client': {
-      requiredVersion: dependencies['react-dom'],
-      singleton: true,
-      treeShaking: false,
-    },
-  },
+  shared: createSharedRuntimeConfig({
+    '@modern-js/plugin-i18n/runtime': i18nVersion,
+    '@modern-js/runtime': runtimeVersion,
+    '@tanstack/react-router': dependencies['@tanstack/react-router'],
+    react: reactVersion,
+    'react-dom': reactDomVersion,
+  }),
 });
 
 export default moduleFederationConfig;
