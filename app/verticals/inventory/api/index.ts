@@ -17,8 +17,8 @@ import {
 } from '@app/core-runtime/actions/runtime-wiring';
 import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
 import type { EffectBffRuntimeAssembly } from '@modern-js/bff-effect/assembly';
-import { Effect, HttpApiBuilder, HttpRouter, Layer } from '@modern-js/bff-effect/effect-edge';
-import type { EffectBffDefinition, EffectBffRuntime } from '@modern-js/bff-effect/effect-edge';
+import { Effect, HttpApiBuilder, Layer } from '@modern-js/bff-effect/effect-edge';
+import type { EffectBffDefinition, EffectBffRuntime, HttpRouter } from '@modern-js/bff-effect/effect-edge';
 import { Layer as GovernedReadLayer, Logger, References, Tracer } from 'effect';
 
 // <generated-governed-http-handler-support-imports>
