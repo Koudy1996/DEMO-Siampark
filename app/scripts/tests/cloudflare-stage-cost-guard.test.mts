@@ -53,6 +53,7 @@ const HOSTNAMES = [
   'pricing.stage.example.com',
   'storefront-registry.stage.example.com',
   'price-group-catalog.stage.example.com',
+  'inventory.stage.example.com',
   SHELL_HOSTNAME,
 ];
 
