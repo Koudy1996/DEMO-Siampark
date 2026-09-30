@@ -4,16 +4,23 @@ import { Array as Arr, Effect, Layer, Option, Order, Redacted, Schema } from 'ef
 import { expect, it } from 'effect-rstest';
 
 import { CloudflareApi, CloudflareApiLive, CloudflareCredentials } from '../ops/cloudflare-api.mts';
+import type { CloudflareVpcService } from '../ops/cloudflare-api.mts';
 import {
   CutoverConfiguration,
   activate,
-  edgeUnits,
   provision,
+  spicedbGatewayHostname,
+  publicOrigin,
+  STAGE_VPC_SERVICES,
   stageBuildEnvironment,
   verifyCutover,
+  vpcServiceDrift,
   workerSecretPlan,
 } from '../ops/cloudflare-stage-cutover.mts';
 import type { CutoverSettings } from '../ops/cloudflare-stage-cutover.mts';
+import { SPICEDB_GRPC_TLS, SPICEDB_HTTP_TLS, spicedbTlsState } from '../ops/spicedb-tls.mts';
+import { ciPolicy, killSwitchRule, peoplePolicy, usageAlert } from '../ops/cloudflare-stage-cost-guard.mts';
+import { edgeUnits } from '../ops/stage-edge-units.mts';
 import { OpsMode, STAGE_ZEROPS_PROJECT_ID } from '../ops/stage-operations.mts';
 import {
   APP_DIRECTORY,
@@ -21,9 +28,11 @@ import {
   fakeCloudflareAccount,
   fakeFiles,
   fakeStage,
+  fakeZeropsApi,
   mutatingCommands,
+  spicedbTlsSecrets,
 } from './stage-operations-fixture.mts';
-import type { FakeCloudflareAccount, FakeFiles, FakeStage } from './stage-operations-fixture.mts';
+import type { FakeCloudflareAccount, FakeFiles, FakeStage, FakeZeropsApi } from './stage-operations-fixture.mts';
 
 const SHELL_ORIGIN = 'https://app.stage.example.com';
 const CI_TOKEN = 'ci-token-secret';
@@ -42,8 +51,10 @@ const HYPERDRIVE_ID = 'hyperdrive-1';
 const STAGE_EDGE = 'stage-edge';
 
 const settings: CutoverSettings = {
+  accessEmails: ['ops@example.com'],
   accountId: 'account-1',
   apiToken: Redacted.make('lead-token-secret'),
+  enforceShellAccess: false,
   projectId: STAGE_ZEROPS_PROJECT_ID,
   repository: 'TechsioCZ/ontos',
   shellHostname: 'app.stage.example.com',
@@ -80,24 +91,44 @@ const SECRETS = [
   'private-jwk-secret',
   SPICEDB_KEY,
   'tunnel-connector-token',
+  'service-token-secret',
 ];
 
+const GATEWAY_HOSTNAME = 'ontos-stage-spicedb.stage.example.com';
+/** Generated once: the TLS secrets `spicedb-tls` leaves on a provisioned stage. */
+const SPICEDB_TLS = spicedbTlsSecrets({ gatewayHostname: GATEWAY_HOSTNAME });
+
 const PLACEMENT = `${APP_DIRECTORY}/topology/cloudflare-placement.json`;
+const ACCOUNT_PATH = '/client/v4/accounts/account-1';
+const DATA_PLANE_PATH = /^\/(?:cfd_tunnel|connectivity|hyperdrive)/u;
 const JsonRecord = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 const PlacementJson = Schema.fromJsonString(
   Schema.Struct({ buildEnvironment: Schema.Record(Schema.String, Schema.String), units: Schema.Array(Schema.String) }),
 );
 const StringRecord = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 
-const newStage = (overrides: Parameters<typeof fakeStage>[0] = {}) =>
-  fakeStage({
-    projectValues: SECRET_VALUES,
+/** stage-edge as the cost guards leave it: the zone ID and the Access service token credentials. */
+const GUARDED_STAGE_EDGE = {
+  secrets: { [STAGE_EDGE]: ['CLOUDFLARE_ACCESS_CLIENT_ID', 'CLOUDFLARE_ACCESS_CLIENT_SECRET'] },
+  variables: { [STAGE_EDGE]: { CLOUDFLARE_STAGE_ZONE_ID: 'zone-1' } },
+};
+
+/** A stage whose spicedb service already holds its TLS secrets, unless `spicedbTls` is false. */
+const newStage = (overrides: Parameters<typeof fakeStage>[0] = {}, { spicedbTls = true } = {}) => {
+  const tls = spicedbTls ? SPICEDB_TLS : {};
+  return fakeStage({
+    projectUserKeys: Object.keys(tls),
+    sensitiveKeys: Object.keys(tls),
     services: [
       { hostname: 'db18', id: 'db18-id', status: 'ACTIVE' },
       { hostname: 'spicedb', id: 'spicedb-id', status: 'ACTIVE' },
     ],
     ...overrides,
+    projectValues: { ...SECRET_VALUES, ...tls, ...overrides.projectValues },
+    secrets: { ...GUARDED_STAGE_EDGE.secrets, ...overrides.secrets },
+    variables: { ...GUARDED_STAGE_EDGE.variables, ...overrides.variables },
   });
+};
 
 const run = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -106,6 +137,7 @@ const run = <A, E, R>(
     readonly dryRun?: boolean;
     readonly files: FakeFiles;
     readonly stage: FakeStage;
+    readonly zerops?: FakeZeropsApi;
   },
 ) =>
   effect.pipe(
@@ -120,6 +152,7 @@ const run = <A, E, R>(
         Layer.succeed(CutoverConfiguration, settings),
         Layer.succeed(OpsMode, { dryRun: fakes.dryRun ?? false }),
         fakes.stage.layer,
+        (fakes.zerops ?? fakeZeropsApi(fakes.stage)).layer,
         fakes.files.layer,
       ),
     ),
@@ -144,9 +177,12 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
 
     yield* run(provision, { account, files, stage });
 
-    const posts = account.requests.filter(({ method }) => method === 'POST');
+    // The cost guards have their own tests; these are the data-plane objects.
+    const posts = account.requests.filter(
+      ({ method, url }) => method === 'POST' && DATA_PLANE_PATH.test(url.pathname.replace(ACCOUNT_PATH, '')),
+    );
     expect(
-      posts.map(({ body, url }) => [url.pathname.replace('/client/v4/accounts/account-1', ''), Option.getOrNull(body)]),
+      posts.map(({ body, url }) => [url.pathname.replace(ACCOUNT_PATH, ''), Option.getOrNull(body)]),
     ).toStrictEqual([
       ['/cfd_tunnel', { config_src: 'cloudflare', name: 'ontos-stage' }],
       [
@@ -163,8 +199,9 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
         '/connectivity/directory/services',
         {
           host: { hostname: 'spicedb', resolver_network: { tunnel_id: 'tunnel-1' } },
-          http_port: 8443,
+          https_port: 8443,
           name: 'ontos-stage-spicedb',
+          tls_settings: { cert_verification_mode: 'verify_full' },
           type: 'http',
         },
       ],
@@ -244,8 +281,7 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
       [DEPLOYMENT_ENVIRONMENT]: 'stage',
       ONTOS_GATEWAY_ISSUER: SHELL_ORIGIN,
       ONTOS_GATEWAY_PRIVATE_JWK: PRIVATE_JWK,
-      SPICEDB_ENDPOINT: 'spicedb:8443',
-      SPICEDB_INSECURE: 'true',
+      SPICEDB_ENDPOINT: GATEWAY_HOSTNAME,
       SPICEDB_PRESHARED_KEY: SPICEDB_KEY,
     });
     expectNoSecretInArguments(stage, account);
@@ -269,6 +305,52 @@ it.effect('changes nothing in a dry run but still reads the real state', () =>
   }),
 );
 
+it.effect('creates the SpiceDB TLS secrets first on a stage without them', () =>
+  Effect.gen(function* provisionsSpicedbTls() {
+    const account = fakeCloudflareAccount({});
+    const stage = newStage({}, { spicedbTls: false });
+    const files = fakeFiles();
+    const zerops = fakeZeropsApi(stage);
+
+    yield* run(provision, { account, files, stage, zerops });
+
+    expect(spicedbGatewayHostname(settings)).toBe(GATEWAY_HOSTNAME);
+    const originCertificate = account.requests.find(({ method }) => method === 'POST');
+    expect(originCertificate?.url.href).toBe('https://api.cloudflare.com/client/v4/certificates');
+    expect(originCertificate?.body.pipe(Option.getOrNull)).toMatchObject({
+      hostnames: [GATEWAY_HOSTNAME],
+      request_type: 'origin-ecc',
+      requested_validity: 5475,
+    });
+    expect(zerops.serviceSecrets.map(({ key, serviceId }) => `${serviceId} ${key}`)).toStrictEqual([
+      `spicedb-id ${SPICEDB_GRPC_TLS.privateKeyKey}`,
+      `spicedb-id ${SPICEDB_GRPC_TLS.certificateKey}`,
+      `spicedb-id ${SPICEDB_HTTP_TLS.privateKeyKey}`,
+      `spicedb-id ${SPICEDB_HTTP_TLS.certificateKey}`,
+    ]);
+    const state = yield* run(spicedbTlsState({ gatewayHostname: GATEWAY_HOSTNAME, projectId: settings.projectId }), {
+      account,
+      files,
+      stage,
+    });
+    expect(state).toStrictEqual(Option.none());
+  }),
+);
+
+it.effect('creates no SpiceDB TLS material in a dry run', () =>
+  Effect.gen(function* dryRunSpicedbTls() {
+    const account = fakeCloudflareAccount({});
+    const stage = newStage({}, { spicedbTls: false });
+    const zerops = fakeZeropsApi(stage);
+
+    yield* run(provision, { account, dryRun: true, files: fakeFiles(), stage, zerops });
+
+    expect(stage.commands.filter(({ command }) => command === 'openssl')).toStrictEqual([]);
+    expect(zerops.serviceSecrets).toStrictEqual([]);
+    expect(account.requests.every(({ method }) => method === 'GET')).toBe(true);
+  }),
+);
+
 it.effect('reuses every existing object on a re-run and creates nothing twice', () =>
   Effect.gen(function* rerunIsIdempotent() {
     const account = fakeCloudflareAccount({});
@@ -289,6 +371,36 @@ it.effect('reuses every existing object on a re-run and creates nothing twice', 
     expect(stage.commands.filter(({ args }) => args.includes('push'))).toHaveLength(1);
   }),
 );
+
+it('accepts the SpiceDB VPC service only over HTTPS with full certificate verification', () => {
+  const spec = { ...STAGE_VPC_SERVICES.spicedb, tunnelId: 'tunnel-1' };
+  const service = (fields: {
+    readonly http_port?: number;
+    readonly https_port?: number;
+    readonly mode?: string;
+  }): CloudflareVpcService => ({
+    host: {
+      hostname: Option.some('spicedb'),
+      resolver_network: Option.some({ tunnel_id: 'tunnel-1' }),
+    },
+    http_port: Option.fromNullishOr(fields.http_port),
+    https_port: Option.fromNullishOr(fields.https_port),
+    name: spec.name,
+    service_id: 'vpc-2',
+    tcp_port: Option.none(),
+    tls_settings: Option.some({ cert_verification_mode: Option.fromNullishOr(fields.mode) }),
+    type: 'http',
+  });
+
+  expect(vpcServiceDrift(service({ https_port: 8443, mode: 'verify_full' }), spec)).toStrictEqual(Option.none());
+  expect(vpcServiceDrift(service({ https_port: 8443 }), spec)).toStrictEqual(Option.none());
+  expect(vpcServiceDrift(service({ http_port: 8443 }), spec)).toStrictEqual(
+    Option.some('port undefined, plaintext port 8443'),
+  );
+  expect(vpcServiceDrift(service({ https_port: 8443, mode: 'disabled' }), spec)).toStrictEqual(
+    Option.some('certificate verification disabled'),
+  );
+});
 
 it.effect('refuses to reuse a Hyperdrive config that caches tenant reads', () =>
   Effect.gen(function* refusesCachingHyperdrive() {
@@ -388,6 +500,28 @@ const plannedSecretNames = Effect.gen(function* plannedSecretNamesEffect() {
   return Object.fromEntries([...plan].map(([worker, secrets]) => [worker, Object.keys(secrets)]));
 });
 
+/** Every cost guard as `provision` leaves it, with the kill switch off. */
+const guardedAccount = Effect.gen(function* guardedAccountEffect() {
+  const units = yield* edgeUnits(readRepositoryFile(TOPOLOGY_FILE), readRepositoryFile(PLACEMENT_FILE));
+  const hostnames = units.map((unit) => new URL(publicOrigin(unit, settings)).hostname);
+  return {
+    accessPolicies: [
+      { ...peoplePolicy(settings.accessEmails), id: 'policy-1' },
+      { ...ciPolicy('token-1'), id: 'policy-2' },
+    ],
+    alertPolicies: [{ ...usageAlert(settings.accessEmails), id: 'alert-1' }],
+    rulesets: [
+      {
+        id: 'custom',
+        kind: 'zone',
+        phase: 'http_request_firewall_custom',
+        rules: [{ ...killSwitchRule(hostnames, false), id: 'rule-2' }],
+      },
+    ],
+    serviceTokens: [{ client_id: 'access-client-id', id: 'token-1', name: 'ontos-stage-ci' }],
+  };
+});
+
 /** An account `provision` completed; `extraSecrets` adds names to a Worker's planned ones. */
 const provisionedAccount = (
   tunnelStatus: string,
@@ -397,6 +531,7 @@ const provisionedAccount = (
   Effect.gen(function* provisionedAccountEffect() {
     const planned: Readonly<Record<string, readonly string[]>> = plannedOverride ?? (yield* plannedSecretNames);
     return fakeCloudflareAccount({
+      ...(yield* guardedAccount),
       hyperdrives: [
         {
           caching: { disabled: true },
@@ -433,7 +568,7 @@ const provisionedAccount = (
         },
         {
           host: { hostname: 'spicedb', resolver_network: { tunnel_id: 'tunnel-1' } },
-          http_port: 8443,
+          https_port: 8443,
           name: 'ontos-stage-spicedb',
           service_id: 'vpc-2',
           type: 'http',
@@ -469,6 +604,23 @@ it.effect('switches stage to DEPLOY_TARGET=cloudflare and the host Outbox Worker
     expect(stage.variables.get('stage')?.get('DEPLOY_TARGET')).toBe('cloudflare');
     // The Cloudflare stage runs every Outbox Worker in the one host provision created.
     expect(stage.variables.get('stage')?.get('OUTBOX_WORKER_MODE')).toBe('host');
+  }),
+);
+
+it.effect('leaves DEPLOY_TARGET unset while the spicedb service lacks its TLS secrets', () =>
+  Effect.gen(function* refusesMissingSpicedbTls() {
+    const stage = newStage({ deployments: [{ id: 7, sha: FAKE_REVISION, state: 'success' }] }, { spicedbTls: false });
+
+    const error = yield* run(activate, {
+      account: yield* provisionedAccount('healthy'),
+      files: yield* reviewedPlacementFiles,
+      stage,
+    }).pipe(Effect.flip);
+
+    expect(error.message).toContain(
+      `the Zerops spicedb service holds valid gRPC and ${GATEWAY_HOSTNAME} gateway TLS secrets: the spicedb gRPC TLS secrets SPICEDB_GRPC_TLS_CERT and SPICEDB_GRPC_TLS_KEY: they do not exist; run spicedb-tls`,
+    );
+    expect(mutatingCommands(stage.commands)).toStrictEqual([]);
   }),
 );
 
@@ -644,7 +796,6 @@ it.effect('gives every vertical the Shell key and the callers their stage depend
       'ONTOS_GATEWAY_ISSUER',
       'ONTOS_GATEWAY_PUBLIC_JWKS',
       'SPICEDB_ENDPOINT',
-      'SPICEDB_INSECURE',
       'SPICEDB_PRESHARED_KEY',
       DEPLOYMENT_ENVIRONMENT,
     ]);

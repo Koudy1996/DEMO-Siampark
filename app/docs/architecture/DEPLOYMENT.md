@@ -257,10 +257,11 @@ Create `production` once, outside CI, before the first dispatch, with the operat
 `zerops.yaml` describes stage. Before any push, `deploy-zerops` writes a copy that sets
 `ULTRAMODERN_DEPLOYMENT_ENVIRONMENT` to the deploying environment in every build and runtime that
 names it (`pnpm zerops:materialize-environment`), and every `zcli push` reads that copy. Production
-therefore never runs stage-only behaviour. Stage's runtimes reach the in-project SpiceDB over
-plaintext gRPC (`SPICEDB_INSECURE=true`), which Core accepts only on stage, so production's copy also
-sets every `SPICEDB_ENDPOINT` to production's `SPICEDB_ENDPOINT` variable and `SPICEDB_INSECURE` to
-`false`. A production deploy without that variable fails before it pushes anything. The
+therefore never runs stage-only behaviour. Every runtime reaches SpiceDB over TLS gRPC and pins
+`SPICEDB_CA_CERT`, which `zerops.yaml` takes from the `spicedb` service's `SPICEDB_GRPC_TLS_CERT`
+secret; there is no plaintext mode. Production's copy sets every `SPICEDB_ENDPOINT` to production's
+`SPICEDB_ENDPOINT` variable, so production's SpiceDB gRPC certificate must name that host. A
+production deploy without that variable fails before it pushes anything. The
 scheduled composition refresh has a `refresh-production` lane beside `refresh-stage`, in production's
 own environment and `zerops-production` concurrency group; it publishes nothing until production is
 configured and has deployed once.
@@ -388,22 +389,36 @@ appear in a command line or in the output.
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `STAGE_ZONE` and `STAGE_SHELL_HOSTNAME` from the
 environment, or else from the dotenv file `~/.cloudflare-ontos-stage-token`. The optional
 `CLOUDFLARE_STAGE_EDGE_API_TOKEN` is the narrower token CI receives. Without it, CI receives
-`CLOUDFLARE_API_TOKEN`.
+`CLOUDFLARE_API_TOKEN`. The SpiceDB TLS step also needs `ZEROPS_TOKEN`, because `zcli` cannot set
+service secrets, and a `CLOUDFLARE_API_TOKEN` with the stage zone permission "SSL and
+Certificates: Edit" for the Origin CA.
 
+- `spicedb-tls` creates the SpiceDB TLS material as sensitive secrets on the Zerops `spicedb` service,
+  and `provision` runs it first. The gRPC pair `SPICEDB_GRPC_TLS_CERT`/`SPICEDB_GRPC_TLS_KEY` is a
+  self-signed certificate for `spicedb`, `localhost` and `127.0.0.1` that Node clients pin. The HTTP
+  gateway pair `SPICEDB_HTTP_TLS_CERT`/`SPICEDB_HTTP_TLS_KEY` is a Cloudflare Origin CA certificate
+  for `ontos-stage-spicedb.<STAGE_ZONE>`, the server name Workers VPC verifies; it needs no DNS record.
+  A pair that exists and holds is kept. A partial pair, a wrong name, a mismatched key or a
+  certificate expiring within 30 days fails with the pair to remove, instead of rotating silently.
 - `provision` runs every step in dependency order. It creates or reuses the remotely managed Tunnel
   `ontos-stage`. It imports `cloudflared` from `zerops-import.yaml`, with the tunnel connector token
   as its `TUNNEL_TOKEN` secret, and imports `outboxworkerhost`. It records their `ZEROPS_*_SERVICE_ID`
   stage variables and deploys `cloudflared`, then waits until the tunnel is healthy. Next it creates
-  the Workers VPC services `ontos-stage-db18` (tcp `db18:5432`) and `ontos-stage-spicedb` (http
-  `spicedb:8443`), and Hyperdrive `ontos-stage-runtime`: role `ontos_runtime`, caching disabled,
+  the Workers VPC services `ontos-stage-db18` (tcp `db18:5432`) and `ontos-stage-spicedb` (HTTPS
+  `spicedb:8443`, certificate verification `verify_full`), and Hyperdrive `ontos-stage-runtime`: role `ontos_runtime`, caching disabled,
   origin connection limit 40, and the password read from Zerops `db18_password`. It writes the IDs
   and stage origins into this placement's `buildEnvironment` for a reviewed PR. It sets the
   `stage-edge` variable `CLOUDFLARE_ACCOUNT_ID` and secret `CLOUDFLARE_API_TOKEN`. Last, it sets every
   placed Worker's secrets with `wrangler secret bulk`, from the Zerops values the Node services use
-  today, plus `ULTRAMODERN_DEPLOYMENT_ENVIRONMENT=stage`: the Worker build's environment never reaches
-  the Worker's runtime, and Core accepts the private plaintext SpiceDB endpoint only on stage. An existing object that differs from the runbook fails the step instead of being reused.
+  today, plus `ULTRAMODERN_DEPLOYMENT_ENVIRONMENT=stage`, because the Worker build's environment never
+  reaches the Worker's runtime. A Worker's `SPICEDB_ENDPOINT` is the gateway name
+  `ontos-stage-spicedb.<STAGE_ZONE>`, which the VPC service verifies. An existing object that differs from the runbook fails the step instead of being reused.
+- `cost-guards` repeats only the cost-guard step, which `provision` runs after the `stage-edge`
+  settings (see [Stage cost guards](#stage-cost-guards)).
+- `resume` turns the cost kill switch off again.
 - `worker-secrets` repeats only the Worker secrets step.
-- `verify` runs the cut-over checklist and changes nothing. The tunnel must be healthy. Both VPC
+- `verify` runs the cut-over checklist and changes nothing. The tunnel must be healthy, and both
+  SpiceDB TLS pairs must exist and hold. Both VPC
   services and Hyperdrive must match the runbook, and the reviewed `buildEnvironment` must name
   them. Every placed Worker must exist and hold each runtime secret `provision` plans for it, and the latest `stage-edge` deployment, which includes
   `cloudflare:proof`, must have succeeded for the checked-out revision. Once `stage` targets
@@ -413,6 +428,66 @@ environment, or else from the dotenv file `~/.cloudflare-ontos-stage-token`. The
   `activate` and the full deploy, and move DNS only when it passes.
 - `activate` runs `verify` and, only when every item holds, sets `OUTBOX_WORKER_MODE=host` and
   `DEPLOY_TARGET=cloudflare` on `stage`. `provision` created the host service it needs.
+
+### Stage cost guards
+
+Stage runs on Workers Paid ($5 a month, which includes 10M requests and 30M CPU ms). That allowance
+covers the whole Cloudflare account, which also runs other projects' Workers, and the stage zone is
+shared with them. So the guards measure account-wide usage but only ever change OntOS stage objects. The cut-over script also reads `STAGE_ACCESS_EMAILS` (required, a comma-separated
+list of the people Access admits and the usage notification emails) and `STAGE_ACCESS_ENFORCE_SHELL`
+(default `false`).
+
+- Every Worker config sets `workers_dev: false` and `preview_urls: false`, so the only way in is the
+  zone routes the guards cover, and caps CPU per request at 200 ms for the Shell and 100 ms for a
+  vertical (`CLOUDFLARE_WORKER_CPU_MS` in `packages/shared-contracts/tooling/modern-config.ts`).
+  Nothing has been measured yet; raise a cap when a real request hits it.
+- A WAF custom rule `ontos_stage_kill_switch` blocks exactly the placed OntOS stage hostnames. It is
+  added next to any rules other projects keep in the zone, created disabled, and re-runs keep its
+  current state. The WAF answers before a Worker runs, so blocked requests are never billed. There is
+  no rate-limit rule: on the Free plan a rate-limit expression cannot match a hostname, so it would
+  throttle every other project in the zone. `cost-guards` also records the zone as the `stage-edge` variable
+  `CLOUDFLARE_STAGE_ZONE_ID`.
+- The hourly `.github/workflows/stage-edge-cost-guard.yml` runs
+  `node scripts/ops/cloudflare-stage-cost-guard.mts check` once that variable exists. It sums the
+  whole account's Workers requests and CPU time since the billing cycle started, and logs each OntOS
+  Worker's share and the other Workers' total (`STAGE_BILLING_CYCLE_DAY`,
+  1-28, default 1). Past `STAGE_WORKERS_REQUEST_LIMIT` (default 8M) or `STAGE_WORKERS_CPU_MS_LIMIT`
+  (default 24M), it enables the kill switch and fails the run. All three are optional `stage-edge`
+  variables. The kill switch only stops OntOS stage traffic: if the breakdown shows other projects
+  drive the usage, they need their own action.
+- The Workers requests usage notification `ontos-stage-workers-requests` emails the Access people at
+  5M requests. Cloudflare offers usage notifications to Pay-as-you-go accounts, which a Workers Paid
+  account is. If the API still rejects the policy, `cost-guards` and `provision` stop there with the
+  Cloudflare error; the notification is the last guard, so the kill switch and Access are already in
+  place.
+- Access: a reusable people policy `ontos-stage-people`, a service token `ontos-stage-ci` (one-year
+  duration) and a policy `ontos-stage-ci-token` for it. `stage-edge` holds the token as the secrets
+  `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET`; when they are missing, a
+  re-run rotates the token to recover the secret. Enable Zero Trust once in the dashboard (the Free
+  plan covers 50 people) before the first run; until then Cloudflare answers
+  `access.api.error.not_enabled`, `cost-guards` stops with that to-do, and `verify` reports it.
+
+Only with `STAGE_ACCESS_ENFORCE_SHELL=true` does `cost-guards` put the Shell hostname behind the
+Access application `ontos-stage-shell`, with `ontos-stage-shell-gateway` bypassing
+`/shell-super-app-api/auth/api-key/gateway-context`, which verticals call with an API key. Keep it
+off for now: `cloudflare:proof` probes the Shell with plain `fetch`, cannot send the service token
+headers, and would fail every stage deploy. Vertical hostnames stay outside Access for good, since the
+browser loads their federated remotes cross-origin without credentials; the CPU caps and the kill
+switch cover them.
+
+To resume after the kill switch trips, find out why, then run
+`node scripts/ops/cloudflare-stage-cutover.mts resume` (the check trips it again within the hour if
+usage is still over the limit, so raise the limit variables or wait for the next cycle). To undo the
+guards, delete the kill switch rule and the notification in the dashboard and remove the Access
+applications; deleting `CLOUDFLARE_STAGE_ZONE_ID` stops the hourly check.
+
+The cut-over token needs these permissions. Account: Cloudflare Tunnel Edit, Workers Scripts Edit,
+Hyperdrive Edit, Connectivity Directory Admin, Access: Apps and Policies Edit, Access: Service Tokens
+Edit, Notifications Edit, Account Analytics Read and Account Settings Read. Zone: Zone Read, DNS
+Edit, Workers Routes Edit and Zone WAF Edit. The narrower `stage-edge` token additionally needs
+Account Analytics Read and Zone WAF Edit for the hourly check.
+
+### Zerops service retirement
 
 `node scripts/ops/stage-zerops-services.mts retire|restore [--dry-run]` handles the 9 stage
 application services that Cloudflare mode no longer uses. The migrator, SpiceDB, `outboxworkerhost`
