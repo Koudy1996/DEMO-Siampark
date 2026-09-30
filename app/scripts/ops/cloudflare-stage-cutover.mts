@@ -96,10 +96,26 @@ const DB18_DATABASE_NAME = 'db18_dbName';
 
 type StageVpcService = Omit<VpcServiceSpec, 'tunnelId'>;
 
-/** The two Zerops origins the tunnel exposes, and nothing else. */
+/**
+ * The two Zerops origins the tunnel exposes, and nothing else. cloudflared resolves fully qualified names, and
+ * Zerops only answers a service's `<hostname>.zerops` name that way. Zerops Postgres serves a self-signed
+ * certificate, so db18 is encrypted without a certificate check; the hop stays inside the Tunnel and the project network.
+ */
 export const STAGE_VPC_SERVICES = {
-  db18: { hostname: 'db18', name: 'ontos-stage-db18', port: 5432, type: 'tcp' },
-  spicedb: { hostname: 'spicedb', name: 'ontos-stage-spicedb', port: 8443, type: 'http' },
+  db18: {
+    certificateVerification: 'disabled',
+    hostname: 'db18.zerops',
+    name: 'ontos-stage-db18',
+    port: 5432,
+    type: 'tcp',
+  },
+  spicedb: {
+    certificateVerification: 'verify_full',
+    hostname: 'spicedb.zerops',
+    name: 'ontos-stage-spicedb',
+    port: 8443,
+    type: 'http',
+  },
 } as const satisfies Readonly<Record<'db18' | 'spicedb', StageVpcService>>;
 
 /** The Zerops data-layer services Cloudflare mode adds: the tunnel connector and the combined outbox worker host. */
@@ -146,9 +162,15 @@ const PlacementDocumentSchema = Schema.fromJsonString(
 
 const shellOrigin = (origins: StageOrigins) => `https://${origins.shellHostname}`;
 
-/** The Shell answers on its own hostname; every vertical on `<unit>.<zone>`. */
+/** The stage zone is shared with other projects, so every vertical hostname carries this prefix. */
+const VERTICAL_HOSTNAME_PREFIX = 'ontos-stage-';
+
+const verticalOrigin = (unitId: string, origins: StageOrigins) =>
+  `https://${VERTICAL_HOSTNAME_PREFIX}${unitId}.${origins.stageZone}`;
+
+/** The Shell answers on its own hostname; every vertical on `ontos-stage-<unit>.<zone>`. */
 export const publicOrigin = (unit: EdgeUnit, origins: StageOrigins) =>
-  unit.kind === 'shell' ? shellOrigin(origins) : `https://${unit.id}.${origins.stageZone}`;
+  unit.kind === 'shell' ? shellOrigin(origins) : verticalOrigin(unit.id, origins);
 
 export interface DataPlaneIds {
   readonly hyperdriveId: string;
@@ -212,7 +234,7 @@ const verticalSecrets = (unit: EdgeUnit, origins: StageOrigins, sources: WorkerS
   const secrets = new Map([['ONTOS_GATEWAY_PUBLIC_JWKS', sources.gatewayPublicJwks]]);
   const dependencies = VERTICAL_DEPENDENCIES.get(unit.id);
   for (const [variable, target] of dependencies ?? []) {
-    secrets.set(variable, Redacted.make(`https://${target}.${origins.stageZone}/${target}-api`));
+    secrets.set(variable, Redacted.make(`${verticalOrigin(target, origins)}/${target}-api`));
   }
   // A vertical that calls another asks the Shell for the gateway credential first.
   if (dependencies !== undefined) {
@@ -254,6 +276,53 @@ export const workerSecretPlan = (
 /** Zerops hostnames never contain a hyphen; the verticals' and the Shell's are their IDs without one. */
 const zeropsHostname = (unitId: string) => unitId.replaceAll('-', '');
 
+/** The Shell's Ed25519 gateway signing key, as stored on stage (a private JWK). */
+const GatewayPrivateJwkSchema = Schema.fromJsonString(
+  Schema.Struct({
+    alg: Schema.String,
+    crv: Schema.String,
+    d: Schema.String,
+    kid: Schema.String,
+    kty: Schema.String,
+    use: Schema.String,
+    x: Schema.String,
+  }),
+);
+
+const GatewayPublicJwksSchema = Schema.fromJsonString(
+  Schema.Struct({
+    keys: Schema.Tuple([
+      Schema.Struct({
+        alg: Schema.String,
+        crv: Schema.String,
+        key_ops: Schema.Tuple([Schema.Literal('verify')]),
+        kid: Schema.String,
+        kty: Schema.String,
+        use: Schema.String,
+        x: Schema.String,
+      }),
+    ]),
+  }),
+);
+
+/**
+ * The JWKS every vertical verifies Shell gateway tokens with: the public half of the Shell's
+ * signing key. Deriving it keeps one source of truth, so a vertical without a Zerops service
+ * (or after the Zerops verticals retire) still gets the key the Shell signs with.
+ */
+export const gatewayPublicJwksFor = (privateJwk: Redacted.Redacted) =>
+  Schema.decodeUnknownEffect(GatewayPrivateJwkSchema)(Redacted.value(privateJwk)).pipe(
+    Effect.flatMap(({ alg, crv, kid, kty, use, x }) =>
+      Schema.encodeEffect(GatewayPublicJwksSchema)({
+        keys: [{ alg, crv, key_ops: ['verify'], kid, kty, use, x }],
+      }),
+    ),
+    Effect.map(Redacted.make),
+    Effect.mapError(
+      () => new StageOperationError({ message: 'the Shell ONTOS_GATEWAY_PRIVATE_JWK is not an Ed25519 private JWK' }),
+    ),
+  );
+
 const readWorkerSecretSources = (units: readonly EdgeUnit[]) =>
   Effect.gen(function* readWorkerSecretSourcesEffect() {
     const { projectId } = yield* CutoverConfiguration;
@@ -262,25 +331,11 @@ const readWorkerSecretSources = (units: readonly EdgeUnit[]) =>
       return yield* new StageOperationError({ message: 'the Cloudflare placement does not place the Shell' });
     }
     const shellHost = zeropsHostname(shell.id);
-    // Every vertical verifies the same Shell signing key; refuse to publish one when stage disagrees.
-    const publicJwks = yield* Effect.forEach(
-      units.filter((unit) => unit.kind === 'vertical'),
-      (unit) => readZeropsValue(projectId, `${zeropsHostname(unit.id)}_ONTOS_GATEWAY_PUBLIC_JWKS`),
-      { concurrency: 1 },
-    );
-    const [gatewayPublicJwks] = publicJwks;
-    if (gatewayPublicJwks === undefined) {
-      return yield* new StageOperationError({ message: 'the Cloudflare placement places no vertical' });
-    }
-    if (publicJwks.some((jwks) => Redacted.value(jwks) !== Redacted.value(gatewayPublicJwks))) {
-      return yield* new StageOperationError({
-        message: 'the Zerops verticals do not share one ONTOS_GATEWAY_PUBLIC_JWKS; reconcile stage before the cut-over',
-      });
-    }
+    const gatewayPrivateJwk = yield* readZeropsValue(projectId, `${shellHost}_ONTOS_GATEWAY_PRIVATE_JWK`);
     return {
       betterAuthSecret: yield* readZeropsValue(projectId, `${shellHost}_BETTER_AUTH_SECRET`),
-      gatewayPrivateJwk: yield* readZeropsValue(projectId, `${shellHost}_ONTOS_GATEWAY_PRIVATE_JWK`),
-      gatewayPublicJwks,
+      gatewayPrivateJwk,
+      gatewayPublicJwks: yield* gatewayPublicJwksFor(gatewayPrivateJwk),
       spicedbPresharedKey: yield* readZeropsValue(projectId, 'spicedb_SPICEDB_GRPC_PRESHARED_KEY'),
     } satisfies WorkerSecretSources;
   });
@@ -388,7 +443,7 @@ export const vpcServiceDrift = (service: CloudflareVpcService, spec: VpcServiceS
     service.type !== spec.type && `type ${service.type}`,
     port !== spec.port && `port ${String(port)}`,
     plaintextPort !== undefined && `plaintext port ${String(plaintextPort)}`,
-    spec.type === 'http' && verification !== VPC_CERT_VERIFICATION_MODE && `certificate verification ${verification}`,
+    verification !== spec.certificateVerification && `certificate verification ${verification}`,
     hostname !== spec.hostname && `hostname ${String(hostname)}`,
     tunnelId !== spec.tunnelId && 'another tunnel',
   ]);

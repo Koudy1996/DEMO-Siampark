@@ -21,7 +21,7 @@ import type { CutoverSettings } from '../ops/cloudflare-stage-cutover.mts';
 import { SPICEDB_GRPC_TLS, SPICEDB_HTTP_TLS, spicedbTlsState } from '../ops/spicedb-tls.mts';
 import { ciPolicy, killSwitchRule, peoplePolicy, usageAlert } from '../ops/cloudflare-stage-cost-guard.mts';
 import { edgeUnits } from '../ops/stage-edge-units.mts';
-import { OpsMode, STAGE_ZEROPS_PROJECT_ID } from '../ops/stage-operations.mts';
+import { OpsMode, STAGE_ZEROPS_PROJECT_ID, readZeropsValue } from '../ops/stage-operations.mts';
 import {
   APP_DIRECTORY,
   FAKE_REVISION,
@@ -38,9 +38,23 @@ const SHELL_ORIGIN = 'https://app.stage.example.com';
 const CI_TOKEN = 'ci-token-secret';
 const DATABASE_CREDENTIAL = 'db-password-secret';
 const AUTH_SECRET = 'better-auth-secret';
-const PRIVATE_JWK = '{"kty":"OKP","d":"private-jwk-secret"}';
+const PRIVATE_JWK = JSON.stringify({
+  alg: 'EdDSA',
+  crv: 'Ed25519',
+  d: 'private-jwk-secret',
+  key_ops: ['sign'],
+  kid: 'gateway-1',
+  kty: 'OKP',
+  use: 'sig',
+  x: 'public-x',
+});
 const SPICEDB_KEY = 'spicedb-key-secret';
-const PUBLIC_JWKS = '{"keys":["public"]}';
+// The public half of PRIVATE_JWK, which every vertical verifies Shell gateway tokens with.
+const PUBLIC_JWKS = JSON.stringify({
+  keys: [
+    { alg: 'EdDSA', crv: 'Ed25519', key_ops: ['verify'], kid: 'gateway-1', kty: 'OKP', use: 'sig', x: 'public-x' },
+  ],
+});
 const SNAPSHOT_SECRET = 'ONTOS_ACTIVE_APPLICATION_COMPOSITION_SNAPSHOT_JSON';
 const CUSTOMER_CONTEXT_WORKER = 'app-commerce-customer-context';
 const DEPLOYMENT_ENVIRONMENT = 'ULTRAMODERN_DEPLOYMENT_ENVIRONMENT';
@@ -84,6 +98,15 @@ const SECRET_VALUES = {
   ...Object.fromEntries(VERTICAL_HOSTS.map((host) => [`${host}_ONTOS_GATEWAY_PUBLIC_JWKS`, PUBLIC_JWKS])),
 };
 
+const SPICEDB_VPC_HOST = 'spicedb.zerops';
+
+const SENSITIVE_KEYS = [
+  'db18_password',
+  'shellsuperapp_BETTER_AUTH_SECRET',
+  'shellsuperapp_ONTOS_GATEWAY_PRIVATE_JWK',
+  'spicedb_SPICEDB_GRPC_PRESHARED_KEY',
+];
+
 const SECRETS = [
   'lead-token-secret',
   CI_TOKEN,
@@ -119,10 +142,13 @@ const newStage = (overrides: Parameters<typeof fakeStage>[0] = {}, { spicedbTls 
   const tls = spicedbTls ? SPICEDB_TLS : {};
   return fakeStage({
     projectUserKeys: Object.keys(tls),
-    sensitiveKeys: Object.keys(tls),
+    // zcli prints these as REDACTED, so the kit must read them through the Zerops API.
+    sensitiveKeys: [...Object.keys(tls), ...SENSITIVE_KEYS],
     services: [
       { hostname: 'db18', id: 'db18-id', status: 'ACTIVE' },
       { hostname: 'spicedb', id: 'spicedb-id', status: 'ACTIVE' },
+      { hostname: 'shellsuperapp', id: 'shellsuperapp-id', status: 'ACTIVE' },
+      ...VERTICAL_HOSTS.map((hostname) => ({ hostname, id: `${hostname}-id`, status: 'ACTIVE' })),
     ],
     ...overrides,
     projectValues: { ...SECRET_VALUES, ...tls, ...overrides.projectValues },
@@ -190,16 +216,17 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
         '/connectivity/directory/services',
         {
           app_protocol: 'postgresql',
-          host: { hostname: 'db18', resolver_network: { tunnel_id: 'tunnel-1' } },
+          host: { hostname: 'db18.zerops', resolver_network: { tunnel_id: 'tunnel-1' } },
           name: 'ontos-stage-db18',
           tcp_port: 5432,
+          tls_settings: { cert_verification_mode: 'disabled' },
           type: 'tcp',
         },
       ],
       [
         '/connectivity/directory/services',
         {
-          host: { hostname: 'spicedb', resolver_network: { tunnel_id: 'tunnel-1' } },
+          host: { hostname: SPICEDB_VPC_HOST, resolver_network: { tunnel_id: 'tunnel-1' } },
           https_port: 8443,
           name: 'ontos-stage-spicedb',
           tls_settings: { cert_verification_mode: 'verify_full' },
@@ -261,7 +288,7 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
       ULTRAMODERN_CLOUDFLARE_HYPERDRIVE_ID: HYPERDRIVE_ID,
       ULTRAMODERN_CLOUDFLARE_SPICEDB_VPC_SERVICE_ID: 'vpc-2',
       ULTRAMODERN_MF_DEV_ORIGIN: SHELL_ORIGIN,
-      ULTRAMODERN_PUBLIC_URL_PRICING: 'https://pricing.stage.example.com',
+      ULTRAMODERN_PUBLIC_URL_PRICING: 'https://ontos-stage-pricing.stage.example.com',
       ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP: SHELL_ORIGIN,
     });
     expect(placement.units).toHaveLength(10);
@@ -338,6 +365,22 @@ it.effect('creates the SpiceDB TLS secrets first on a stage without them', () =>
   }),
 );
 
+it.effect('refuses a Zerops value a read-only token sees masked', () =>
+  Effect.gen(function* refusesMaskedValue() {
+    const stage = newStage();
+    stage.projectValues.set('db18_password', 'REDACTED');
+
+    const error = yield* run(readZeropsValue(settings.projectId, 'db18_password'), {
+      account: fakeCloudflareAccount({}),
+      files: fakeFiles(),
+      stage,
+      zerops: fakeZeropsApi(stage),
+    }).pipe(Effect.flip);
+
+    expect(error.message).toBe('the Zerops token can only read db18_password masked; use a full-access token');
+  }),
+);
+
 it.effect('creates no SpiceDB TLS material in a dry run', () =>
   Effect.gen(function* dryRunSpicedbTls() {
     const account = fakeCloudflareAccount({});
@@ -381,7 +424,7 @@ it('accepts the SpiceDB VPC service only over HTTPS with full certificate verifi
     readonly mode?: string;
   }): CloudflareVpcService => ({
     host: {
-      hostname: Option.some('spicedb'),
+      hostname: Option.some(SPICEDB_VPC_HOST),
       resolver_network: Option.some({ tunnel_id: 'tunnel-1' }),
     },
     http_port: Option.fromNullishOr(fields.http_port),
@@ -454,17 +497,16 @@ it.effect('refuses to reuse a Hyperdrive config that points at another database'
   }),
 );
 
-it.effect('refuses to publish a gateway key the Zerops verticals do not share', () =>
-  Effect.gen(function* refusesDivergentJwks() {
+it.effect('refuses a Shell gateway key that is not an Ed25519 private JWK', () =>
+  Effect.gen(function* refusesMalformedGatewayKey() {
     const account = fakeCloudflareAccount({});
     const stage = newStage({
-      projectValues: { ...SECRET_VALUES, pricing_ONTOS_GATEWAY_PUBLIC_JWKS: '{"keys":["other"]}' },
+      projectValues: { ...SECRET_VALUES, shellsuperapp_ONTOS_GATEWAY_PRIVATE_JWK: '{"kty":"OKP"}' },
     });
-    const files = fakeFiles();
 
-    const error = yield* run(provision, { account, files, stage }).pipe(Effect.flip);
+    const error = yield* run(provision, { account, files: fakeFiles(), stage }).pipe(Effect.flip);
 
-    expect(error.message).toContain('do not share one ONTOS_GATEWAY_PUBLIC_JWKS');
+    expect(error.message).toBe('the Shell ONTOS_GATEWAY_PRIVATE_JWK is not an Ed25519 private JWK');
     expect(stage.commands.filter(({ args }) => args.includes('wrangler'))).toStrictEqual([]);
   }),
 );
@@ -562,14 +604,15 @@ const provisionedAccount = (
       vpcServices: [
         {
           app_protocol: 'postgresql',
-          host: { hostname: 'db18', resolver_network: { tunnel_id: 'tunnel-1' } },
+          host: { hostname: 'db18.zerops', resolver_network: { tunnel_id: 'tunnel-1' } },
           name: 'ontos-stage-db18',
           service_id: 'vpc-1',
           tcp_port: 5432,
+          tls_settings: { cert_verification_mode: 'disabled' },
           type: 'tcp',
         },
         {
-          host: { hostname: 'spicedb', resolver_network: { tunnel_id: 'tunnel-1' } },
+          host: { hostname: SPICEDB_VPC_HOST, resolver_network: { tunnel_id: 'tunnel-1' } },
           https_port: 8443,
           name: 'ontos-stage-spicedb',
           service_id: 'vpc-2',
@@ -785,14 +828,15 @@ it.effect('gives every vertical the Shell key and the callers their stage depend
 
     expect([...plan.keys()]).toHaveLength(10);
     expect(reveal(CUSTOMER_CONTEXT_WORKER)).toMatchObject({
-      ONTOS_CATALOG_BASE_URL: 'https://catalog.stage.example.com/catalog-api',
-      ONTOS_PRICE_GROUP_CATALOG_BASE_URL: 'https://price-group-catalog.stage.example.com/price-group-catalog-api',
-      ONTOS_PRICING_BASE_URL: 'https://pricing.stage.example.com/pricing-api',
+      ONTOS_CATALOG_BASE_URL: 'https://ontos-stage-catalog.stage.example.com/catalog-api',
+      ONTOS_PRICE_GROUP_CATALOG_BASE_URL:
+        'https://ontos-stage-price-group-catalog.stage.example.com/price-group-catalog-api',
+      ONTOS_PRICING_BASE_URL: 'https://ontos-stage-pricing.stage.example.com/pricing-api',
       ONTOS_SHELL_GATEWAY_BASE_URL: 'https://app.stage.example.com/shell-super-app-api',
     });
     expect(reveal('app-commerce-market-catalog')).toMatchObject({
       ONTOS_COMMERCE_CUSTOMER_CONTEXT_BASE_URL:
-        'https://commerce-customer-context.stage.example.com/commerce-customer-context-api',
+        'https://ontos-stage-commerce-customer-context.stage.example.com/commerce-customer-context-api',
     });
     expect(Arr.sort(Object.keys(reveal('app-pricing')), Order.String)).toStrictEqual([
       'ONTOS_GATEWAY_ISSUER',
