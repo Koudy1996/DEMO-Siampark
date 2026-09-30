@@ -73,6 +73,9 @@ import { catalogDocumentCurrentRead } from '../../src/api/catalog-document-curre
 import { catalogSourceResolutionRead } from '../../src/api/catalog-source-resolution.read.ts';
 import { externalTargetResolutionRead } from '../../src/api/external-target-resolution.read.ts';
 import { selectionEvidenceRead } from '../../src/api/selection-evidence.read.ts';
+import { assortmentSelectionAssessmentV1Read } from '../../src/api/assortment-selection-assessment-v1.read.ts';
+import { assortmentSetCompositionV1Read } from '../../src/api/assortment-set-composition-v1.read.ts';
+import { assortmentProductClassificationV1Read } from '../../src/api/assortment-product-classification-v1.read.ts';
 import { createProductRecoveryRead } from '../../src/api/create-product-recovery.read.ts';
 import { effectiveAttributeValuesCurrentRead } from '../../src/api/effective-attribute-values-current.read.ts';
 import { gtinCurrentRead } from '../../src/api/gtin-current.read.ts';
@@ -188,6 +191,9 @@ const reads = [
   catalogSourceResolutionRead,
   externalTargetResolutionRead,
   selectionEvidenceRead,
+  assortmentSelectionAssessmentV1Read,
+  assortmentSetCompositionV1Read,
+  assortmentProductClassificationV1Read,
   createProductRecoveryRead,
   effectiveAttributeValuesCurrentRead,
   gtinCurrentRead,
@@ -246,6 +252,7 @@ const expectedPermissionTarget = (readKey: string) => {
     readKey.includes('brand') ||
     readKey.includes('manufacturer-relation') ||
     readKey.includes('product-relationship') ||
+    readKey === 'commerce.catalog.api.assortment-selection-assessment-v1' ||
     readKey === 'commerce.catalog.api.product-size-current' ||
     readKey === 'commerce.catalog.api.color-current' ||
     readKey === 'commerce.catalog.api.color-history' ||

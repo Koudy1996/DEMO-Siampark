@@ -10,6 +10,7 @@ import { isDatabaseCommitAcknowledgementAmbiguous } from '../database/driver-fai
 import { findPostgresFailure } from '../database/postgres-failure.ts';
 import { CoreDatabase as CoreDatabaseService } from '../db/client.ts';
 import { installOperationalScope } from '../db/scoped-transaction.ts';
+import { trustedTransactionTime } from '../operations/transaction-time.ts';
 import type { CoreTransaction } from '../db/types.ts';
 import type { ModuleEntrypointGatewayService } from '../modules/module-entrypoint-gateway.ts';
 import { ModuleEntrypointGateway } from '../modules/module-entrypoint-gateway.ts';
@@ -22,6 +23,11 @@ import {
   ContextAccess,
   PricingAuthorizationResourceIdSchema,
   isBusinessPermissionTargetCompatible,
+  toAssortmentPermissionAccessKey,
+  toAssortmentPermissionAccessObjectId,
+  toAssortmentPermissionAccessObjectIdForTargets,
+  isAssortmentPermissionTargetValid,
+  assortmentPermissionTargetRequiresLegalEntity,
   toBusinessPermissionAccessKey,
 } from '../permissions/context-access.ts';
 import { BusinessPermissionCodeSchema } from '../permissions/business-permission.ts';
@@ -46,6 +52,7 @@ import {
   getCommittedActionDomainError,
 } from './context.ts';
 import type {
+  ActionAssortmentPermissionTarget,
   ActionBusinessPermissionTarget,
   ActionDeniedAuditEvidenceDeclaration,
   ActionLegalEntityPermission,
@@ -58,6 +65,7 @@ import {
   decodeActionResult,
   getActionDecodedSuccessHook,
   getActionBusinessPermissionTargetResolver,
+  getActionAssortmentPermissionTargetResolver,
   getActionHandler,
   getActionResourcePermissionTargetResolver,
   getActionServiceFactory,
@@ -568,6 +576,217 @@ const resolveActionBusinessPermissionTarget = <Payload>(
     );
   });
 
+const AssortmentResourceTargetSchema = Schema.Struct({
+  moduleId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(300)).pipe(
+    Schema.brand('AssortmentModuleId'),
+  ),
+  resourceId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(300)).pipe(
+    Schema.brand('AssortmentResourceId'),
+  ),
+  resourceType: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(300)),
+});
+const AssortmentSelectorKindSchema = Schema.Literals(['ALL', 'CATEGORY', 'PRODUCT', 'VARIANT', 'PACKAGE_OPTION']);
+const AssortmentPurposeSchema = Schema.Literals(['VISIBILITY', 'PURCHASE']);
+const AssortmentEffectSchema = Schema.Literals(['ALLOW', 'DENY']);
+const AssortmentSubjectKindSchema = Schema.Literals(['RETAIL_CUSTOMER_PROFILE', 'COUNTERPARTY']);
+const AssortmentSelectorSchema = Schema.Struct({
+  kind: AssortmentSelectorKindSchema,
+  target: Schema.optionalKey(AssortmentResourceTargetSchema),
+}).check(
+  Schema.makeFilter((selector) =>
+    (selector.kind === 'ALL') === (selector.target === undefined)
+      ? undefined
+      : 'Assortment ALL selectors cannot carry a target and other selectors require one',
+  ),
+);
+const AssortmentScopeSchema = Schema.Struct({
+  channel: AssortmentResourceTargetSchema,
+  market: Schema.optionalKey(AssortmentResourceTargetSchema),
+  storefront: Schema.optionalKey(AssortmentResourceTargetSchema),
+});
+const AssortmentSubjectSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('GUEST') }),
+  Schema.Struct({
+    kind: AssortmentSubjectKindSchema,
+    ref: AssortmentResourceTargetSchema,
+  }),
+]);
+const AssortmentAdmissionSetSchema = Schema.Union([
+  Schema.Struct({
+    contentHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+    entries: Schema.Tuple([]),
+    memberCount: Schema.Literal(0),
+    setKind: Schema.Literal('EMPTY'),
+  }),
+  Schema.Struct({
+    contentHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+    entries: Schema.Array(AssortmentSelectorSchema).check(Schema.isMinLength(1)),
+    memberCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+    setKind: Schema.Literal('ENTRIES'),
+  }).check(
+    Schema.makeFilter((set) =>
+      set.entries.length === set.memberCount ? undefined : 'Admission Set count must match its complete entries',
+    ),
+  ),
+]);
+const AssortmentPermissionTargetSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal('assortment_configuration'),
+    permission: Schema.Literal('assortment.configuration.read'),
+    resource: AssortmentResourceTargetSchema,
+  }),
+  Schema.Struct({
+    catalogSelection: AssortmentResourceTargetSchema,
+    commercialScope: AssortmentScopeSchema,
+    kind: Schema.Literal('assortment_decision'),
+    permission: Schema.Literal('assortment.decision.explain'),
+    purpose: AssortmentPurposeSchema,
+    subject: AssortmentSubjectSchema,
+  }),
+  Schema.Struct({
+    effect: AssortmentEffectSchema,
+    kind: Schema.Literal('assortment_rule'),
+    mode: Schema.Literal('create'),
+    permission: Schema.Literal('assortment.rule.create'),
+    purpose: AssortmentPurposeSchema,
+    selector: AssortmentSelectorSchema,
+    stableCode: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(300)),
+  }),
+  Schema.Struct({
+    effect: AssortmentEffectSchema,
+    kind: Schema.Literal('assortment_rule'),
+    mode: Schema.Literal('revision_create'),
+    permission: Schema.Literal('assortment.rule.revision.create'),
+    purpose: AssortmentPurposeSchema,
+    selector: AssortmentSelectorSchema,
+    stableRule: AssortmentResourceTargetSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('assortment_rule'),
+    mode: Schema.Literal('retire'),
+    permission: Schema.Literal('assortment.rule.retire'),
+    stableRule: AssortmentResourceTargetSchema,
+  }),
+  Schema.Struct({
+    audience: Schema.Union([
+      Schema.Struct({ kind: Schema.Literal('SHARED') }),
+      Schema.Struct({ group: AssortmentResourceTargetSchema, kind: Schema.Literal('COMMERCE_CUSTOMER_GROUP') }),
+      Schema.Struct({
+        kind: Schema.Literal('SUBJECT'),
+        subject: Schema.Union([
+          Schema.Struct({
+            kind: AssortmentSubjectKindSchema,
+            ref: AssortmentResourceTargetSchema,
+          }),
+        ]),
+      }),
+    ]),
+    commercialScope: AssortmentScopeSchema,
+    effectiveFrom: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+    kind: Schema.Literal('assortment_binding'),
+    mode: Schema.Literal('create'),
+    permission: Schema.Literal('assortment.binding.create'),
+    ruleRevision: AssortmentResourceTargetSchema,
+  }),
+  Schema.Struct({
+    binding: AssortmentResourceTargetSchema,
+    kind: Schema.Literal('assortment_binding'),
+    mode: Schema.Literal('end'),
+    permission: Schema.Literal('assortment.binding.end'),
+  }),
+  Schema.Struct({
+    admissionSet: AssortmentAdmissionSetSchema,
+    commercialScope: AssortmentScopeSchema,
+    effectiveFrom: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+    kind: Schema.Literal('assortment_boundary'),
+    mode: Schema.Literal('create'),
+    permission: Schema.Literal('assortment.boundary.create'),
+    purpose: AssortmentPurposeSchema,
+    subject: Schema.Union([
+      Schema.Struct({
+        kind: AssortmentSubjectKindSchema,
+        ref: AssortmentResourceTargetSchema,
+      }),
+    ]),
+  }),
+  Schema.Struct({
+    boundary: AssortmentResourceTargetSchema,
+    kind: Schema.Literal('assortment_boundary'),
+    mode: Schema.Literal('end'),
+    permission: Schema.Literal('assortment.boundary.end'),
+  }),
+]);
+const AssortmentPermissionTargetsSchema = Schema.Array(AssortmentPermissionTargetSchema).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(8),
+);
+const AssortmentTargetJsonSchema = Schema.fromJsonString(Schema.Unknown);
+
+const resolveActionAssortmentPermissionTargets = <Payload>(
+  payload: Payload,
+  scope: OperationalScope,
+  resolver: ((payload: Payload, scope: OperationalScope) => readonly ActionAssortmentPermissionTarget[]) | undefined,
+): Effect.Effect<readonly ActionAssortmentPermissionTarget[], ActionPermissionCheckError> =>
+  Effect.suspend(() => {
+    if (resolver === undefined) {
+      return Effect.succeed([]);
+    }
+    return Effect.try({
+      catch: (cause) =>
+        attachFailureCause(
+          new ActionPermissionCheckError({
+            code: 'action_permission_check_failed',
+            reason: 'The declared Assortment permission targets could not be resolved safely',
+          }),
+          cause,
+        ),
+      try: () => resolver(payload, scope),
+    }).pipe(
+      Effect.flatMap((targets) => Schema.decodeUnknownEffect(AssortmentPermissionTargetsSchema)(targets)),
+      Effect.filterOrFail(
+        (targets) =>
+          targets.every((target) =>
+            target.kind === 'assortment_rule' && target.mode !== 'retire'
+              ? target.purpose === 'PURCHASE' || !['VARIANT', 'PACKAGE_OPTION'].includes(target.selector.kind)
+              : true,
+          ) &&
+          new Set(
+            targets.map((target) =>
+              Result.getOrElse(Schema.encodeResult(AssortmentTargetJsonSchema)(target), () => ''),
+            ),
+          ).size === targets.length &&
+          targets.every((target) => {
+            const storefront =
+              target.kind === 'assortment_decision' ||
+              (target.kind === 'assortment_binding' && target.mode === 'create') ||
+              (target.kind === 'assortment_boundary' && target.mode === 'create')
+                ? target.commercialScope.storefront
+                : undefined;
+            return storefront === undefined
+              ? true
+              : scope.trustedStorefrontId !== undefined && scope.trustedStorefrontId === storefront.resourceId;
+          }),
+        () =>
+          new ActionPermissionCheckError({
+            code: 'action_permission_check_failed',
+            reason: 'The declared Assortment permission targets do not match trusted scope',
+          }),
+      ),
+      Effect.map((targets) => Object.freeze(targets.map((target) => Object.freeze({ ...target })))),
+      Effect.mapError((cause) =>
+        Schema.is(ActionPermissionCheckError)(cause)
+          ? cause
+          : attachFailureCause(
+              new ActionPermissionCheckError({
+                code: 'action_permission_check_failed',
+                reason: 'The declared Assortment permission targets are invalid',
+              }),
+              cause,
+            ),
+      ),
+    );
+  });
+
 const terminalInvocation = () =>
   new ActionInvocationStateError({
     code: 'action_invocation_state_invalid',
@@ -843,6 +1062,53 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
       );
   };
 
+  const checkActionAssortmentPermissions = (
+    scope: OperationalScope,
+    assortmentTargets: readonly ActionAssortmentPermissionTarget[],
+  ): Effect.Effect<'allowed' | 'denied', ActionPermissionCheckError> => {
+    if (assortmentTargets.length === 0) {
+      return Effect.succeed('allowed');
+    }
+    if (
+      contextAccess?.assortmentPermissions === undefined ||
+      assortmentTargets.some((target) => !isAssortmentPermissionTargetValid(target)) ||
+      (scope.legalEntityId === undefined && assortmentTargets.some(assortmentPermissionTargetRequiresLegalEntity))
+    ) {
+      return Effect.fail(permissionUnavailable());
+    }
+    const { legalEntityId } = scope;
+    const checkInputBase = {
+      principal: { principalId: scope.principalId, tenantId: scope.tenantId },
+      targets: assortmentTargets.map((entry) => ({ target: entry })),
+    };
+    const checkInputWithStorefront =
+      scope.trustedStorefrontId === undefined
+        ? checkInputBase
+        : { ...checkInputBase, trustedStorefrontId: scope.trustedStorefrontId };
+    const checkInput =
+      legalEntityId === undefined ? checkInputWithStorefront : { ...checkInputWithStorefront, legalEntityId };
+    return contextAccess.assortmentPermissions(checkInput).pipe(
+      Effect.flatMap((decisions) => {
+        if (
+          decisions.length !== assortmentTargets.length ||
+          decisions.some(
+            (decision, index) =>
+              decision.key !==
+                (assortmentTargets[index] === undefined
+                  ? undefined
+                  : toAssortmentPermissionAccessKey(scope.tenantId, legalEntityId, assortmentTargets[index])) ||
+              decision.decision === 'unavailable',
+          )
+        ) {
+          return Effect.fail(permissionUnavailable());
+        }
+        return decisions.some(({ decision }) => decision === 'denied')
+          ? Effect.succeed('denied' as const)
+          : Effect.succeed('allowed' as const);
+      }),
+    );
+  };
+
   const runAction: ActionRuntimeService['runAction'] = Effect.fn('ActionRuntime.runAction')(function* runActionEffect<
     PayloadSchema extends Schema.ConstraintDecoder<unknown>,
     ResultSchema extends Schema.ConstraintDecoder<unknown>,
@@ -904,6 +1170,7 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
       tenantPermission: Option.Option<ActionTenantPermission>,
       legalEntityPermission: ActionLegalEntityPermission | undefined,
       businessPermissionTarget: Option.Option<ActionBusinessPermissionTarget>,
+      assortmentPermissionTargets: readonly ActionAssortmentPermissionTarget[],
       resourcePermissionTarget: Option.Option<ActionResourcePermissionTarget>,
     ): readonly OwnerAuthorizationTarget[] => {
       const targets: OwnerAuthorizationTarget[] = [];
@@ -928,6 +1195,12 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
             {},
           ),
         );
+      }
+      for (const target of assortmentPermissionTargets) {
+        targets.push({
+          kind: 'assortment_permission',
+          target,
+        });
       }
       if (Option.isSome(resourcePermissionTarget)) {
         targets.push({
@@ -965,7 +1238,9 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
     /* oxlint-disable anti-slop/no-known-value-widening -- The normalized governed-target result intentionally preserves the existing owner authorization contract across all branches. */
     const prepareGovernedTarget = (
       transport: ActionTransportMetadata,
+      scope: OperationalScope,
       businessPermissionTarget: Option.Option<ActionBusinessPermissionTarget>,
+      assortmentPermissionTargets: readonly ActionAssortmentPermissionTarget[],
       resourcePermissionTarget: Option.Option<ActionResourcePermissionTarget>,
       hasCanonicalScopeTarget: boolean,
     ): Readonly<{
@@ -978,6 +1253,23 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
           targetModuleKey: input.registration.descriptor.owningModuleKey,
           targetResourceId: businessTargetResourceId(target),
           targetResourceType: `${target.kind}:${targetPermission}`,
+        };
+        return { actionTarget, governedTransport: buildGovernedTransport(transport, actionTarget) };
+      }
+      if (assortmentPermissionTargets.length > 0) {
+        const [singleTarget] = assortmentPermissionTargets;
+        const assortmentTargetResourceId =
+          assortmentPermissionTargets.length === 1 && singleTarget !== undefined
+            ? toAssortmentPermissionAccessObjectId(scope.tenantId, scope.legalEntityId, singleTarget)
+            : toAssortmentPermissionAccessObjectIdForTargets(
+                scope.tenantId,
+                scope.legalEntityId,
+                assortmentPermissionTargets,
+              );
+        const actionTarget = {
+          targetModuleKey: input.registration.descriptor.owningModuleKey,
+          targetResourceId: assortmentTargetResourceId ?? 'assortment-unavailable',
+          targetResourceType: 'assortment_permission',
         };
         return { actionTarget, governedTransport: buildGovernedTransport(transport, actionTarget) };
       }
@@ -1036,36 +1328,50 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
           ? Option.none<ActionTenantPermission>()
           : yield* resolveActionTenantPermission(payload, input.registration.descriptor.tenantPermission);
         const { legalEntityPermission } = input.registration.descriptor;
-        const businessPermissionTarget = yield* resolveActionBusinessPermissionTarget(
-          payload,
-          scope,
-          getActionBusinessPermissionTargetResolver(input.registration),
-        );
-        // oxlint-disable-next-line effect-native/no-sequential-independent-yields -- Preserve business-before-resource resolver execution because owner callbacks may throw or observe mutable state.
-        const resourcePermissionTarget = yield* resolveActionResourcePermissionTarget(
-          payload,
-          scope,
-          getActionResourcePermissionTargetResolver(input.registration),
+        const [businessPermissionTarget, assortmentPermissionTargets, resourcePermissionTarget] = yield* Effect.all(
+          [
+            resolveActionBusinessPermissionTarget(
+              payload,
+              scope,
+              getActionBusinessPermissionTargetResolver(input.registration),
+            ),
+            resolveActionAssortmentPermissionTargets(
+              payload,
+              scope,
+              getActionAssortmentPermissionTargetResolver(input.registration),
+            ),
+            resolveActionResourcePermissionTarget(
+              payload,
+              scope,
+              getActionResourcePermissionTargetResolver(input.registration),
+            ),
+          ],
+          { concurrency: 1 },
         );
         const hasCanonicalScopeTarget =
           Option.isSome(tenantPermission) ||
           legalEntityPermission !== undefined ||
-          Option.isSome(businessPermissionTarget);
+          Option.isSome(businessPermissionTarget) ||
+          assortmentPermissionTargets.length > 0;
         const frozenOwnerAuthorizationTargets = buildOwnerAuthorizationTargets(
           scope,
           tenantPermission,
           legalEntityPermission,
           businessPermissionTarget,
+          assortmentPermissionTargets,
           resourcePermissionTarget,
         );
         const { actionTarget, governedTransport } = prepareGovernedTarget(
           transport,
+          scope,
           businessPermissionTarget,
+          assortmentPermissionTargets,
           resourcePermissionTarget,
           hasCanonicalScopeTarget,
         );
         return {
           actionTarget,
+          assortmentPermissionTargets,
           businessPermissionTarget,
           frozenOwnerAuthorizationTargets,
           governedTransport,
@@ -1169,6 +1475,7 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
     );
     const {
       actionTarget,
+      assortmentPermissionTargets,
       businessPermissionTarget,
       deniedAuditEvidence,
       frozenOwnerAuthorizationTargets,
@@ -1273,13 +1580,15 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
       const legalEntityPermissionDecision = yield* checkActionLegalEntityPermission(scope, legalEntityPermission);
       const resourcePermissionDecision = yield* checkActionResourcePermission(scope, resourcePermissionTarget);
       const businessPermissionDecision = yield* checkActionBusinessPermission(scope, businessPermissionTarget);
+      const assortmentPermissionDecision = yield* checkActionAssortmentPermissions(scope, assortmentPermissionTargets);
       return (
         preflightDenied ||
         (permissionDecision === 'denied' && !hasPreflightPermit) ||
         tenantPermissionDecision === 'denied' ||
         legalEntityPermissionDecision === 'denied' ||
         resourcePermissionDecision === 'denied' ||
-        businessPermissionDecision === 'denied'
+        businessPermissionDecision === 'denied' ||
+        assortmentPermissionDecision === 'denied'
       );
     });
 
@@ -1450,10 +1759,12 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
             yield* moduleStateGate.recheckWrite(drizzleTransaction, scope.tenantId, tenantEntrypoint);
           }
           notifyStage('module_state_rechecked');
+          const operationAt = yield* trustedTransactionTime(drizzleTransaction);
           const ownerAuthorizationDecision = yield* ownerAuthorizationOverlay.authorize(
             scopedTransaction,
             Object.freeze({
               operation: 'action' as const,
+              operationAt,
               operationKey: input.registration.descriptor.actionKey,
               owningModuleKey: input.registration.descriptor.owningModuleKey,
               scope,

@@ -48,6 +48,7 @@ import {
   raiseScaffoldFailure,
   readGeneratedSlotEntries,
   requireCanonicalSlug,
+  replaceGeneratedSlotEntry,
   resolveContainedPath,
   scaffoldFailure,
   stabilizeGovernedHttpApiAdditionSlot,
@@ -84,8 +85,6 @@ const PUBLIC_COMPONENT_KIND = 'public-component';
 const REPORT_KIND = 'report';
 const SEARCH_PROVIDER_KIND = 'search-provider';
 const WORKSPACE_DEPENDENCY = 'workspace:*';
-const PUBLIC_CONTRACT_SHIM_LINT =
-  '/* eslint-disable oxc/no-barrel-file, sonarjs/no-wildcard-import -- This generated owner shim preserves one canonical public contract source without copying schemas; expires: 2027-03-31. */';
 const ContractOwnerAppIdSchema = Schema.String.pipe(Schema.brand('ContractOwnerAppId'));
 const ContractOwnerModuleIdSchema = Schema.String.pipe(Schema.brand('ContractOwnerModuleId'));
 
@@ -340,7 +339,7 @@ const discoverPublicContractPackage = Effect.fn('GovernedContributionScaffold.di
 );
 
 const renderPublicContractShim = (specifier: string): string =>
-  `${generatedHeader(MODULE_API_KIND)}\n// @ontos-public-contract ${specifier}\n${PUBLIC_CONTRACT_SHIM_LINT}\nexport * from '${specifier}';\n`;
+  `${generatedHeader(MODULE_API_KIND)}\n// @ontos-public-contract ${specifier}\nexport * from '${specifier}';\n`;
 
 const renderApiContract = (name: string): string => {
   const type = toPascalCase(name);
@@ -1150,6 +1149,9 @@ const patchSlots = (
       (structurallyMatchesGeneratedEntry(identityMatch.entry, line) ||
         acceptsAdaptedProviderDescriptor(start, identityMatch.entry, line))
     ) {
+      if (start === MODULE_MANIFEST_API_SLOT_START) {
+        return replaceGeneratedSlotEntry(current, start, end, identityMatch.entry, line);
+      }
       return current;
     }
     if (identityMatch !== undefined) {

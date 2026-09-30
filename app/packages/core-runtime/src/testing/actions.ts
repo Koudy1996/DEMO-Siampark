@@ -283,6 +283,10 @@ const actionTestHarness = Effect.fn('ActionTestHarness.make')(function* actionTe
           },
         ],
       };
+    } else if (sql.includes('transaction_timestamp')) {
+      return {
+        rows: [{ operation_at: completionTime() }],
+      };
     } else {
       return yield* Effect.die('Owner SQL is unavailable in the Action test harness; bind typed services');
     }

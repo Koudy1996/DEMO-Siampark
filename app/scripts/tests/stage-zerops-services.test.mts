@@ -23,9 +23,10 @@ const RECORD_PATH = `${APP_DIRECTORY}/scripts/ops/stage-zerops-retirement.json`;
 const OUTBOX_WORKERS = ['partyregistryworker', 'commercecstmrcntxtworker', 'pricegroupcatalogworker'];
 const KEPT_ON_ZEROPS = new Set(['cloudflared', 'db18', 'migrator', 'outboxworkerhost', 'spicedb', ...OUTBOX_WORKERS]);
 
-// The 9 retired stage services and their IDs before the switch (backup bundle `zerops-service-list.txt`).
+// The original nine IDs come from the backup bundle; Assortment is new to this branch.
 const STAGE_SERVICE_IDS = new Map(
   Object.entries({
+    assortment: 'assortment-id',
     catalog: 'IGOF5E9vQ7izD4ygQgoNiQ',
     commercecustomercontext: 'omIBMTDCR7iARcXTt4SqJw',
     commercemarketcatalog: '7nJtt1fnQMKsGRDTl6Wv1w',
@@ -145,6 +146,7 @@ it('retires exactly the application services zerops-import.yaml declares, each w
       Order.String,
     ),
   ).toStrictEqual([
+    'ZEROPS_ASSORTMENT_SERVICE_ID',
     'ZEROPS_CATALOG_SERVICE_ID',
     'ZEROPS_COMMERCE_CUSTOMER_CONTEXT_SERVICE_ID',
     'ZEROPS_COMMERCE_MARKET_CATALOG_SERVICE_ID',

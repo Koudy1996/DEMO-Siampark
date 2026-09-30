@@ -11,6 +11,7 @@ import { loadOptionalCommercePortalAuthDatabaseConfig } from '../verticals/comme
 import type { CommercePortalAuthDatabaseConnectionPair } from '../verticals/commerce-customer-context/scripts/portal-auth-database-config.mts';
 
 const EXPECTED_APPLICATION_SCHEMAS = [
+  'assortment',
   'auth',
   'catalog',
   'commerce_customer_context',
@@ -24,6 +25,7 @@ const EXPECTED_APPLICATION_SCHEMAS = [
   'storefront_registry',
 ] as const;
 const EXPECTED_MIGRATION_JOURNALS = [
+  '__drizzle_migrations_assortment',
   '__drizzle_migrations_auth',
   '__drizzle_migrations_catalog',
   '__drizzle_migrations_commerce_customer_context',
@@ -136,6 +138,7 @@ const verifyApplicationCatalog = (client: PgClient.PgClient, expected: Applicati
 const ownerVerifierPaths = [
   '../packages/core-runtime/scripts/verify-db-schema.mts',
   '../apps/shell-super-app/scripts/verify-auth-db-schema.mts',
+  '../verticals/assortment/scripts/verify-db-schema.mts',
   '../verticals/party-registry/scripts/verify-db-schema.mts',
   '../verticals/party-registry/scripts/verify-engagement-db-schema.mts',
   '../verticals/payment-term-catalog/scripts/verify-db-schema.mts',

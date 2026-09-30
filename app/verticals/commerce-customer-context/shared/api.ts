@@ -60,6 +60,7 @@ import { CustomerRecordVisibilityApi } from './apis/customer-record-visibility.t
 import { DecidePurchaseApprovalRequestActionApi } from './apis/decide-purchase-approval-request-action.ts';
 import { DeliveryDestinationResolutionApi } from './apis/delivery-destination-resolution.ts';
 import { EffectiveCustomerGroupMembershipsApi } from './apis/effective-customer-group-memberships.ts';
+import { EffectiveCustomerGroupMembershipSetV1Api } from './apis/effective-customer-group-membership-set-v1.ts';
 import { EnsureRetailCustomerProfileActionApi } from './apis/ensure-retail-customer-profile-action.ts';
 import { GrantCounterpartyCommerceAccessActionApi } from './apis/grant-counterparty-commerce-access-action.ts';
 import { GuestAttributionStatusApi } from './apis/guest-attribution-status.ts';
@@ -102,6 +103,7 @@ import { RetailOrderHistoryApi } from './apis/retail-order-history.ts';
 import { RetailOrderHistoryDetailApi } from './apis/retail-order-history-detail.ts';
 import { RetailPortalProfileBindingReadApi } from './apis/retail-portal-profile-binding-read.ts';
 import { RetailPrincipalResolutionApi } from './apis/retail-principal-resolution.ts';
+import { RetailPurchasingSubjectCurrentV1Api } from './apis/retail-purchasing-subject-current-v1.ts';
 import { RevalidatePurchaseApprovalActionApi } from './apis/revalidate-purchase-approval-action.ts';
 import { RevokeCounterpartyAccessInvitationActionApi } from './apis/revoke-counterparty-access-invitation-action.ts';
 import { RevokeCounterpartyCommerceAccessActionApi } from './apis/revoke-counterparty-commerce-access-action.ts';
@@ -118,6 +120,8 @@ import { TerminatePortalEnrollmentActionApi } from './apis/terminate-portal-enro
 import { TriggerPurchaseApprovalActionApi } from './apis/trigger-purchase-approval-action.ts';
 import { UpdateCustomerGroupActionApi } from './apis/update-customer-group-action.ts';
 import { UpdateSavedAddressActionApi } from './apis/update-saved-address-action.ts';
+import { VerifyEffectiveCustomerGroupMembershipSetV1Api } from './apis/verify-effective-customer-group-membership-set-v1.ts';
+import { VerifyRetailPurchasingSubjectCurrentV1Api } from './apis/verify-retail-purchasing-subject-current-v1.ts';
 // </generated-governed-http-api-imports>
 
 export const commerceCustomerContextMarkerSchema = Schema.Struct({
@@ -207,6 +211,7 @@ export const commerceCustomerContextApi = HttpApi.make('CommerceCustomerContextA
   .addHttpApi(DecidePurchaseApprovalRequestActionApi)
   .addHttpApi(DeliveryDestinationResolutionApi)
   .addHttpApi(EffectiveCustomerGroupMembershipsApi)
+  .addHttpApi(EffectiveCustomerGroupMembershipSetV1Api)
   .addHttpApi(EnsureRetailCustomerProfileActionApi)
   .addHttpApi(GrantCounterpartyCommerceAccessActionApi)
   .addHttpApi(GuestAttributionStatusApi)
@@ -249,6 +254,7 @@ export const commerceCustomerContextApi = HttpApi.make('CommerceCustomerContextA
   .addHttpApi(RetailOrderHistoryDetailApi)
   .addHttpApi(RetailPortalProfileBindingReadApi)
   .addHttpApi(RetailPrincipalResolutionApi)
+  .addHttpApi(RetailPurchasingSubjectCurrentV1Api)
   .addHttpApi(RevalidatePurchaseApprovalActionApi)
   .addHttpApi(RevokeCounterpartyAccessInvitationActionApi)
   .addHttpApi(RevokeCounterpartyCommerceAccessActionApi)
@@ -265,6 +271,8 @@ export const commerceCustomerContextApi = HttpApi.make('CommerceCustomerContextA
   .addHttpApi(TriggerPurchaseApprovalActionApi)
   .addHttpApi(UpdateCustomerGroupActionApi)
   .addHttpApi(UpdateSavedAddressActionApi)
+  .addHttpApi(VerifyEffectiveCustomerGroupMembershipSetV1Api)
+  .addHttpApi(VerifyRetailPurchasingSubjectCurrentV1Api)
   // </generated-governed-http-api-additions>
   .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
   .pipe(identity);

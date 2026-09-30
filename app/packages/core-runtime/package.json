@@ -23,9 +23,10 @@
     "./outbox/core-identity-principal-binding-reserved-v1": "./src/outbox/core-identity-principal-binding-reserved-v1.ts",
     "./outbox/core-identity-principal-binding-status-changed-v1": "./src/outbox/core-identity-principal-binding-status-changed-v1.ts",
     "./outbox/worker": "./src/outbox/worker-entrypoint.ts",
-    "./unit-service-fetch": "./src/http/unit-service-fetch.export.ts",
+    "./permissions/principal-ref": "./src/permissions/principal-ref.ts",
     "./resources/legal-entity": "./src/resources/legal-entity.ts",
     "./testing/actions": "./src/testing/actions.ts",
+    "./unit-service-fetch": "./src/http/unit-service-fetch.export.ts",
     "./workspace-environment": "./src/environment/workspace-environment.ts"
   },
   "imports": {

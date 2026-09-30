@@ -84,6 +84,7 @@ import { CustomerRecordVisibilityApi } from './shared/apis/customer-record-visib
 import { decidePurchaseApprovalRequestAction } from './src/actions/decide-purchase-approval-request.action.ts';
 import { DeliveryDestinationResolutionApi } from './shared/apis/delivery-destination-resolution.ts';
 import { EffectiveCustomerGroupMembershipsApi } from './shared/apis/effective-customer-group-memberships.ts';
+import { EffectiveCustomerGroupMembershipSetV1Api } from './shared/apis/effective-customer-group-membership-set-v1.ts';
 import { ensureRetailCustomerProfileAction } from './src/actions/ensure-retail-customer-profile.action.ts';
 import { grantCounterpartyCommerceAccessAction } from './src/actions/grant-counterparty-commerce-access.action.ts';
 import { GuestAttributionStatusApi } from './shared/apis/guest-attribution-status.ts';
@@ -143,6 +144,7 @@ import { RetailPortalProfileBindingReadApi } from './shared/apis/retail-portal-p
 import { retailPortalProfileBindingResourceDescriptor } from './shared/resources/retail-portal-profile-binding.ts';
 import { RetailPrincipalResolutionApi } from './shared/apis/retail-principal-resolution.ts';
 import { retailProfileReadPermission } from './shared/permissions/retail-profile-read.ts';
+import { RetailPurchasingSubjectCurrentV1Api } from './shared/apis/retail-purchasing-subject-current-v1.ts';
 import { retailRepeatOrderPermission } from './shared/permissions/retail-repeat-order.ts';
 import { retailSettingsPaymentTermPreferenceManagePermission } from './shared/permissions/retail-settings-payment-term-preference-manage.ts';
 import { revalidatePurchaseApprovalAction } from './src/actions/revalidate-purchase-approval.action.ts';
@@ -162,6 +164,8 @@ import { terminatePortalEnrollmentAction } from './src/actions/terminate-portal-
 import { triggerPurchaseApprovalAction } from './src/actions/trigger-purchase-approval.action.ts';
 import { updateCustomerGroupAction } from './src/actions/update-customer-group.action.ts';
 import { updateSavedAddressAction } from './src/actions/update-saved-address.action.ts';
+import { VerifyEffectiveCustomerGroupMembershipSetV1Api } from './shared/apis/verify-effective-customer-group-membership-set-v1.ts';
+import { VerifyRetailPurchasingSubjectCurrentV1Api } from './shared/apis/verify-retail-purchasing-subject-current-v1.ts';
 // </generated-module-manifest-imports>
 
 export const commerceCustomerContextManifest: OntosModuleManifestInput = defineOntosModuleManifest({
@@ -270,6 +274,7 @@ export const commerceCustomerContextManifest: OntosModuleManifestInput = defineO
       'customer-profile-trading-gate': CustomerProfileTradingGateApi,
       'customer-record-visibility': CustomerRecordVisibilityApi,
       'delivery-destination-resolution': DeliveryDestinationResolutionApi,
+      'effective-customer-group-membership-set-v1': EffectiveCustomerGroupMembershipSetV1Api,
       'effective-customer-group-memberships': EffectiveCustomerGroupMembershipsApi,
       'guest-attribution-status': GuestAttributionStatusApi,
       'guest-payment-terms-resolution': GuestPaymentTermsResolutionApi,
@@ -292,9 +297,12 @@ export const commerceCustomerContextManifest: OntosModuleManifestInput = defineO
       'retail-order-history-detail': RetailOrderHistoryDetailApi,
       'retail-portal-profile-binding-read': RetailPortalProfileBindingReadApi,
       'retail-principal-resolution': RetailPrincipalResolutionApi,
+      'retail-purchasing-subject-current-v1': RetailPurchasingSubjectCurrentV1Api,
       'saved-address-defaults': SavedAddressDefaultsApi,
       'saved-address-detail': SavedAddressDetailApi,
       'saved-address-list': SavedAddressListApi,
+      'verify-effective-customer-group-membership-set-v1': VerifyEffectiveCustomerGroupMembershipSetV1Api,
+      'verify-retail-purchasing-subject-current-v1': VerifyRetailPurchasingSubjectCurrentV1Api,
       // </generated-module-manifest-apis>
     },
     businessPermissions: [

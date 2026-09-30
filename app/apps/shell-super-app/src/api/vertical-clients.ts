@@ -21,6 +21,8 @@ export { createPricingClient, getPricingReadiness } from '@app/pricing/api/clien
 export type { PricingClientOptions } from '@app/pricing/api/client';
 export { createStorefrontRegistryClient, getStorefrontRegistryReadiness } from '@app/storefront-registry/api/client';
 export type { StorefrontRegistryClientOptions } from '@app/storefront-registry/api/client';
+export { createAssortmentClient, getAssortmentReadiness } from '@app/assortment/api/client';
+export type { AssortmentClientOptions } from '@app/assortment/api/client';
 
 export { findApprovedVerticalPageClient, ultramodernVerticalClients } from './vertical-page-clients.ts';
 export type { ApprovedVerticalPageClient, ApprovedVerticalPageComponent } from './vertical-page-clients.ts';

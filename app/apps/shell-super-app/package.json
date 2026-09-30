@@ -26,6 +26,7 @@
     "test:unit": "rstest --project unit"
   },
   "dependencies": {
+    "@app/assortment": "workspace:*",
     "@app/catalog": "workspace:*",
     "@app/commerce-customer-context": "workspace:*",
     "@app/commerce-market-catalog": "workspace:*",
@@ -99,6 +100,7 @@
   "zephyr:dependencies": {
     "partyRegistry": "@app/party-registry@workspace:*",
     "commerceMarketCatalog": "@app/commerce-market-catalog@workspace:*",
-    "catalog": "@app/catalog@workspace:*"
+    "catalog": "@app/catalog@workspace:*",
+    "assortment": "@app/assortment@workspace:*"
   }
 }

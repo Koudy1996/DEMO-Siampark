@@ -34,6 +34,7 @@ export const commerceMarketCatalogRegistration = defineVerticalRuntimeRegistrati
       'eligible-market-tuples': () => import('./src/api/eligible-market-tuples-client.ts'),
       'market-history': () => import('./src/api/market-history-client.ts'),
       'resolve-commerce-market': () => import('./src/api/resolve-commerce-market-client.ts'),
+      'verify-market-eligibility-v1': () => import('./src/api/verify-market-eligibility-v1-client.ts'),
       // </generated-module-registration-apis>
     },
     components: {

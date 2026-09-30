@@ -176,6 +176,8 @@ export const commerceCustomerContextRegistration = defineVerticalRuntimeRegistra
       'customer-profile-trading-gate': () => import('./src/api/customer-profile-trading-gate-client.ts'),
       'customer-record-visibility': () => import('./src/api/customer-record-visibility-client.ts'),
       'delivery-destination-resolution': () => import('./src/api/delivery-destination-resolution-client.ts'),
+      'effective-customer-group-membership-set-v1': () =>
+        import('./src/api/effective-customer-group-membership-set-v1-client.ts'),
       'effective-customer-group-memberships': () => import('./src/api/effective-customer-group-memberships-client.ts'),
       'guest-attribution-status': () => import('./src/api/guest-attribution-status-client.ts'),
       'guest-payment-terms-resolution': () => import('./src/api/guest-payment-terms-resolution-client.ts'),
@@ -198,9 +200,14 @@ export const commerceCustomerContextRegistration = defineVerticalRuntimeRegistra
       'retail-order-history-detail': () => import('./src/api/retail-order-history-detail-client.ts'),
       'retail-portal-profile-binding-read': () => import('./src/api/retail-portal-profile-binding-read-client.ts'),
       'retail-principal-resolution': () => import('./src/api/retail-principal-resolution-client.ts'),
+      'retail-purchasing-subject-current-v1': () => import('./src/api/retail-purchasing-subject-current-v1-client.ts'),
       'saved-address-defaults': () => import('./src/api/saved-address-defaults-client.ts'),
       'saved-address-detail': () => import('./src/api/saved-address-detail-client.ts'),
       'saved-address-list': () => import('./src/api/saved-address-list-client.ts'),
+      'verify-effective-customer-group-membership-set-v1': () =>
+        import('./src/api/verify-effective-customer-group-membership-set-v1-client.ts'),
+      'verify-retail-purchasing-subject-current-v1': () =>
+        import('./src/api/verify-retail-purchasing-subject-current-v1-client.ts'),
       // </generated-module-registration-apis>
     },
     components: {

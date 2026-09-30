@@ -12,6 +12,7 @@ import { CurrentMarketCatalogApi } from './apis/current-market-catalog.ts';
 import { EligibleMarketTuplesApi } from './apis/eligible-market-tuples.ts';
 import { MarketHistoryApi } from './apis/market-history.ts';
 import { ResolveCommerceMarketApi } from './apis/resolve-commerce-market.ts';
+import { VerifyMarketEligibilityV1Api } from './apis/verify-market-eligibility-v1.ts';
 // </generated-governed-http-api-imports>
 
 export const commerceMarketCatalogMarkerSchema = Schema.Struct({
@@ -44,6 +45,7 @@ export const commerceMarketCatalogApi = HttpApi.make('CommerceMarketCatalogApi')
   .addHttpApi(EligibleMarketTuplesApi)
   .addHttpApi(MarketHistoryApi)
   .addHttpApi(ResolveCommerceMarketApi)
+  .addHttpApi(VerifyMarketEligibilityV1Api)
   // </generated-governed-http-api-additions>
   .annotate(HttpApi.ParseOptions, { onExcessProperty: 'error' })
   .pipe(identity);

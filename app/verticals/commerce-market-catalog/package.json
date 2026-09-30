@@ -6,6 +6,8 @@
   "exports": {
     "./api": "./shared/api.ts",
     "./api/client": "./src/api/commerce-market-catalog-client.ts",
+    "./api/verify-market-eligibility-v1": "./shared/apis/verify-market-eligibility-v1.ts",
+    "./api/verify-market-eligibility-v1/client": "./src/api/verify-market-eligibility-v1-client.ts",
     "./outbox/commerce-market-catalog-market-activated-v1": "./shared/outbox/commerce-market-catalog-market-activated-v1.ts",
     "./outbox/commerce-market-catalog-market-created-v1": "./shared/outbox/commerce-market-catalog-market-created-v1.ts",
     "./outbox/commerce-market-catalog-market-definition-revised-v1": "./shared/outbox/commerce-market-catalog-market-definition-revised-v1.ts",

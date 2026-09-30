@@ -11,6 +11,7 @@ import { LEGAL_ENTITY_SCOPES } from '../operations/context.ts';
 import type { OperationalScope, LegalEntityScope } from '../operations/context.ts';
 import type { OperationContextUnavailable } from '../operations/errors.ts';
 import type {
+  AssortmentPermissionAccessTarget,
   BusinessPermissionAccessTarget,
   ResourceAccessTarget,
   TenantPermissionKey,
@@ -19,13 +20,15 @@ import type {
 const actionRegistration: unique symbol = Symbol('@app/core-runtime/actions/registration');
 const actionResourcePermissionDeclaration: unique symbol = Symbol('@app/core-runtime/actions/resource-permission');
 const actionBusinessPermissionDeclaration: unique symbol = Symbol('@app/core-runtime/actions/business-permission');
+const actionAssortmentPermissionDeclaration: unique symbol = Symbol('@app/core-runtime/actions/assortment-permissions');
 
 class ActionPrivateStorage<Value> {
   declare readonly [actionRegistration]?: true;
   declare readonly [actionResourcePermissionDeclaration]?: true;
   declare readonly [actionBusinessPermissionDeclaration]?: true;
+  declare readonly [actionAssortmentPermissionDeclaration]?: true;
   declare readonly descriptor?: unknown;
-  declare readonly kind?: 'business_permission' | 'resource';
+  declare readonly kind?: 'assortment_permission' | 'business_permission' | 'resource';
   readonly #value: Value;
 
   constructor(value: Value) {
@@ -100,6 +103,18 @@ export type ActionBusinessPermissionDeclaration<Payload> = ActionPrivateStorage<
   readonly kind: 'business_permission';
 };
 
+export type ActionAssortmentPermissionTarget = AssortmentPermissionAccessTarget;
+export type ActionAssortmentPermissionTargetResolver<Payload> = (
+  payload: Payload,
+  scope: OperationalScope,
+) => readonly ActionAssortmentPermissionTarget[];
+export type ActionAssortmentPermissionDeclaration<Payload> = ActionPrivateStorage<
+  ActionAssortmentPermissionTargetResolver<Payload>
+> & {
+  readonly [actionAssortmentPermissionDeclaration]: true;
+  readonly kind: 'assortment_permission';
+};
+
 const ActionDefinitionInvariantError = Schema.TaggedError<Error>()('ActionDefinitionInvariantError', {
   message: Schema.String,
 });
@@ -134,6 +149,19 @@ export const defineActionBusinessPermission = <Payload>(
   });
 };
 
+/** Declares one or more exact Assortment policy meanings checked conjunctively. */
+export const defineActionAssortmentPermissions = <Payload>(
+  resolver: ActionAssortmentPermissionTargetResolver<Payload>,
+): ActionAssortmentPermissionDeclaration<Payload> => {
+  if (!Predicate.isFunction(resolver)) {
+    return failActionDefinition('Action Assortment permission resolver must be a function');
+  }
+  return ActionPrivateStorage.create(resolver, {
+    [actionAssortmentPermissionDeclaration]: true as const,
+    kind: 'assortment_permission' as const,
+  });
+};
+
 const ActionResourcePermissionDeclarationSchema = Schema.instanceOf(ActionPrivateStorage).check(
   Schema.makeFilter((declaration) =>
     declaration[actionResourcePermissionDeclaration] === true &&
@@ -152,6 +180,15 @@ const ActionBusinessPermissionDeclarationSchema = Schema.instanceOf(ActionPrivat
       : 'Expected an immutable Action business permission declaration',
   ),
 );
+const ActionAssortmentPermissionDeclarationSchema = Schema.instanceOf(ActionPrivateStorage).check(
+  Schema.makeFilter((declaration) =>
+    declaration[actionAssortmentPermissionDeclaration] === true &&
+    declaration.kind === 'assortment_permission' &&
+    Object.isFrozen(declaration)
+      ? undefined
+      : 'Expected an immutable Action Assortment permission declaration',
+  ),
+);
 
 export interface ActionDescriptor<
   PayloadSchema extends Schema.ConstraintDecoder<unknown>,
@@ -168,6 +205,8 @@ export interface ActionDescriptor<
    * target resources must never replace or derive it.
    */
   readonly actionKey: string;
+  /** Declares one or more exact Assortment permission targets checked conjunctively. */
+  readonly assortmentPermissions?: ActionAssortmentPermissionDeclaration<PayloadSchema['Type']>;
   readonly auditEvidenceSchema?: Schema.ConstraintDecoder<unknown>;
   readonly auditProfile: ActionAuditProfile;
   /** Declares one exact business permission resolved from decoded input and trusted scope. */
@@ -312,6 +351,7 @@ export type ActionRequirements<Registration> =
     : never;
 
 export interface ActionDescriptorValidationInput<Policy> {
+  readonly assortmentPermissions?: ActionAssortmentPermissionDeclaration<never>;
   readonly businessPermission?: ActionBusinessPermissionDeclaration<never>;
   readonly entrypoint: ModuleEntrypointDescriptor;
   readonly legalEntityPermission?: unknown;
@@ -350,6 +390,8 @@ const validateActionLegalEntityScope = <Policy>(descriptor: ActionDescriptorVali
 };
 const validateActionPermissions = <Policy>(descriptor: ActionDescriptorValidationInput<Policy>): void => {
   if (
+    (descriptor.assortmentPermissions !== undefined &&
+      !Schema.is(ActionAssortmentPermissionDeclarationSchema)(descriptor.assortmentPermissions)) ||
     (descriptor.businessPermission !== undefined &&
       !Schema.is(ActionBusinessPermissionDeclarationSchema)(descriptor.businessPermission)) ||
     (descriptor.resourcePermission !== undefined &&
@@ -661,6 +703,29 @@ export const getActionBusinessPermissionTargetResolver = <
   registration.descriptor.businessPermission === undefined
     ? undefined
     : ActionPrivateStorage.getValue(registration.descriptor.businessPermission);
+
+export const getActionAssortmentPermissionTargetResolver = <
+  PayloadSchema extends Schema.ConstraintDecoder<unknown>,
+  ResultSchema extends Schema.ConstraintDecoder<unknown>,
+  DomainErrorSchema extends Schema.ConstraintDecoder<{ readonly _tag: string }>,
+  DomainEvents extends DomainEventContractMap,
+  Owner extends string,
+  Services,
+  HandlerRequirements,
+>(
+  registration: ActionRegistration<
+    PayloadSchema,
+    ResultSchema,
+    DomainErrorSchema,
+    DomainEvents,
+    Owner,
+    Services,
+    HandlerRequirements
+  >,
+): ActionAssortmentPermissionTargetResolver<PayloadSchema['Type']> | undefined =>
+  registration.descriptor.assortmentPermissions === undefined
+    ? undefined
+    : ActionPrivateStorage.getValue(registration.descriptor.assortmentPermissions);
 
 const preserveFailureCause = <Failure extends object>(failure: Failure, cause: unknown): Failure => {
   Object.defineProperty(failure, 'cause', {

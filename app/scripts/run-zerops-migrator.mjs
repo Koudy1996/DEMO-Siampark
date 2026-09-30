@@ -158,6 +158,7 @@ const main = Effect.scoped(
     yield* migrate('verticals/party-registry', 'drizzle.config.ts');
     yield* migrate('verticals/payment-term-catalog', 'drizzle.config.ts');
     yield* migrate('verticals/price-group-catalog', 'drizzle.config.ts');
+    yield* migrate('verticals/assortment', 'drizzle.config.ts');
     yield* migrate('verticals/commerce-customer-context', 'drizzle.config.ts');
     yield* migrate('verticals/commerce-market-catalog', 'drizzle.config.ts');
     yield* migrate('verticals/catalog', 'drizzle.config.ts');

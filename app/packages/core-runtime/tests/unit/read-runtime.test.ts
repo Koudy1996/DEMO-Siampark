@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from 'effect';
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Option, Predicate, Schema } from 'effect';
 /* oxlint-disable sonarjs/use-type-alias, typescript/no-unsafe-type-assertion -- Existing compatibility boundary; expires: 2026-12-31. */
 import { expect, it } from 'effect-rstest';
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError';
@@ -10,8 +10,14 @@ import { defineSystemModuleEntrypoint, defineTenantModuleEntrypoint } from '../.
 import { OperationContextUnavailable } from '../../src/operations/errors.ts';
 import type { OperationalScope } from '../../src/operations/context.ts';
 import { BusinessPermissionCodeSchema } from '../../src/permissions/business-permission.ts';
-import { toBusinessPermissionAccessKey } from '../../src/permissions/context-access.ts';
-import type { BusinessPermissionAccessTarget } from '../../src/permissions/context-access.ts';
+import {
+  toAssortmentPermissionAccessKey,
+  toBusinessPermissionAccessKey,
+} from '../../src/permissions/context-access.ts';
+import type {
+  AssortmentPermissionAccessTarget,
+  BusinessPermissionAccessTarget,
+} from '../../src/permissions/context-access.ts';
 import type {
   OwnerAuthorizationInput,
   OwnerAuthorizationOverlayService,
@@ -42,6 +48,7 @@ const scope: OperationalScope = Object.freeze({
   }),
   correlationId: 'correlation-1',
 });
+const transactionOperationAt = DateTime.toDateUtc(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
 const pricingCatalogId = '50000000-0000-4000-8000-000000000001';
 const priceGroupId = '60000000-0000-4000-8000-000000000001';
 const otherPriceGroupId = '60000000-0000-4000-8000-000000000002';
@@ -65,9 +72,13 @@ const ResourceTargetSchema = Schema.Struct({
 });
 const makeHarness = Effect.fn(function* makeHarness(
   options: {
+    readonly assortmentPermissionDecision?: 'allowed' | 'denied' | 'unavailable';
+    readonly assortmentPermissionKey?: string;
+    readonly assortmentPermissionResponse?: 'empty';
     readonly businessPermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly contextPermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly failEvidence?: boolean;
+    readonly failTransactionTimestamp?: boolean;
     readonly modulePermissionDecision?: 'allowed' | 'denied' | 'unavailable';
     readonly omitOwnerAuthorizationOverlay?: boolean;
     readonly onBusinessPermissionTarget?: (target: BusinessPermissionAccessTarget) => void;
@@ -96,14 +107,25 @@ const makeHarness = Effect.fn(function* makeHarness(
   } = {},
 ) {
   let businessPermissionChecks = 0;
+  const assortmentPermissionChecks: unknown[] = [];
   let contextPermissionChecks = 0;
   let evidence = 0;
+  let transactionTimestampReadCount = 0;
   let resourcePermissionChecks = 0;
   let tenantPermissionChecks = 0;
   const evidenceRows: EvidenceRow[] = [];
   const evidenceParameterRows: unknown[][] = [];
   const query = (text: string, values: readonly unknown[]) =>
     Effect.gen(function* executeReadQuery() {
+      if (text.includes('transaction_timestamp')) {
+        transactionTimestampReadCount += 1;
+        if (options.failTransactionTimestamp === true) {
+          return yield* new SqlError({
+            reason: new ConnectionError({ cause: new Error('transaction clock unavailable') }),
+          });
+        }
+        return [{ operation_at: transactionOperationAt }];
+      }
       if (text.includes('data_access_events')) {
         if (options.failEvidence === true) {
           return yield* new SqlError({
@@ -151,6 +173,24 @@ const makeHarness = Effect.fn(function* makeHarness(
     openModuleEntrypointGateway,
     { resolve: () => Effect.succeed(options.resolvedScope ?? scope) },
     {
+      assortmentPermissions: ({ legalEntityId, principal, targets }) => {
+        assortmentPermissionChecks.push(...targets);
+        return Effect.succeed(
+          options.assortmentPermissionResponse === 'empty'
+            ? []
+            : targets.map(({ target }) => {
+                const expectedKey = toAssortmentPermissionAccessKey(principal.tenantId, legalEntityId, target);
+                if (expectedKey === undefined) {
+                  throw new Error('Test fixture requires a trusted tenant and legal entity scope');
+                }
+                return {
+                  decision:
+                    options.assortmentPermissionDecision ?? options.permissionDecision ?? ('unavailable' as const),
+                  key: options.assortmentPermissionKey ?? expectedKey,
+                };
+              }),
+        );
+      },
       businessPermissions: ({ targets, trustedStorefrontId }) => {
         businessPermissionChecks += 1;
         options.onTrustedStorefrontId?.(trustedStorefrontId);
@@ -238,6 +278,7 @@ const makeHarness = Effect.fn(function* makeHarness(
     },
   );
   return {
+    assortmentPermissionChecks,
     evidence: () => evidence,
     evidenceParameterRows: () => evidenceParameterRows,
     evidenceRows: () => evidenceRows,
@@ -248,6 +289,7 @@ const makeHarness = Effect.fn(function* makeHarness(
     }),
     runtime,
     stages,
+    transactionTimestampReads: () => transactionTimestampReadCount,
   };
 });
 const registration = (items: readonly string[] = []) =>
@@ -285,6 +327,221 @@ const registration = (items: readonly string[] = []) =>
     () => Effect.succeed({ items }),
     () => ({ kind: 'module', moduleId: 'core.shell' }),
   );
+
+const assortmentReadTarget: AssortmentPermissionAccessTarget = {
+  audience: { kind: 'SHARED' },
+  commercialScope: {
+    channel: {
+      moduleId: 'commerce.channel',
+      resourceId: 'web',
+      resourceType: 'commerce.channel',
+    },
+    storefront: {
+      moduleId: 'commerce.storefront',
+      resourceId: 'storefront-a',
+      resourceType: 'commerce.storefront',
+    },
+  },
+  effectiveFrom: '2026-09-22T00:00:00.000Z',
+  kind: 'assortment_binding',
+  mode: 'create',
+  permission: 'assortment.binding.create',
+  ruleRevision: {
+    moduleId: 'commerce.assortment',
+    resourceId: 'rule-revision-1',
+    resourceType: 'commerce.assortment.rule-revision',
+  },
+};
+
+const assortmentReadRegistration = (handler: () => void) =>
+  defineRead(
+    {
+      accessKind: 'detail',
+      entrypoint: defineTenantModuleEntrypoint({
+        access: 'read',
+        authorization: { kind: 'context_permission', permission: 'assortment.binding.create' },
+        entrypointKey: 'commerce.assortment.binding-preview',
+        moduleKey: 'commerce.assortment',
+        role: 'api',
+      }),
+      evidencePolicy: { captureMode: 'metadata_only', policyKey: 'commerce.assortment.binding-preview.v1' },
+      inputSchema: Schema.Struct({}),
+      legalEntityScope: 'required',
+      owningModuleKey: 'commerce.assortment',
+      permissionTarget: 'assortment_permission',
+      policies: [],
+      readKey: 'commerce.assortment.binding-preview',
+      resultSchema: Schema.String,
+      schemaVersion: '1',
+    },
+    () => {
+      handler();
+      return Effect.succeed({ evidence: { resultCount: 1 }, result: 'ok' });
+    },
+    () => Effect.succeed({}),
+    () => ({ assortmentPermission: assortmentReadTarget, kind: 'assortment_permission' }),
+  );
+
+it.effect(
+  'checks an exact scoped Assortment read target and fails closed on denial, unavailable, or correlation errors',
+  () =>
+    Effect.gen(function* checksAssortmentReadTarget() {
+      let handlerCalls = 0;
+      const assortmentRegistration = assortmentReadRegistration(() => {
+        handlerCalls += 1;
+      });
+      const run = (harness: Effect.Success<ReturnType<typeof makeHarness>>) =>
+        harness.runtime.runRead({
+          input: {},
+          principal: scope,
+          registration: assortmentRegistration,
+          transport: { correlationId: scope.correlationId },
+        });
+      const trustedScope = trustVerifiedGatewayPrincipalContext({
+        ...scope,
+        legalEntityId: '00000000-0000-4000-8000-000000000002',
+        trustedStorefrontId: 'storefront-a',
+      });
+      const allowed = yield* makeHarness({
+        assortmentPermissionDecision: 'allowed',
+        resolvedScope: trustedScope,
+      });
+      expect(yield* run(allowed)).toBe('ok');
+      expect(allowed.assortmentPermissionChecks).toEqual([{ target: assortmentReadTarget }]);
+      expect(handlerCalls).toBe(1);
+
+      const denied = yield* makeHarness({ assortmentPermissionDecision: 'denied', resolvedScope: trustedScope });
+      expect(Predicate.isTagged(yield* Effect.flip(run(denied)), 'ReadPermissionDenied')).toBe(true);
+      expect(denied.assortmentPermissionChecks).toHaveLength(1);
+      expect(handlerCalls).toBe(1);
+
+      const unavailable = yield* makeHarness({
+        assortmentPermissionDecision: 'unavailable',
+        resolvedScope: trustedScope,
+      });
+      expect(Predicate.isTagged(yield* Effect.flip(run(unavailable)), 'ReadPermissionUnavailable')).toBe(true);
+      expect(unavailable.assortmentPermissionChecks).toHaveLength(1);
+      expect(handlerCalls).toBe(1);
+
+      const empty = yield* makeHarness({ assortmentPermissionResponse: 'empty', resolvedScope: trustedScope });
+      expect(Predicate.isTagged(yield* Effect.flip(run(empty)), 'ReadPermissionUnavailable')).toBe(true);
+      expect(empty.assortmentPermissionChecks).toHaveLength(1);
+      expect(handlerCalls).toBe(1);
+
+      const mismatched = yield* makeHarness({
+        assortmentPermissionDecision: 'allowed',
+        assortmentPermissionKey: 'wrong-tenant:wrong-entity:assortment.binding.create',
+        resolvedScope: trustedScope,
+      });
+      expect(Predicate.isTagged(yield* Effect.flip(run(mismatched)), 'ReadPermissionUnavailable')).toBe(true);
+      expect(handlerCalls).toBe(1);
+
+      const storefrontMismatch = yield* makeHarness({
+        assortmentPermissionDecision: 'allowed',
+        resolvedScope: trustVerifiedGatewayPrincipalContext({
+          ...scope,
+          legalEntityId: trustedScope.legalEntityId,
+          trustedStorefrontId: 'storefront-b',
+        }),
+      });
+      const storefrontFailure = yield* Effect.flip(run(storefrontMismatch));
+      expect(Predicate.isTagged(storefrontFailure, 'ReadPermissionUnavailable')).toBe(true);
+      expect(storefrontMismatch.assortmentPermissionChecks).toHaveLength(0);
+      expect(handlerCalls).toBe(1);
+    }),
+);
+
+it.effect('derives configuration read scope from the exact resource type', () =>
+  Effect.gen(function* derivesConfigurationReadScope() {
+    let handlerCalls = 0;
+    const stableRuleTarget: AssortmentPermissionAccessTarget = {
+      kind: 'assortment_configuration',
+      permission: 'assortment.configuration.read',
+      resource: {
+        moduleId: 'commerce.assortment',
+        resourceId: 'stable-rule-1',
+        resourceType: 'commerce.assortment.stable-rule',
+      },
+    };
+    const bindingTarget: AssortmentPermissionAccessTarget = {
+      kind: 'assortment_configuration',
+      permission: 'assortment.configuration.read',
+      resource: {
+        moduleId: 'commerce.assortment',
+        resourceId: 'binding-1',
+        resourceType: 'commerce.assortment.applicability-binding',
+      },
+    };
+    const unknownTarget: AssortmentPermissionAccessTarget = {
+      ...bindingTarget,
+      resource: { ...bindingTarget.resource, resourceType: 'commerce.assortment.configuration' },
+    };
+    const configurationRegistration = (target: AssortmentPermissionAccessTarget) =>
+      defineRead(
+        {
+          accessKind: 'detail',
+          entrypoint: defineTenantModuleEntrypoint({
+            access: 'read',
+            authorization: { kind: 'context_permission', permission: 'assortment.configuration.read' },
+            entrypointKey: 'commerce.assortment.configuration-scope',
+            moduleKey: 'commerce.assortment',
+            role: 'api',
+          }),
+          evidencePolicy: { captureMode: 'metadata_only', policyKey: 'commerce.assortment.configuration-scope.v1' },
+          inputSchema: Schema.Struct({}),
+          legalEntityScope: 'optional',
+          owningModuleKey: 'commerce.assortment',
+          permissionTarget: 'assortment_permission',
+          policies: [],
+          readKey: 'commerce.assortment.configuration-scope',
+          resultSchema: Schema.String,
+          schemaVersion: '1',
+        },
+        () => {
+          handlerCalls += 1;
+          return Effect.succeed({ evidence: { resultCount: 1 }, result: 'ok' });
+        },
+        () => Effect.succeed({}),
+        () => ({ assortmentPermission: target, kind: 'assortment_permission' }),
+      );
+
+    const tenantScoped = yield* makeHarness({ assortmentPermissionDecision: 'allowed' });
+    const tenantResult = yield* tenantScoped.runtime.runRead({
+      input: {},
+      principal: scope,
+      registration: configurationRegistration(stableRuleTarget),
+      transport: { correlationId: scope.correlationId },
+    });
+    expect(tenantResult).toBe('ok');
+    expect(tenantScoped.assortmentPermissionChecks).toEqual([{ target: stableRuleTarget }]);
+
+    const legalEntityScoped = yield* makeHarness({ assortmentPermissionDecision: 'allowed' });
+    const unavailable = yield* Effect.flip(
+      legalEntityScoped.runtime.runRead({
+        input: {},
+        principal: scope,
+        registration: configurationRegistration(bindingTarget),
+        transport: { correlationId: scope.correlationId },
+      }),
+    );
+    expect(Predicate.isTagged(unavailable, 'ReadPermissionUnavailable')).toBe(true);
+    expect(legalEntityScoped.assortmentPermissionChecks).toHaveLength(0);
+
+    const unknownType = yield* makeHarness({ assortmentPermissionDecision: 'allowed' });
+    const unknownFailure = yield* Effect.flip(
+      unknownType.runtime.runRead({
+        input: {},
+        principal: scope,
+        registration: configurationRegistration(unknownTarget),
+        transport: { correlationId: scope.correlationId },
+      }),
+    );
+    expect(Predicate.isTagged(unknownFailure, 'ReadHandlerExecutionError')).toBe(true);
+    expect(unknownType.assortmentPermissionChecks).toHaveLength(0);
+    expect(handlerCalls).toBe(1);
+  }),
+);
+
 it.effect('runs every gate before the handler and persists evidence before releasing zero results', () =>
   Effect.gen(function* migratedTest1() {
     const harness = yield* makeHarness();
@@ -335,9 +592,51 @@ it.effect('runs the owner authorization overlay inside the transaction before th
     expect(Predicate.isTagged(error, 'ReadPermissionDenied')).toBe(true);
     expect(ownerInputs).toHaveLength(1);
     expect(ownerInputs[0]?.operation).toBe('read');
+    expect(ownerInputs[0]?.operationAt).toEqual(DateTime.makeUnsafe(Date.parse('2026-09-28T09:00:00.000Z')));
+    expect(harness.transactionTimestampReads()).toBe(1);
     expect(ownerInputs[0]?.targets).toEqual([{ kind: 'module', moduleId: 'core.shell' }]);
     expect(handlerCalls).toBe(0);
     expect(harness.evidence()).toBe(1);
+  }),
+);
+
+it.effect('fails closed before owner authorization when PostgreSQL cannot provide transaction time', () =>
+  Effect.gen(function* transactionTimeUnavailable() {
+    let overlayCalls = 0;
+    let handlerCalls = 0;
+    const harness = yield* makeHarness({
+      contextPermissionDecision: 'allowed',
+      failTransactionTimestamp: true,
+      ownerAuthorizationOverlay: {
+        authorize: () => {
+          overlayCalls += 1;
+          return Effect.succeed('allowed' as const);
+        },
+      },
+      permissionDecision: 'allowed',
+    });
+    const testRegistration = defineRead(
+      registration().descriptor,
+      () => {
+        handlerCalls += 1;
+        return Effect.succeed({ evidence: { resultCount: 0 }, result: [] });
+      },
+      () => Effect.succeed({}),
+      () => ({ kind: 'module', moduleId: 'core.shell' }),
+    );
+    const failure = yield* Effect.flip(
+      harness.runtime.runRead({
+        input: {},
+        principal: scope,
+        registration: testRegistration,
+        transport: { correlationId: scope.correlationId },
+      }),
+    );
+
+    expect(Schema.is(OperationContextUnavailable)(failure)).toBe(true);
+    expect(overlayCalls).toBe(0);
+    expect(handlerCalls).toBe(0);
+    expect(harness.transactionTimestampReads()).toBe(1);
   }),
 );
 

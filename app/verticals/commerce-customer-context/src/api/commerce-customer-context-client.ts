@@ -76,12 +76,16 @@ export * from './update-customer-group-action-client.ts';
 export * from './update-saved-address-action-client.ts';
 // </generated-action-http-client-exports>
 export * from './commerce-quantity-resolution-client.ts';
+export * from './effective-customer-group-membership-set-v1-client.ts';
 export * from './market-bootstrap-policy-current-client.ts';
 export * from './market-bootstrap-resolution-client.ts';
 export * from './market-subject-restrictions-current-client.ts';
 export * from './market-affected-use-assessment-client.ts';
 export * from './payment-terms-resolution-client.ts';
 export * from './purchase-currency-resolution-client.ts';
+export * from './retail-purchasing-subject-current-v1-client.ts';
+export * from './verify-effective-customer-group-membership-set-v1-client.ts';
+export * from './verify-retail-purchasing-subject-current-v1-client.ts';
 export * from './payment-term-affected-use-assessment-client.ts';
 export {
   PaymentTermAffectedUseAssessmentRequestSchema,
