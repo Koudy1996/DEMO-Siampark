@@ -13,6 +13,7 @@ import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
 import { withZephyr as withZephyrRspack } from 'zephyr-rspack-plugin';
 
 import {
+  createCloudflareDataPlaneBindings,
   createModernBuildContext,
   createWorkerSsrPlugins,
   createZephyrRspackPlugin,
@@ -69,9 +70,12 @@ const zephyrRspackPlugin = (): CliPlugin<AppTools> =>
 const whenEnabled = <Configuration>(enabled: boolean, configuration: Configuration) =>
   enabled ? configuration : undefined;
 
+// Only a Worker build binds the private data plane; its IDs are required there and unused elsewhere.
+const cloudflareDataPlaneBindings = cloudflareDeployEnabled ? createCloudflareDataPlaneBindings(envValue) : undefined;
 const cloudflareDeployment = whenEnabled(cloudflareDeployEnabled, {
   deploy: {
     worker: {
+      ...cloudflareDataPlaneBindings,
       compatibilityDate: '2026-06-02',
       name: cloudflareWorkerName,
       security: {
