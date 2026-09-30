@@ -56,6 +56,9 @@
       "path": "verticals/price-group-catalog"
     },
     {
+      "path": "verticals/assortment"
+    },
+    {
       "path": "verticals/inventory"
     }
   ]

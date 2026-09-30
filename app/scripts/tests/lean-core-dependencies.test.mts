@@ -51,6 +51,9 @@ it.live(
         // Shell: test files under the ownership roots are exempt.
         'apps/shell-super-app/tests/unit/commerce-private-import.test.ts':
           "import { EnrollmentJourney } from '../../../../verticals/commerce-customer-context/src/enrollment/journeys/index.ts';\n",
+        // Generated Cloudflare declarations are build output, not source dependencies.
+        'apps/shell-super-app/dist-cloudflare/api/auth/commerce-external-identity.d.ts':
+          "import { verify } from '@app/commerce-customer-context/portal-auth/verification/client';\n",
         // Core: allowed external specifiers pass.
         'packages/core-runtime/package.json': JSON.stringify({
           dependencies: { effect: '^4.0.0', pg: '^8.0.0' },

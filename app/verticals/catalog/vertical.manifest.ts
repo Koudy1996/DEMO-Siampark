@@ -26,6 +26,9 @@ import { assignCatalogMediaAction } from './src/actions/assign-catalog-media.act
 import { AssignCatalogMediaRecoveryApi } from './shared/apis/assign-catalog-media-recovery.ts';
 import { assignSkuAction } from './src/actions/assign-sku.action.ts';
 import { AssignSkuRecoveryApi } from './shared/apis/assign-sku-recovery.ts';
+import { AssortmentProductClassificationV1Api } from './shared/apis/assortment-product-classification-v1.ts';
+import { AssortmentSelectionAssessmentV1Api } from './shared/apis/assortment-selection-assessment-v1.ts';
+import { AssortmentSetCompositionV1Api } from './shared/apis/assortment-set-composition-v1.ts';
 import { attributeDefinitionResourceDescriptor } from './shared/resources/attribute-definition.ts';
 import { BrandCurrentApi } from './shared/apis/brand-current.ts';
 import { BrandHistoryApi } from './shared/apis/brand-history.ts';
@@ -348,6 +351,9 @@ export const catalogManifest: OntosModuleManifestInput = defineOntosModuleManife
       'assert-size-equivalence-recovery': AssertSizeEquivalenceRecoveryApi,
       'assign-catalog-media-recovery': AssignCatalogMediaRecoveryApi,
       'assign-sku-recovery': AssignSkuRecoveryApi,
+      'assortment-product-classification-v1': AssortmentProductClassificationV1Api,
+      'assortment-selection-assessment-v1': AssortmentSelectionAssessmentV1Api,
+      'assortment-set-composition-v1': AssortmentSetCompositionV1Api,
       'brand-current': BrandCurrentApi,
       'brand-history': BrandHistoryApi,
       'catalog-document-current': CatalogDocumentCurrentApi,

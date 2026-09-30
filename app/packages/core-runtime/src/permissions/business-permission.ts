@@ -1,7 +1,7 @@
 import { Predicate, Result, Schema } from 'effect';
 
 const dottedPermissionPattern =
-  /^(?:(?:retail|counterparty|inventory)(?:\.[a-z][a-z0-9_]*)+|pricing\.price_group(?:\.[a-z][a-z0-9_]*)+)$/u;
+  /^(?:(?:retail|counterparty|inventory)(?:\.[a-z][a-z0-9_]*)+|pricing\.price_group(?:\.[a-z][a-z0-9_]*)+|assortment\.(?:binding\.(?:create|end)|boundary\.(?:create|end)|configuration\.read|decision\.explain|rule\.(?:create|revision\.create|retire)))$/u;
 const dottedEntrypointPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9_-]*)+$/u;
 const schemaVersionPattern = /^[1-9][0-9]*$/u;
 const nonEmptyString = Schema.String.check(Schema.isMinLength(1));
@@ -12,6 +12,11 @@ export const BusinessPermissionCodeSchema = Schema.String.check(Schema.isPattern
 );
 
 export const BusinessPermissionScopeKindSchema = Schema.Literals([
+  'assortment_binding',
+  'assortment_boundary',
+  'assortment_configuration',
+  'assortment_decision',
+  'assortment_rule',
   'counterparty',
   'counterparty_storefront',
   'inventory_resource',

@@ -63,6 +63,7 @@ const settings: CutoverSettings = {
 };
 
 const VERTICAL_HOSTS = [
+  'assortment',
   'partyregistry',
   'commercecustomercontext',
   'paymenttermcatalog',
@@ -542,6 +543,7 @@ const provisionedAccount = (
         },
       ],
       scripts: [
+        'app-assortment',
         'app-party-registry',
         CUSTOMER_CONTEXT_WORKER,
         'app-payment-term-catalog',

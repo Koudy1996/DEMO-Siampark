@@ -252,6 +252,11 @@ export interface ResourceScaffoldConfig {
 export interface PermissionScaffoldConfig {
   readonly permission: string;
   readonly scope:
+    | 'assortment_binding'
+    | 'assortment_boundary'
+    | 'assortment_configuration'
+    | 'assortment_decision'
+    | 'assortment_rule'
     | 'counterparty'
     | 'counterparty_storefront'
     | 'inventory_resource'
@@ -1765,6 +1770,26 @@ export const generatedSlotContainsExactEntry = (
     readGeneratedSlotEntries(content, startMarker, endMarker).filter(
       (entry) => normalizeGeneratedSlotEntry(entry) === normalizedExpected,
     ).length === 1
+  );
+};
+
+/** Replaces one generated owner entry while retaining deterministic slot ordering. */
+export const replaceGeneratedSlotEntry = (
+  content: string,
+  startMarker: string,
+  endMarker: string,
+  currentEntry: string,
+  replacement: string,
+): string => {
+  const entries = readGeneratedSlotEntries(content, startMarker, endMarker);
+  if (entries.filter((entry) => entry === currentEntry).length !== 1) {
+    return raiseScaffoldFailure(`expected exactly one generated owner entry to replace: ${currentEntry}`);
+  }
+  return renderGeneratedSlotEntries(
+    content,
+    startMarker,
+    endMarker,
+    entries.map((entry) => (entry === currentEntry ? replacement : entry)),
   );
 };
 

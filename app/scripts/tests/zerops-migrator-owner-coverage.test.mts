@@ -6,7 +6,13 @@ const migrator = readFileSync(new URL('../run-zerops-migrator.mjs', import.meta.
 const deployment = readFileSync(new URL('../../zerops.yaml', import.meta.url), 'utf-8');
 const [migratorDeployment] = deployment.split("  - setup: 'spicedb'");
 
-for (const owner of ['price-group-catalog', 'commerce-market-catalog', 'pricing', 'storefront-registry']) {
+for (const owner of [
+  'price-group-catalog',
+  'assortment',
+  'commerce-market-catalog',
+  'pricing',
+  'storefront-registry',
+]) {
   it(`D1 migrates and packages ${owner} before claiming database readiness`, () => {
     const migration = migrator.indexOf(`yield* migrate('verticals/${owner}', 'drizzle.config.ts');`);
     const verification = migrator.indexOf("'scripts/verify-application-db-schema.mts'");

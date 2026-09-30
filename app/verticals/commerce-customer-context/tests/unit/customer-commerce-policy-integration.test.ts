@@ -90,6 +90,9 @@ const makePolicyReadAuthorizationHarness = Effect.fn(function* makePolicyReadAut
   const routineCalls: string[] = [];
   const database = {
     executor: yield* makeTestDatabase((text) => {
+      if (text.includes('transaction_timestamp')) {
+        return Effect.succeed([{ operation_at: new Date(at) }]);
+      }
       if (text.includes('data_access_events')) {
         return Effect.succeed([]);
       }

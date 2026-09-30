@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { it, expect } from 'effect-rstest';
 
-import { appRoot, parseOxlintOutput, runOxlint } from './oxlint.mts';
+import { appRoot, oxlintEntryPoint, parseOxlintOutput, runOxlint } from './oxlint.mts';
 import { withTemporaryWorkspace } from './temporary-workspace.mts';
 
 const applicationRequire = createRequire(path.join(appRoot, 'package.json'));
@@ -47,6 +47,13 @@ const cases = [
     valid: 'const view = { alpha: 2, zebra: 1 };',
   },
 ];
+
+it('native sorting integration resolves the Oxlint runner directly', () => {
+  expect(oxlintEntryPoint).toBe(
+    path.join(path.dirname(applicationRequire.resolve('oxlint/package.json')), 'bin/oxlint'),
+  );
+  expect(oxlintEntryPoint).not.toContain(`${path.sep}eslint${path.sep}`);
+});
 
 it('native sorting integration does not declare the ESLint runner', () => {
   const hasDirectEslintDependency = /^[ ]{2}"(?:dependencies|devDependencies)"\s*:\s*\{[^{}]*"eslint"\s*:/msu.test(

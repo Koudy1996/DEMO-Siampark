@@ -31,6 +31,7 @@ export default defineConfig(
   presetUltramodern(
     {
       ...createModernConfig({
+        apiOnly: true,
         appId,
         bffPrefix: COMMERCE_CUSTOMER_CONTEXT_API_PREFIX,
         build,

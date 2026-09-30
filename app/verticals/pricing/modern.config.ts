@@ -30,6 +30,7 @@ export default defineConfig(
   presetUltramodern(
     {
       ...createModernConfig({
+        apiOnly: true,
         appId,
         bffPrefix: '/pricing-api',
         build,

@@ -191,6 +191,7 @@ const decodeSnapshotRow = Effect.fn('MarketResolutionPersistence.decodeSnapshotR
         tenantId,
         input.storefrontRef.appId,
         input.channel,
+        DateTime.formatIso(input.effectiveAt),
         input.sellingLegalEntityRestriction?.resourceId ?? 'all-sellers',
         subjectRestrictions?.subjectKind ?? 'guest-or-unrestricted',
         subjectRestrictions?.ownerRevision ?? 'none',

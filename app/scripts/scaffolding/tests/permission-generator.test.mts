@@ -17,10 +17,41 @@ const paymentTermPreferencePermission = 'retail.settings.payment_term_preference
 const repeatOrderPermission = 'retail.repeat_order';
 const priceGroupReadPermission = 'pricing.price_group.read';
 const inventoryResourceReadPermission = 'inventory.resource.read';
+const assortmentPermissions = [
+  ['assortment.configuration.read', 'assortment_configuration'],
+  ['assortment.decision.explain', 'assortment_decision'],
+  ['assortment.rule.create', 'assortment_rule'],
+  ['assortment.rule.revision.create', 'assortment_rule'],
+  ['assortment.rule.retire', 'assortment_rule'],
+  ['assortment.binding.create', 'assortment_binding'],
+  ['assortment.binding.end', 'assortment_binding'],
+  ['assortment.boundary.create', 'assortment_boundary'],
+  ['assortment.boundary.end', 'assortment_boundary'],
+] as const;
+const PermissionScopeSchema = Schema.Literals([
+  'assortment_binding',
+  'assortment_boundary',
+  'assortment_configuration',
+  'assortment_decision',
+  'assortment_rule',
+  'counterparty',
+  'counterparty_storefront',
+  'inventory_resource',
+  'price_group',
+  'pricing_catalog',
+  'retail_profile',
+]);
+type PermissionScope = typeof PermissionScopeSchema.Type;
 const json = (value: typeof Schema.Json.Type): string => `${JSON.stringify(value, null, 2)}\n`;
 const PackageExportsSchema = Schema.Struct({
   exports: Schema.Record(Schema.String, Schema.String),
 });
+const permissionSlug = (permission: string): string => permission.replaceAll('.', '-').replaceAll('_', '-');
+const capitalise = (word: string): string => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`;
+const descriptorName = (permission: string): string => {
+  const [first = '', ...rest] = permissionSlug(permission).split('-');
+  return `${first}${rest.map(capitalise).join('')}Permission`;
+};
 
 const createFixture = (fixtureVertical = vertical, fixtureModuleId = moduleId): Effect.Effect<string, unknown> =>
   Effect.gen(function* createPermissionFixture() {
@@ -95,13 +126,7 @@ const withInventoryFixture = withCreatedFixture(createFixture(inventoryVertical,
 const scaffoldPermission = (
   root: string,
   permission = addressBookPermission,
-  scope:
-    | 'counterparty'
-    | 'counterparty_storefront'
-    | 'price_group'
-    | 'pricing_catalog'
-    | 'retail_profile'
-    | 'inventory_resource' = 'counterparty_storefront',
+  scope: PermissionScope = 'counterparty_storefront',
   targetVertical = vertical,
 ) =>
   runScaffoldEffect('permission', ['--vertical', targetVertical, '--permission', permission, '--scope', scope], {
@@ -117,6 +142,12 @@ it.live('permission help is write-free and documents exact business scopes', () 
     if (result.kind === 'help') {
       expect(result.help).toMatch(/pricing\.price_group\.\*/u);
       expect(result.help).toMatch(/pricing_catalog\|price_group/u);
+      expect(result.help).toMatch(
+        /retail_profile\|counterparty\|counterparty_storefront\|inventory_resource\|pricing_catalog\|price_group\|assortment_configuration\|assortment_decision\|assortment_rule\|assortment_binding\|assortment_boundary/u,
+      );
+      expect(result.help).toMatch(
+        /retail\.\*\|counterparty\.\*\|inventory\.\*\|pricing\.price_group\.\*\|assortment\.\*/u,
+      );
       expect(result.help).toMatch(/start non-delegable/u);
     }
   }),
@@ -267,6 +298,39 @@ it.live('generates and registers conservative versioned business permissions seq
   ),
 );
 
+it.live('generates all approved assortment permissions with exact target scopes', () =>
+  withFixture(
+    Effect.fn(function* generatesAssortmentPermissions(root) {
+      for (const [permission, scope] of assortmentPermissions) {
+        const result = yield* scaffoldPermission(root, permission, scope);
+        expect(result.kind).toBe('generated');
+        const source = yield* Effect.promise(() =>
+          readFile(
+            path.join(root, `verticals/${vertical}/shared/permissions/${permissionSlug(permission)}.ts`),
+            'utf-8',
+          ),
+        );
+        expect(source).toContain(`key: '${permission}'`);
+        expect(source).toMatch(new RegExp(String.raw`allowedScopeKinds: \['${scope}'\]`, 'u'));
+      }
+
+      const [manifest, packageSource] = yield* Effect.all([
+        Effect.promise(() => readFile(path.join(root, `verticals/${vertical}/vertical.manifest.ts`), 'utf-8')),
+        Effect.promise(() => readFile(path.join(root, `verticals/${vertical}/package.json`), 'utf-8')),
+      ]);
+      const packageValue = yield* Schema.decodeUnknownEffect(PackageExportsSchema)(JSON.parse(packageSource));
+      for (const [permission] of assortmentPermissions) {
+        const slug = permissionSlug(permission);
+        expect(manifest).toMatch(new RegExp(`${descriptorName(permission)},`, 'u'));
+        expect(manifest).toMatch(
+          new RegExp(`import \\{ ${descriptorName(permission)} \\} from '\\./shared/permissions/${slug}\\.ts';`, 'u'),
+        );
+        expect(packageValue.exports[`./permissions/${permission}`]).toBe(`./shared/permissions/${slug}.ts`);
+      }
+    }),
+  ),
+);
+
 it.live('rejects malformed and duplicate permissions without partial writes', () =>
   withFixture(
     Effect.fn(function* rejectsUnsafePermission(root) {
@@ -291,6 +355,24 @@ it.live('rejects malformed and duplicate permissions without partial writes', ()
         Effect.flip,
       );
       expect(String(Cause.squash(mismatchedExistingScope))).toMatch(/those scopes reject other permission families/u);
+      for (const permission of [
+        'assortment.manage',
+        'assortment.admin',
+        'assortment.boundary.replace',
+        'assortment.assignment.manage',
+      ]) {
+        const rejected = yield* scaffoldPermission(root, permission, 'assortment_boundary').pipe(
+          Effect.sandbox,
+          Effect.flip,
+        );
+        expect(String(Cause.squash(rejected))).toMatch(/nine approved assortment\.\*/u);
+        expect(yield* snapshotTree(root)).toEqual(before);
+      }
+      const wrongScope = yield* scaffoldPermission(root, 'assortment.rule.create', 'assortment_boundary').pipe(
+        Effect.sandbox,
+        Effect.flip,
+      );
+      expect(String(Cause.squash(wrongScope))).toMatch(/requires --scope assortment_rule/u);
       expect(yield* snapshotTree(root)).toEqual(before);
       const mismatchedInventoryScope = yield* scaffoldPermission(
         root,

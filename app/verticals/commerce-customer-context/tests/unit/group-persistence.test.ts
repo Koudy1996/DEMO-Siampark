@@ -242,6 +242,33 @@ it.effect('maps assignment, removal, and deterministic history documents without
   }),
 );
 
+it.effect('refuses to treat a cursor-bearing effective membership read as a complete set', () =>
+  Effect.gen(function* refusesPartialSet() {
+    // SAFETY: This test supplies the scoped routine response for the one invoked read; all other routine methods are unreachable.
+    const transaction = {
+      invoke: () =>
+        Effect.succeed([
+          {
+            group_json: Option.none(),
+            items_json: [],
+            next_cursor: Option.some(membershipId),
+            outcome: 'PRESENT',
+          },
+        ]),
+    } as CustomerGroupScopedRoutineInvoker;
+    const persistence = customerGroupPersistenceForTransaction(transaction, scope);
+    const failure = yield* Effect.flip(
+      persistence.effectiveMemberships({
+        effectiveAt: '2026-11-01T00:00:00.000Z',
+        legalEntityId,
+        profile,
+        tenantId,
+      }),
+    );
+    expect(Schema.is(CustomerGroupPersistenceUnavailable)(failure)).toBe(true);
+  }),
+);
+
 it.effect('fails closed before invocation when command scope disagrees with Core scope', () =>
   Effect.gen(function* mismatchedScope() {
     let invoked = false;

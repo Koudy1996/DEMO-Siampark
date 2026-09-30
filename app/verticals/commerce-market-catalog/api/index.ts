@@ -26,6 +26,7 @@ import { currentMarketCatalogReadApiLive } from './current-market-catalog-read-s
 import { eligibleMarketTuplesReadApiLive } from './eligible-market-tuples-read-server.ts';
 import { marketHistoryReadApiLive } from './market-history-read-server.ts';
 import { resolveCommerceMarketReadApiLive } from './resolve-commerce-market-read-server.ts';
+import { verifyMarketEligibilityV1ReadApiLive } from './verify-market-eligibility-v1-read-server.ts';
 import {
   commerceMarketCatalogCorsAllowedHeaders,
   commerceMarketCatalogCorsAllowedMethods,
@@ -103,6 +104,7 @@ export const makeCommerceMarketCatalogApiRuntime = (
     eligibleMarketTuplesReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     marketHistoryReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     resolveCommerceMarketReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
+    verifyMarketEligibilityV1ReadApiLive.pipe(GovernedReadLayer.provide(governedReadRuntimeLive)),
     // </generated-governed-http-handler-layers>
   ).pipe(Layer.provide(Layer.mergeAll(ActionPrincipalVerifierLive, gatewayAssertionRedemption)));
   const resolvedApiHandlersLive = apiHandlersLive.pipe(

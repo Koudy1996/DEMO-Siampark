@@ -10,6 +10,7 @@ import { LEGAL_ENTITY_SCOPES } from '../operations/context.ts';
 import type { LegalEntityScope, OperationalScope } from '../operations/context.ts';
 import type { OperationContextUnavailable } from '../operations/errors.ts';
 import type {
+  AssortmentPermissionAccessTarget,
   BusinessPermissionAccessTarget,
   LegalEntityPermissionKey,
   ResourceAccessTarget,
@@ -54,6 +55,7 @@ export type ReadAccessKind = (typeof READ_ACCESS_KINDS)[number];
 export const READ_EVIDENCE_CAPTURE_MODES = ['hash_only', 'metadata_only'] as const;
 export type ReadEvidenceCaptureMode = (typeof READ_EVIDENCE_CAPTURE_MODES)[number];
 export const READ_PERMISSION_TARGETS = [
+  'assortment_permission',
   'business_permission',
   'conditional',
   'legal_entity',
@@ -69,6 +71,10 @@ export interface ReadPolicyDescriptor {
 }
 export type ReadAlternativeTenantPermission = Exclude<TenantPermissionKey, 'access' | 'impersonate'>;
 export type AtomicResolvedReadPermissionTarget =
+  | Readonly<{
+      readonly assortmentPermission: AssortmentPermissionAccessTarget;
+      readonly kind: 'assortment_permission';
+    }>
   | Readonly<{
       businessPermission: BusinessPermissionAccessTarget;
       kind: 'business_permission';
