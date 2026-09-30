@@ -290,6 +290,22 @@
       }
     },
     {
+      "id": "inventory",
+      "package": "@app/inventory",
+      "path": "verticals/inventory",
+      "ownership": {
+        "team": "super-app-platform",
+        "slack": "#super-app-platform",
+        "pagerDuty": "pd-super-app-platform",
+        "runbookRef": "runbooks/verticals/inventory.md",
+        "adrRef": "docs/super-app-rfc-adr/verticals.md#inventory",
+        "blastRadius": {
+          "tier": "tier-2-vertical",
+          "references": ["docs/super-app-rfc-adr/blast-radius.md#inventory"]
+        }
+      }
+    },
+    {
       "id": "commerce-market-catalog",
       "package": "@app/commerce-market-catalog",
       "path": "verticals/commerce-market-catalog",

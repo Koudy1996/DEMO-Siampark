@@ -21,6 +21,8 @@ import type { OperationalScope, OperationalScopeResolverService } from '../opera
 import { OperationalScopeResolver } from '../operations/context.ts';
 import {
   ContextAccess,
+  InventoryAuthorizationResourceIdSchema,
+  InventoryAuthorizationResourceTypeSchema,
   PricingAuthorizationResourceIdSchema,
   isBusinessPermissionTargetCompatible,
   toAssortmentPermissionAccessKey,
@@ -489,6 +491,15 @@ const BusinessAccessTargetSchema = Schema.Union([
     pricingCatalogId: PricingAuthorizationResourceIdSchema,
     tenantId: BusinessTenantIdSchema,
   }),
+  Schema.Struct({
+    kind: Schema.Literal('inventory_resource'),
+    resource: Schema.Struct({
+      moduleId: Schema.Literal('commerce.inventory'),
+      resourceId: InventoryAuthorizationResourceIdSchema,
+      resourceType: InventoryAuthorizationResourceTypeSchema,
+    }),
+    tenantId: BusinessTenantIdSchema,
+  }),
 ]);
 const ActionBusinessPermissionTargetSchema = Schema.Struct({
   permission: BusinessPermissionCodeSchema,
@@ -506,9 +517,13 @@ const businessTargetResourceId = (target: ActionBusinessPermissionTarget['target
   if (target.kind === 'counterparty_storefront') {
     return `${target.counterpartyId}:${target.storefrontId}`;
   }
-  return target.kind === 'pricing_catalog'
-    ? target.pricingCatalogId
-    : `${target.pricingCatalogId}:${target.priceGroupId}`;
+  if (target.kind === 'pricing_catalog') {
+    return target.pricingCatalogId;
+  }
+  if (target.kind === 'price_group') {
+    return `${target.pricingCatalogId}:${target.priceGroupId}`;
+  }
+  return target.resource.resourceId;
 };
 
 const resolveActionBusinessPermissionTarget = <Payload>(
@@ -546,6 +561,9 @@ const resolveActionBusinessPermissionTarget = <Payload>(
               scope.trustedStorefrontId === undefined &&
               resolved.trustedStorefrontId === undefined
             );
+          }
+          if (resolved.target.kind === 'inventory_resource') {
+            return resolved.trustedStorefrontId === undefined;
           }
           return (
             resolved.target.legalEntityId === scope.legalEntityId &&
@@ -1249,6 +1267,14 @@ export const makeActionRuntime = (...construction: ActionRuntimeConstruction): A
     }> => {
       if (Option.isSome(businessPermissionTarget)) {
         const { permission: targetPermission, target } = businessPermissionTarget.value;
+        if (target.kind === 'inventory_resource') {
+          const actionTarget = {
+            targetModuleKey: target.resource.moduleId,
+            targetResourceId: target.resource.resourceId,
+            targetResourceType: target.resource.resourceType,
+          };
+          return { actionTarget, governedTransport: buildGovernedTransport(transport, actionTarget) };
+        }
         const actionTarget = {
           targetModuleKey: input.registration.descriptor.owningModuleKey,
           targetResourceId: businessTargetResourceId(target),

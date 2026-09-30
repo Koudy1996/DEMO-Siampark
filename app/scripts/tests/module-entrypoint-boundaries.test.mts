@@ -40,6 +40,14 @@ it('accepts a typed Codesmith Action binding but rejects spoofed or mismatched r
     handleConfirmGtin, gtinServicesForScope,
   );`;
   expect(acceptsTypedGtinBinding(binding)).toBe(true);
+  expect(
+    acceptsTypedGtinBinding(
+      binding.replace(
+        'GtinServices\n  > = defineAction(',
+        'GtinServices, GtinHandlerRequirements\n  > = defineAction(',
+      ),
+    ),
+  ).toBe(true);
   expect(acceptsTypedGtinBinding(binding.replace("'commerce.catalog'", "'other.module'"))).toBe(false);
   expect(acceptsTypedGtinBinding(binding.replace('typeof ConfirmGtinResultSchema', 'typeof WrongResultSchema'))).toBe(
     false,
@@ -384,6 +392,30 @@ it('governed servers bind the trusted handler, authentication, registration, and
   const accepts = (candidate: string, api = closedApi): boolean =>
     hasGeneratedGovernedServerContract(candidate, exportedName, api);
   expect(accepts(source)).toBe(true);
+  const withExportedDomainMapper = source
+    .replace(
+      "import { HttpApiBuilder } from '@modern-js/bff-effect/effect-edge';",
+      "import { HttpApiBuilder } from '@modern-js/bff-effect/effect-edge';\nimport { Schema } from 'effect';",
+    )
+    .replace(
+      "StockListInternalProblemSchema } from '../shared/apis/stock-list.ts';",
+      "StockListInternalProblemSchema, StockListDomainPolicyProblemSchema } from '../shared/apis/stock-list.ts';",
+    )
+    .replace(
+      'const problems = makeGovernedReadProblems({',
+      `export const mapStockListDomainError = (
+  error: unknown,
+): typeof StockListDomainPolicyProblemSchema.Type => {
+  Schema.is(Schema.Unknown)(error);
+  return StockListDomainPolicyProblemSchema.make({ detail: 'Rejected' });
+};
+const problems = makeGovernedReadProblems({`,
+    )
+    .replace(
+      '    authenticatePrincipal: authenticateOperationPrincipal,',
+      '    authenticatePrincipal: authenticateOperationPrincipal,\n    mapDomainError: mapStockListDomainError,',
+    );
+  expect(accepts(withExportedDomainMapper)).toBe(true);
   expect(accepts(source.replace(MODULE_API_HEADER, ''))).toBe(false);
   expect(accepts(source.replace('    problems,', '    problems: problems,'))).toBe(true);
   for (const [expected, replacement] of [

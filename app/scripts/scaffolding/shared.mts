@@ -259,6 +259,7 @@ export interface PermissionScaffoldConfig {
     | 'assortment_rule'
     | 'counterparty'
     | 'counterparty_storefront'
+    | 'inventory_resource'
     | 'price_group'
     | 'pricing_catalog'
     | 'retail_profile';

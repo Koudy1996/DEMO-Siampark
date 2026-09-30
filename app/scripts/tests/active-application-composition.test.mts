@@ -370,6 +370,7 @@ it.effect('restarts exactly the Outbox Worker mode services whose start prefligh
       'party-registry-worker',
       CUSTOMER_CONTEXT_WORKER,
       'price-group-catalog-worker',
+      'inventory-worker',
     ]);
     // A switch also shows as this mode's workers not running yet.
     expect(yield* modeWorkerSetups(zeropsYaml, topology, 'host')).toEqual([OUTBOX_WORKER_HOST_SETUP]);

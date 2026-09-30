@@ -57,6 +57,9 @@
     },
     {
       "path": "verticals/assortment"
+    },
+    {
+      "path": "verticals/inventory"
     }
   ]
 }

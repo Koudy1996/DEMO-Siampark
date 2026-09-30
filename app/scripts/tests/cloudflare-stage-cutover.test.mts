@@ -86,6 +86,7 @@ const VERTICAL_HOSTS = [
   'pricing',
   'storefrontregistry',
   'pricegroupcatalog',
+  'inventory',
 ];
 
 const SECRET_VALUES = {
@@ -290,7 +291,7 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
       ULTRAMODERN_PUBLIC_URL_PRICING: 'https://ontos-stage-pricing.stage.example.com',
       ULTRAMODERN_PUBLIC_URL_SHELL_SUPER_APP: SHELL_ORIGIN,
     });
-    expect(placement.units).toHaveLength(10);
+    expect(placement.units).toHaveLength(11);
     expect(stage.environments.has(STAGE_EDGE)).toBe(true);
     expect(stage.variables.get(STAGE_EDGE)?.get('CLOUDFLARE_ACCOUNT_ID')).toBe('account-1');
     expect(stage.inputs.find(({ command }) => command.startsWith('gh secret set CLOUDFLARE_API_TOKEN'))?.stdin).toBe(
@@ -299,7 +300,7 @@ it.effect('provisions the whole stage data plane on an empty account, without ex
 
     // Every placed Worker receives its secrets through `wrangler secret bulk` on stdin.
     const bulk = stage.inputs.filter(({ command }) => command.includes('wrangler secret bulk'));
-    expect(bulk.map(({ command }) => command.split(' ').at(-1))).toHaveLength(10);
+    expect(bulk.map(({ command }) => command.split(' ').at(-1))).toHaveLength(11);
     const shell = bulk.find(({ command }) => command.endsWith('--name app-shell-super-app'));
     expect(Schema.decodeUnknownSync(StringRecord)(shell?.stdin)).toStrictEqual({
       BETTER_AUTH_SECRET: AUTH_SECRET,
@@ -593,6 +594,7 @@ const provisionedAccount = (
         'app-pricing',
         'app-storefront-registry',
         'app-price-group-catalog',
+        'app-inventory',
         'app-shell-super-app',
       ],
       secrets: Object.fromEntries(
@@ -824,7 +826,7 @@ it.effect('gives every vertical the Shell key and the callers their stage depend
     const reveal = (worker: string) =>
       Object.fromEntries(Object.entries(plan.get(worker) ?? {}).map(([key, value]) => [key, Redacted.value(value)]));
 
-    expect([...plan.keys()]).toHaveLength(10);
+    expect([...plan.keys()]).toHaveLength(11);
     expect(reveal(CUSTOMER_CONTEXT_WORKER)).toMatchObject({
       ONTOS_CATALOG_BASE_URL: 'https://ontos-stage-catalog.stage.example.com/catalog-api',
       ONTOS_PRICE_GROUP_CATALOG_BASE_URL:

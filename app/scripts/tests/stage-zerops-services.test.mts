@@ -20,16 +20,22 @@ import type { FakeFiles, FakeStage } from './stage-operations-fixture.mts';
 const RECORD_PATH = `${APP_DIRECTORY}/scripts/ops/stage-zerops-retirement.json`;
 // The Cloudflare target keeps these on Zerops: the data plane, the migrator, the tunnel, the Outbox Worker host, and the dedicated
 // workers, stopped, whose status each deploy reads to detect an OUTBOX_WORKER_MODE switch.
-const OUTBOX_WORKERS = ['partyregistryworker', 'commercecstmrcntxtworker', 'pricegroupcatalogworker'];
+const OUTBOX_WORKERS = [
+  'partyregistryworker',
+  'commercecstmrcntxtworker',
+  'pricegroupcatalogworker',
+  'inventoryworker',
+];
 const KEPT_ON_ZEROPS = new Set(['cloudflared', 'db18', 'migrator', 'outboxworkerhost', 'spicedb', ...OUTBOX_WORKERS]);
 
-// The original nine IDs come from the backup bundle; Assortment is new to this branch.
+// The original nine IDs come from the backup bundle; Inventory and Assortment are newer additions.
 const STAGE_SERVICE_IDS = new Map(
   Object.entries({
     assortment: 'assortment-id',
     catalog: 'IGOF5E9vQ7izD4ygQgoNiQ',
     commercecustomercontext: 'omIBMTDCR7iARcXTt4SqJw',
     commercemarketcatalog: '7nJtt1fnQMKsGRDTl6Wv1w',
+    inventory: 'inventory-service-id',
     partyregistry: 'cxNTAHZJSbiJr3xTqkypOg',
     paymenttermcatalog: '2FgvrWn9RzCJrfbMapwM6Q',
     pricegroupcatalog: 'aHab72wuSDS4AjkgxNbHDw',
@@ -150,6 +156,7 @@ it('retires exactly the application services zerops-import.yaml declares, each w
     'ZEROPS_CATALOG_SERVICE_ID',
     'ZEROPS_COMMERCE_CUSTOMER_CONTEXT_SERVICE_ID',
     'ZEROPS_COMMERCE_MARKET_CATALOG_SERVICE_ID',
+    'ZEROPS_INVENTORY_SERVICE_ID',
     'ZEROPS_PARTY_REGISTRY_SERVICE_ID',
     'ZEROPS_PAYMENT_TERM_CATALOG_SERVICE_ID',
     'ZEROPS_PRICE_GROUP_CATALOG_SERVICE_ID',
