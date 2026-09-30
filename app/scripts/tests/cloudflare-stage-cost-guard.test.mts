@@ -45,6 +45,7 @@ const settings: CutoverSettings = {
 
 /** Every placed unit's public hostname, in placement order (the Shell deploys last). */
 const HOSTNAMES = [
+  'assortment.stage.example.com',
   'party-registry.stage.example.com',
   'commerce-customer-context.stage.example.com',
   'payment-term-catalog.stage.example.com',
