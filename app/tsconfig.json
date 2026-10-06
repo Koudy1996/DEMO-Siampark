@@ -60,6 +60,24 @@
     },
     {
       "path": "verticals/inventory"
+    },
+    {
+      "path": "verticals/siampark-property"
+    },
+    {
+      "path": "verticals/siampark-occupancy"
+    },
+    {
+      "path": "verticals/siampark-agreements"
+    },
+    {
+      "path": "verticals/siampark-work"
+    },
+    {
+      "path": "verticals/siampark-billing-finance"
+    },
+    {
+      "path": "verticals/siampark-relationships"
     }
   ]
 }

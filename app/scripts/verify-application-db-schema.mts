@@ -23,6 +23,12 @@ const EXPECTED_APPLICATION_SCHEMAS = [
   'payment_term_catalog',
   'price_group_catalog',
   'pricing',
+  'siampark_agreements',
+  'siampark_billing_finance',
+  'siampark_occupancy',
+  'siampark_property',
+  'siampark_relationships',
+  'siampark_work',
   'storefront_registry',
 ] as const;
 const EXPECTED_MIGRATION_JOURNALS = [
@@ -38,6 +44,12 @@ const EXPECTED_MIGRATION_JOURNALS = [
   '__drizzle_migrations_payment_term_catalog',
   '__drizzle_migrations_price_group_catalog',
   '__drizzle_migrations_pricing',
+  '__drizzle_migrations_siampark_agreements',
+  '__drizzle_migrations_siampark_billing_finance',
+  '__drizzle_migrations_siampark_occupancy',
+  '__drizzle_migrations_siampark_property',
+  '__drizzle_migrations_siampark_relationships',
+  '__drizzle_migrations_siampark_work',
   '__drizzle_migrations_storefront_registry',
 ] as const;
 const COMMERCE_PORTAL_AUTH_SCHEMA_NAME = 'commerce_auth' as const;
@@ -150,6 +162,12 @@ const ownerVerifierPaths = [
   '../verticals/catalog/scripts/verify-db-schema.mts',
   '../verticals/inventory/scripts/verify-db-schema.mts',
   '../verticals/pricing/scripts/verify-db-schema.mts',
+  '../verticals/siampark-agreements/scripts/verify-db-schema.mts',
+  '../verticals/siampark-billing-finance/scripts/verify-db-schema.mts',
+  '../verticals/siampark-occupancy/scripts/verify-db-schema.mts',
+  '../verticals/siampark-property/scripts/verify-db-schema.mts',
+  '../verticals/siampark-relationships/scripts/verify-db-schema.mts',
+  '../verticals/siampark-work/scripts/verify-db-schema.mts',
   '../verticals/storefront-registry/scripts/verify-db-schema.mts',
 ] as const;
 

@@ -40,6 +40,8 @@ const MODULE_CONTRACT_COMMAND = 'module-contract';
 const MODULE_ID = 'property.registry';
 const PROPERTY_MANIFEST_PATH = 'verticals/property-registry/vertical.manifest.ts';
 const PROPERTY_PACKAGE_PATH = 'verticals/property-registry/package.json';
+const PROPERTY_SHARED_API_PATH = 'verticals/property-registry/shared/api.ts';
+const PROPERTY_HANDLER_PATH = 'verticals/property-registry/api/index.ts';
 const VERTICAL_FLAG = '--vertical';
 
 const AppIdSchema = Schema.String.pipe(Schema.brand('AppId'));
@@ -113,6 +115,23 @@ export default defineEffectBff({ api: fixtureApi, layer });
 `,
     );
   });
+
+const assembledSharedApi = `export const propertyRegistryFoundationApi = HttpApi.make('PropertyRegistryApiFoundation').add(HttpApiGroup.make('foundation'));
+export const propertyRegistryApi = HttpApi.make('PropertyRegistryApi')
+  .addHttpApi(propertyRegistryFoundationApi)
+  .add(HttpApiGroup.make('propertyRegistry'));
+`;
+const assembledHandlerRoot = `import { assembleEffectBffRuntime } from '@modern-js/bff-effect/assembly';
+import { Layer } from '@modern-js/bff-effect/effect-edge';
+const apiHandlersLive = Layer.mergeAll(propertyRegistryLayer, propertyRegistryReadinessLayer);
+export const makePropertyRegistryApiRuntime = () =>
+  assembleEffectBffRuntime({
+    api: propertyRegistryApi,
+    handlers: apiHandlersLive,
+  });
+const apiRuntime = makePropertyRegistryApiRuntime();
+export default apiRuntime;
+`;
 
 const createFixture = (): Effect.Effect<string, unknown> =>
   Effect.gen(function* mergedScenario2() {
@@ -658,11 +677,9 @@ export const fixtureApi = HttpApi.make('Fixture;Api')
   .pipe((api) => { const label = ';'; return api; });
 export const untouched = true;
 `;
-        yield* write(root, 'verticals/property-registry/shared/api.ts', source);
+        yield* write(root, PROPERTY_SHARED_API_PATH, source);
         yield* scaffold(root);
-        const generated = yield* Effect.promise(() =>
-          readFile(path.join(root, 'verticals/property-registry/shared/api.ts'), 'utf-8'),
-        );
+        const generated = yield* Effect.promise(() => readFile(path.join(root, PROPERTY_SHARED_API_PATH), 'utf-8'));
         expect(generated).toMatch(/HttpApi\.make\('Fixture;Api'\)/u);
         expect(generated).toMatch(/return api;\s*\}\)\s*\/\/ <generated-governed-http-api-additions>/u);
         expect(generated).toMatch(
@@ -683,7 +700,7 @@ it.live(
       Effect.fn(function* mergedScenario7(root) {
         yield* write(
           root,
-          'verticals/property-registry/api/index.ts',
+          PROPERTY_HANDLER_PATH,
           `const layer = HttpApiBuilder.layer(fixtureApi).pipe(
   identity,
 ) satisfies EffectRuntimeLayer;
@@ -691,13 +708,106 @@ export default defineEffectBff({ api: fixtureApi, layer });
 `,
         );
         yield* scaffold(root);
-        const generated = yield* Effect.promise(() =>
-          readFile(path.join(root, 'verticals/property-registry/api/index.ts'), 'utf-8'),
-        );
+        const generated = yield* Effect.promise(() => readFile(path.join(root, PROPERTY_HANDLER_PATH), 'utf-8'));
         expect(generated).toMatch(/GovernedReadLayer\.provide\(governedReadApiHandlersLive\)/u);
         expect(generated).toMatch(/GovernedReadLayer\.orDie/u);
         expect(generated).not.toMatch(/\bLayer\./u);
       }),
     );
+  }),
+);
+
+it.live(
+  'composes the pinned foundation/main API and assembled runtime before generating its Action boundary',
+  Effect.fn(function* assembledRuntime() {
+    yield* withFixture(
+      Effect.fn(function* assembledRuntimeFixture(root) {
+        yield* write(root, PROPERTY_SHARED_API_PATH, assembledSharedApi);
+        yield* write(root, PROPERTY_HANDLER_PATH, assembledHandlerRoot);
+        yield* scaffold(root);
+        const api = yield* Effect.promise(() => readFile(path.join(root, PROPERTY_SHARED_API_PATH), 'utf-8'));
+        expect(api).toContain('export const governedHttpApi = propertyRegistryApi;');
+        expect(api).toMatch(
+          /propertyRegistryApi = HttpApi.make\('PropertyRegistryApi'\)[\s\S]*generated-governed-http-api-additions/u,
+        );
+        expect(api.slice(0, api.indexOf('export const propertyRegistryApi'))).not.toContain(
+          'generated-governed-http-api-additions',
+        );
+        const runtime = yield* Effect.promise(() => readFile(path.join(root, PROPERTY_HANDLER_PATH), 'utf-8'));
+        expect(runtime).toMatch(
+          /GovernedReadLayer\.mergeAll\(\s*apiHandlersLive,\s*governedReadApiHandlersLive,?\s*\)/u,
+        );
+        expect(runtime).toContain('handlers: governedResolvedApiHandlersLive');
+        expect(runtime).toContain('GovernedReadLayer.provide(governedApplicationCompositionSourceLive)');
+        expect(runtime).toContain('GovernedReadLayer.provide(GovernedDatabaseConfigLive)');
+        expect(runtime).not.toContain('HttpApiBuilder.layer(');
+        yield* runScaffoldEffect('microvertical-action-boundary', [VERTICAL_FLAG, APP_ID], {
+          workspaceRoot: root,
+        }).pipe(Effect.provide(NodeServices.layer));
+        const principal = yield* Effect.promise(() =>
+          readFile(path.join(root, 'verticals/property-registry/api/auth/action-principal.ts'), 'utf-8'),
+        );
+        expect(principal).toContain('authenticateOperationPrincipal');
+        expect(principal).toContain('bindGatewayPrincipalVerifier(ACTION_GATEWAY_AUDIENCE, ultramodernApiMarker)');
+      }),
+    );
+  }),
+);
+
+it.live(
+  'rejects ambiguous main roots, missing foundation composition and malformed assembly without partial writes',
+  Effect.fn(function* invalidAssembledRuntime() {
+    const cases = [
+      {
+        api: `${assembledSharedApi}export const otherApi = HttpApi.make('Other');`,
+        error: /exactly one/u,
+        runtime: assembledHandlerRoot,
+      },
+      {
+        api: assembledSharedApi.replace('.addHttpApi(propertyRegistryFoundationApi)', ''),
+        error: /foundation exactly once/u,
+        runtime: assembledHandlerRoot,
+      },
+      {
+        api: assembledSharedApi,
+        error: /canonical assembled/u,
+        runtime: assembledHandlerRoot.replace('api: propertyRegistryApi', 'api: propertyRegistryFoundationApi'),
+      },
+      {
+        api: assembledSharedApi,
+        error: /canonical assembled/u,
+        runtime: assembledHandlerRoot.replace('handlers: apiHandlersLive', 'handlers: unknownHandlers'),
+      },
+      {
+        api: assembledSharedApi,
+        error: /canonical assembled/u,
+        runtime: `${assembledHandlerRoot}\nconst extra = assembleEffectBffRuntime({ api: propertyRegistryApi, handlers: apiHandlersLive });`,
+      },
+    ];
+    for (const example of cases) {
+      yield* withFixture(
+        Effect.fn(function* invalidAssembledRuntimeFixture(root) {
+          yield* write(root, PROPERTY_SHARED_API_PATH, example.api);
+          yield* write(root, PROPERTY_HANDLER_PATH, example.runtime);
+          const originalPackage = yield* Effect.promise(() =>
+            readFile(path.join(root, PROPERTY_PACKAGE_PATH), 'utf-8'),
+          );
+          yield* expectFailure(scaffold(root), (cause) => expect(String(cause)).toMatch(example.error));
+          expect(yield* Effect.promise(() => readFile(path.join(root, PROPERTY_PACKAGE_PATH), 'utf-8'))).toBe(
+            originalPackage,
+          );
+          expect(yield* Effect.promise(() => readFile(path.join(root, PROPERTY_SHARED_API_PATH), 'utf-8'))).toBe(
+            example.api,
+          );
+          expect(yield* Effect.promise(() => readFile(path.join(root, PROPERTY_HANDLER_PATH), 'utf-8'))).toBe(
+            example.runtime,
+          );
+          yield* expectFailure(
+            Effect.promise(() => readFile(path.join(root, PROPERTY_MANIFEST_PATH), 'utf-8')),
+            (cause) => expect(String(cause)).toMatch(/ENOENT/u),
+          );
+        }),
+      );
+    }
   }),
 );

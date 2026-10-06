@@ -78,6 +78,7 @@ import {
   requiredString,
   resolveContainedPath,
   toCamelCase,
+  toPascalCase,
   toTitle,
   updateMutation,
   createScaffoldErrorTools,
@@ -123,10 +124,16 @@ const initializeGovernedHttpApiRoot = (source: string, vertical: VerticalMetadat
   }
   const structure = maskNonCode(source);
   const declarations = [...structure.matchAll(/export const (?<api>[A-Za-z][A-Za-z0-9]*)\s*=\s*HttpApi\.make\(/gu)];
-  if (declarations.length !== 1) {
+  const mainApi = `${toCamelCase(vertical.slug)}Api`;
+  const foundationApi = `${toCamelCase(vertical.slug)}FoundationApi`;
+  const mainDeclaration = declarations.find((candidate) => candidate.groups?.['api'] === mainApi);
+  const foundationDeclaration = declarations.find((candidate) => candidate.groups?.['api'] === foundationApi);
+  const canonicalPair =
+    declarations.length === 2 && mainDeclaration !== undefined && foundationDeclaration !== undefined;
+  if (declarations.length !== 1 && !canonicalPair) {
     return raiseScaffoldFailure(`vertical ${vertical.slug} shared API must contain exactly one generated HttpApi root`);
   }
-  const [declaration] = declarations;
+  const declaration = canonicalPair ? mainDeclaration : declarations[0];
   const apiValue = declaration?.groups?.['api'];
   const declarationStart = declaration?.index;
   if (apiValue === undefined || declarationStart === undefined) {
@@ -135,6 +142,16 @@ const initializeGovernedHttpApiRoot = (source: string, vertical: VerticalMetadat
   const statementEnd = topLevelStatementEnd(structure, declarationStart);
   if (statementEnd === -1) {
     return raiseScaffoldFailure(`vertical ${vertical.slug} shared API root has no terminator`);
+  }
+  if (canonicalPair) {
+    const additions = structure
+      .slice(declarationStart, statementEnd)
+      .matchAll(/\.addHttpApi\(\s*(?<api>[A-Za-z][A-Za-z0-9]*)\s*\)/gu);
+    if ([...additions].filter((addition) => addition.groups?.['api'] === foundationApi).length !== 1) {
+      return raiseScaffoldFailure(
+        `vertical ${vertical.slug} main API must compose its generated foundation exactly once`,
+      );
+    }
   }
   return `${source.slice(0, declarationStart)}${GOVERNED_HTTP_API_IMPORT_SLOT_START}
 ${GOVERNED_HTTP_API_IMPORT_SLOT_END}
@@ -157,6 +174,7 @@ const initializeGovernedHttpHandlerRoot = (source: string, vertical: VerticalMet
     'GovernedReadLayer',
     'governedReadRuntimeLive',
     'governedReadApiHandlersLive',
+    'governedResolvedApiHandlersLive',
     GOVERNED_HTTP_HANDLER_IMPORT_SLOT_START,
     GOVERNED_HTTP_HANDLER_LAYER_SLOT_START,
     GOVERNED_HTTP_HANDLER_SUPPORT_IMPORT_SLOT_START,
@@ -168,13 +186,32 @@ const initializeGovernedHttpHandlerRoot = (source: string, vertical: VerticalMet
       );
     }
   }
+  const structure = maskNonCode(source);
+  const assemblies = [...structure.matchAll(/\bassembleEffectBffRuntime\s*\(/gu)];
+  const [assembly] = assemblies;
+  const canonicalAssembly = `assembleEffectBffRuntime({\n    api: ${toCamelCase(vertical.slug)}Api,\n    handlers: apiHandlersLive,\n  })`;
+  const normalizedAssembly = canonicalAssembly.replaceAll(/\s/gu, '');
+  const assemblyStart = assembly?.index;
+  const assemblyEnd = assemblyStart === undefined ? -1 : topLevelStatementEnd(structure, assemblyStart);
+  if (
+    assemblies.length > 0 &&
+    (assemblies.length !== 1 ||
+      assemblyStart === undefined ||
+      assemblyEnd === -1 ||
+      structure.slice(assemblyStart, assemblyEnd).replaceAll(/\s/gu, '') !== normalizedAssembly ||
+      !/\bconst apiHandlersLive\s*=\s*Layer\.mergeAll\(/u.test(structure))
+  ) {
+    return raiseScaffoldFailure(
+      `vertical ${vertical.slug} API root must expose the canonical assembled Effect runtime`,
+    );
+  }
   const runtimeLayerNeedle = ') satisfies EffectRuntimeLayer;';
   const runtimeLayerEnd = source.lastIndexOf(runtimeLayerNeedle);
-  if (runtimeLayerEnd === -1) {
+  if (assemblies.length === 0 && runtimeLayerEnd === -1) {
     return raiseScaffoldFailure(`vertical ${vertical.slug} API root must expose the pinned Effect runtime layer`);
   }
   const runtimeLayerStart = source.lastIndexOf('const layer = HttpApiBuilder.layer(', runtimeLayerEnd);
-  if (runtimeLayerStart === -1) {
+  if (assemblies.length === 0 && runtimeLayerStart === -1) {
     return raiseScaffoldFailure(`vertical ${vertical.slug} API root must contain the pinned HttpApiBuilder layer`);
   }
   const generatedRoot = `import {
@@ -237,6 +274,26 @@ export const governedReadApiHandlersLive = GovernedReadLayer.mergeAll(
   GovernedReadLayer.provide(GovernedReadLayer.empty),
 );
 `;
+  if (assemblyStart !== undefined && assemblies.length === 1) {
+    const resolvedHandlers = `const governedResolvedApiHandlersLive = GovernedReadLayer.mergeAll(
+  apiHandlersLive,
+  governedReadApiHandlersLive,
+).pipe(
+  GovernedReadLayer.provide(governedApplicationCompositionSourceLive),
+  GovernedReadLayer.provide(GovernedDatabaseConfigLive),
+  GovernedReadLayer.orDie,
+);
+`;
+    const factory = new RegExp(
+      `export const make${toPascalCase(vertical.slug)}ApiRuntime\\s*=\\s*\\(\\s*\\)\\s*=>\\s*$`,
+      'u',
+    ).exec(structure.slice(0, assemblyStart));
+    const factoryStart = factory?.index;
+    if (factoryStart === undefined) {
+      return raiseScaffoldFailure(`vertical ${vertical.slug} assembled runtime must expose its generated factory`);
+    }
+    return `${generatedRoot}\n${source.slice(0, factoryStart)}${resolvedHandlers}\n${source.slice(factoryStart, assemblyStart)}${source.slice(assemblyStart, assemblyEnd).replace(/handlers\s*:\s*apiHandlersLive/u, 'handlers: governedResolvedApiHandlersLive')}${source.slice(assemblyEnd)}`;
+  }
   return `${generatedRoot}\n${source.slice(0, runtimeLayerStart)}${source.slice(
     runtimeLayerStart,
     runtimeLayerEnd,
